@@ -1,4 +1,4 @@
-import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
 
 export type AgyPromptErrorCode = 'EMPTY_PROMPT' | 'UNSUPPORTED_CONTENT'
 
@@ -21,12 +21,6 @@ function blockText(block: ContentBlock, messageIndex: number, blockIndex: number
         name: block.name,
         arguments: block.arguments,
       })}`
-    case 'tool-result':
-      return `[DSH TOOL RESULT]\n${JSON.stringify({
-        callId: block.toolCallId,
-        isError: block.isError === true,
-        content: block.content.map((nested, nestedIndex) => blockValue(nested, messageIndex, `${blockIndex}.${nestedIndex}`)),
-      })}`
     default:
       throw new AgyPromptError(
         `AGY text MVP does not support content block ${block.type} at message ${messageIndex}, block ${blockIndex}`,
@@ -43,13 +37,6 @@ function blockValue(block: ContentBlock, messageIndex: number, blockIndex: strin
       return { type: 'reasoning', text: block.text }
     case 'tool-call':
       return { type: 'tool-call', id: block.id, name: block.name, arguments: block.arguments }
-    case 'tool-result':
-      return {
-        type: 'tool-result',
-        callId: block.toolCallId,
-        isError: block.isError === true,
-        content: block.content.map((nested, nestedIndex) => blockValue(nested, messageIndex, `${blockIndex}.${nestedIndex}`)),
-      }
     default:
       throw new AgyPromptError(
         `AGY text MVP does not support content block ${block.type} at message ${messageIndex}, block ${blockIndex}`,
@@ -58,13 +45,22 @@ function blockValue(block: ContentBlock, messageIndex: number, blockIndex: strin
   }
 }
 
-function messageText(message: Message, messageIndex: number): string {
+function messageText(message: RequestMessage, messageIndex: number): string {
+  // 0.2.0 moved tool results out of content blocks into a first-class tool-role
+  // message; the flat text prompt keeps the same [DSH TOOL RESULT] rendering.
+  if (message.role === 'tool') {
+    return `[DSH TOOL RESULT]\n${JSON.stringify({
+      callId: message.toolCallId,
+      isError: message.isError === true,
+      content: message.content.map((block, blockIndex) => blockValue(block, messageIndex, String(blockIndex))),
+    })}`
+  }
   return message.content
     .map((block, blockIndex) => blockText(block, messageIndex, blockIndex))
     .join('\n')
 }
 
-function roleLabel(message: Message): string {
+function roleLabel(message: RequestMessage): string {
   return message.role.toUpperCase()
 }
 

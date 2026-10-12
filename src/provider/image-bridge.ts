@@ -7,7 +7,7 @@ import type {
   ImageAttachmentRef,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
-import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
 import { serializeAgyPrompt, serializeAgyTurnPrompt } from './serialize.js'
 
 export const IMAGE_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
@@ -69,7 +69,6 @@ const EXTENSIONS: Record<AgyImageMediaType, string> = {
 function imageRefsOf(content: readonly ContentBlock[], output: ImageAttachmentRef[] = []): ImageAttachmentRef[] {
   for (const block of content) {
     if (block.type === 'image') output.push(block.attachment)
-    else if (block.type === 'tool-result') imageRefsOf(block.content, output)
   }
   return output
 }
@@ -95,14 +94,11 @@ function replaceImageBlocks(content: readonly ContentBlock[], images: ReadonlyMa
       }
       return { type: 'text', text: placeholderFor(image) }
     }
-    if (block.type === 'tool-result') {
-      return { ...block, content: replaceImageBlocks(block.content, images) }
-    }
     return block
   })
 }
 
-function replaceMessageImages(messages: readonly Message[], images: ReadonlyMap<string, StagedImage>): Message[] {
+function replaceMessageImages(messages: readonly RequestMessage[], images: ReadonlyMap<string, StagedImage>): RequestMessage[] {
   return messages.map(message => ({
     ...message,
     content: replaceImageBlocks(message.content, images),

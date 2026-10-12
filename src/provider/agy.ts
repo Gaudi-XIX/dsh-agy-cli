@@ -3,11 +3,11 @@ import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, parse as parsePath, relative, resolve } from 'node:path'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import {
-  CallId,
   EMPTY_RESPONSE_CODE,
   LlmAdapter,
   LlmError,
   resolveRetryPolicy,
+  ToolCallId,
 } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions,
@@ -1291,7 +1291,7 @@ export class AgyAdapter extends LlmAdapter {
         yield { type: 'finish', reason: { kind: 'stop' } }
         return { retryWithFullPrompt: false }
       }
-      const callId = CallId(randomUUID())
+      const callId = ToolCallId(randomUUID())
       const argumentsJson = JSON.stringify(envelope.arguments)
       telemetry.toolCallCount += 1
       telemetry.bridgeOutcome = 'dsh-tool-call'
@@ -1871,7 +1871,7 @@ export class AgyAdapter extends LlmAdapter {
         yield { type: 'finish', reason: { kind: 'stop' } }
         return { retryWithFullPrompt: false }
       }
-      const callId = CallId(randomUUID())
+      const callId = ToolCallId(randomUUID())
       const argumentsJson = JSON.stringify(envelope.arguments)
       telemetry.toolCallCount += 1
       telemetry.bridgeOutcome = 'dsh-tool-call'

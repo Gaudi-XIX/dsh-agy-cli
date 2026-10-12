@@ -52,12 +52,9 @@ test('serializeAgyPrompt preserves DSH tool calls and tool results as text data'
         }],
       },
       {
-        role: 'user',
-        content: [{
-          type: 'tool-result',
-          toolCallId: 'call-1',
-          content: [{ type: 'text', text: 'fixture contents' }],
-        }],
+        role: 'tool',
+        toolCallId: 'call-1',
+        content: [{ type: 'text', text: 'fixture contents' }],
       },
     ],
   })

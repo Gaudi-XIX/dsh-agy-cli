@@ -7,8 +7,6 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-// @ts-ignore - dsh-settings is a peer provided by DSH runtime
-import { settingsNamespace, type SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { AgyAdapter } from './provider/agy.js'
 import {
   BundleConfig,
@@ -24,7 +22,7 @@ import { configuredModels } from './provider/config.js'
 import type { DshContextLookup } from './dsh/context.js'
 
 export const name = 'dsh-agy-provider'
-export const inject = ['llm', 'settings']
+export const inject = ['llm']
 
 /** Programmatic library default: enabled=false, toolPolicy=reject. */
 export const Config = ConfigSchema
@@ -124,26 +122,11 @@ export type { ConfigType, ModelConfig, ToolPolicy }
 export interface Config extends ConfigType {}
 
 function resolveSettingsConfig(ctx: Context, config: ConfigType): ConfigType {
-  const settings = ctx.get('settings') as SettingsProvider | undefined
-  if (settings !== undefined) {
-    return settings.register(settingsNamespace('dsh-agy-provider'), ConfigSchema, {
-      base: config,
-      applies: 'restart',
-    }).get()
-  }
-
-  // Direct library callers may compose only the LLM service. Keep the plugin
-  // usable there while registering the settings section if the service appears
-  // later in a full DSH composition.
-  try {
-    ctx.inject(['settings'], settingsCtx => {
-      const lateSettings: SettingsProvider = settingsCtx.settings
-      lateSettings.register(settingsNamespace('dsh-agy-provider'), ConfigSchema, {
-        base: config,
-        applies: 'restart',
-      })
-    })
-  } catch {}
+  // DSH 0.2.0 removed SettingsProvider.register(): the harness's SettingsForms
+  // projects the plugin's exported `Config` schema automatically, and `config`
+  // already is the live merged value. Direct library callers compose the LLM
+  // service alone, which keeps working unchanged.
+  void ctx
   return config
 }
 
