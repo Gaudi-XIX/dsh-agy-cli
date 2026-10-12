@@ -37,6 +37,7 @@ export type AgySandboxMode = AgyPermissionPreset
 export type AgyApprovalPolicy = 'ask' | 'never'
 export type AgyBridgeOutcome =
   | 'text-only'
+  | 'mcp-tools'
   | 'dsh-pending'
   | 'dsh-message'
   | 'dsh-tool-call'
@@ -119,6 +120,7 @@ export type AgyProtocolResponseShape =
 
 const BRIDGE_OUTCOMES: readonly AgyBridgeOutcome[] = [
   'text-only',
+  'mcp-tools',
   'dsh-pending',
   'dsh-message',
   'dsh-tool-call',

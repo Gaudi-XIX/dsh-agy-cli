@@ -25,6 +25,18 @@ export interface Config {
   modelDiscoveryTimeoutMs?: number
   /** Ownership policy for DSH tool schemas; AGY remains the internal tool owner. */
   toolPolicy?: ToolPolicy
+  /**
+   * Expose DSH tools to AGY over MCP instead of serializing their schemas into
+   * the prompt. The MCP path keeps the whole prompt budget for conversation
+   * history, returns tool calls as real AGY tool events (so the intermediate
+   * steps stay visible in the DSH transcript), and routes every execution
+   * through the host tool pipeline. Requires the host `webServer` and `tools`
+   * services; when either is missing the provider falls back to the prompt
+   * contract so the route keeps working.
+   */
+  mcpBridge?: boolean
+  /** Restrict the MCP tool projection to these DSH tool names; empty exposes all. */
+  mcpToolAllowlist?: string[]
   /** AGY agent profile, for example `deepseek-proxy`. */
   agent?: string
   /** Optional bundled Agent capability profile; omitted preserves the configured agent. */
@@ -168,6 +180,8 @@ export function createConfigSchema(defaults: {
     modelDiscoveryTtlMs: z.number().min(1_000).max(3_600_000).default(300_000).description('Discovery cache TTL ms').hidden(),
     modelDiscoveryTimeoutMs: z.number().min(100).max(30_000).default(10_000).description('Discovery timeout ms').hidden(),
     toolPolicy: z.union(['reject', 'agy-owned', 'dsh-owned'] as const).default(defaultToolPolicy).description('Tool ownership policy'),
+    mcpBridge: z.boolean().default(true).description('Expose DSH tools to AGY over MCP instead of embedding their schemas in the prompt'),
+    mcpToolAllowlist: z.array(z.string().pattern(/^\S(?:.*\S)?$/)).default([]).description('MCP tool projection allowlist; empty exposes every DSH tool'),
     agent: z.string().default('deepseek-proxy').description('AGY agent profile'),
     agentPreset: z.union(AGENT_PRESET_IDS).description('Optional agent preset'),
     workspaceRoot: z.string().pattern(/^\S(?:.*\S)?$/).description('Deprecated: use DSH session workspace').deprecated().hidden(),
@@ -216,6 +230,8 @@ export function createConfigSchema(defaults: {
       modelDiscoveryTtlMs: { $description: '模型发现缓存时间（毫秒）' },
       modelDiscoveryTimeoutMs: { $description: '模型发现超时（毫秒）' },
       toolPolicy: { $description: '工具所有权：reject=拒绝 DSH 工具, agy-owned=旧版 AGY 执行, dsh-owned=推荐 DSH 执行' },
+      mcpBridge: { $description: '通过 MCP 把 DSH 工具交给 AGY（推荐）；关闭则退回把工具 schema 写进提示词的旧方式' },
+      mcpToolAllowlist: { $description: 'MCP 工具白名单；为空时暴露全部 DSH 工具' },
       agent: { $description: 'AGY 代理名称，如 deepseek-proxy' },
       agentPreset: { $description: '代理能力预设' },
       workspaceRoot: { $description: '已废弃：请使用 DSH 会话的项目目录，无需手动配置' },

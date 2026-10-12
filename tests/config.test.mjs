@@ -151,6 +151,9 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     modelDiscoveryTtlMs: 300_000,
     modelDiscoveryTimeoutMs: 10_000,
     toolPolicy: 'reject',
+    // MCP tool bridge: on by default, empty allowlist means every DSH tool
+    mcpBridge: true,
+    mcpToolAllowlist: [],
     agent: 'deepseek-proxy',
     agentPreset: 'workspace-write',
     workspaceRoot: 'C:\\workspace',

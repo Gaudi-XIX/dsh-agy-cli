@@ -10,6 +10,7 @@ import {
   ToolCallId,
 } from '@deepseek-ai/dsh-llm'
 import type {
+  ContentBlock,
   GenerateOptions,
   LlmModelInfo,
   LlmProviderInfo,
@@ -154,6 +155,25 @@ export interface AgyAdapterDependencies {
   resolveAttachmentStore?: () => Pick<AttachmentStore, 'readImage'> | undefined
   /** Optional Cordis reflection seam for the DSH-owned capability context. */
   dshContext?: DshContextLookup
+  /**
+   * Resolves the live MCP tool bridge, if the composition has one. Lazy
+   * because the bridge is mounted on the host webServer and its fiber may
+   * start after this adapter is constructed.
+   */
+  resolveToolBridge?: () => DshToolBridgeHandle | undefined
+}
+
+/**
+ * The slice of the MCP tool bridge the adapter needs. Declared structurally so
+ * the provider never imports the bridge module's host-service types.
+ */
+export interface DshToolBridgeHandle {
+  readonly active: boolean
+  readonly inactiveReason: string | undefined
+  /** Point the bridge at the DSH session owning the next AGY turn. */
+  readonly setSession: (sessionId: string) => void
+  /** URL AGY reaches the bridge on; undefined until the bridge is live. */
+  readonly url: string | undefined
 }
 
 interface AttemptOutcome {
@@ -327,6 +347,43 @@ function isIgnorableAgyOrchestrationToolEvent(event: AgyJsonEvent): boolean {
     && toolNameOf(event) === 'manage_task'
 }
 
+/**
+ * One in-flight MCP tool call observed on the AGY event stream. AGY reports the
+ * call when it starts and the result when it finishes, so the adapter buffers
+ * the opening event and only emits a DSH tool call once the call completed.
+ */
+interface AgyMcpToolStep {
+  readonly stepIndex: number
+  readonly toolName: string
+  readonly arguments: unknown
+}
+
+/** Read the MCP tool identity out of an AGY `call_mcp_tool` step. */
+function mcpToolStepOf(event: AgyJsonEvent): AgyMcpToolStep | undefined {
+  if (event.event !== 'step_update') return undefined
+  const step = (event as { step_update?: Record<string, unknown> }).step_update
+  if (step === undefined || step.step_type !== 'tool') return undefined
+  const info = step.tool_info
+  if (typeof info !== 'object' || info === null) return undefined
+  const record = info as Record<string, unknown>
+  if (record.name !== 'call_mcp_tool') return undefined
+  const parameters = record.parameters
+  if (typeof parameters !== 'object' || parameters === null) return undefined
+  const args = parameters as Record<string, unknown>
+  // AGY nests the real call under `Arguments`; the server is our own bridge.
+  const toolName = typeof args.ToolName === 'string' ? args.ToolName : undefined
+  if (toolName === undefined || toolName.length === 0) return undefined
+  const stepIndex = typeof step.step_index === 'number' ? step.step_index : -1
+  return { stepIndex, toolName, arguments: args.Arguments ?? {} }
+}
+
+function stepStateOf(event: AgyJsonEvent): string | undefined {
+  if (event.event !== 'step_update') return undefined
+  const step = (event as { step_update?: Record<string, unknown> }).step_update
+  const state = step?.state
+  return typeof state === 'string' ? state : undefined
+}
+
 function dshOwnedToolEventError(
   event: AgyJsonEvent,
   toolProtocol: StructuredToolProtocol | undefined,
@@ -334,7 +391,12 @@ function dshOwnedToolEventError(
     prepared: PreparedAgyPrompts
     runtime: AgyAgentRuntime | undefined
   },
+  mcpToolsEnabled = false,
 ): LlmError | undefined {
+  // Under the MCP bridge AGY is *supposed* to emit tool events: every
+  // call_mcp_tool step is a DSH tool call travelling over the bridge, so the
+  // internal-tool rejection only applies to the prompt-contract path.
+  if (mcpToolsEnabled && mcpToolStepOf(event) !== undefined) return undefined
   if (toolProtocol === undefined || !isToolEvent(event)) return undefined
   if (
     imageContext !== undefined
@@ -866,6 +928,8 @@ export class AgyAdapter extends LlmAdapter {
   private readonly imageInput: 'off' | 'experimental'
   private readonly imageAgent: AgyAgentRuntime | undefined
   private readonly resolveAttachmentStore: () => AgyImageAttachmentStore | undefined
+  private readonly resolveToolBridge: (() => DshToolBridgeHandle | undefined) | undefined
+  private readonly mcpBridgeEnabled: boolean
   private readonly discovery: AgyModelDiscovery | undefined
   private readonly visibleModels: readonly string[]
   private currentModels: readonly ModelConfig[]
@@ -887,6 +951,8 @@ export class AgyAdapter extends LlmAdapter {
     this.mode = agentRuntime.mode
     this.disableSlashCommands = agentRuntime.disableSlashCommands
     this.dshContext = dependencies.dshContext
+    this.resolveToolBridge = dependencies.resolveToolBridge
+    this.mcpBridgeEnabled = config.mcpBridge !== false
     this.agyPath = config.agyPath?.trim() === '' ? undefined : config.agyPath?.trim()
     this.timeoutMs = config.timeoutMs ?? 120_000
     this.run = dependencies.runAgyProcess ?? runAgyProcess
@@ -1146,6 +1212,7 @@ export class AgyAdapter extends LlmAdapter {
       'toolName' | 'issue' | 'missingRequiredKeys'
     > | undefined,
     protocolRepairReason: ToolProtocolRepairReason | undefined,
+    mcpToolsEnabled = false,
   ): AsyncGenerator<StreamChunk, AttemptOutcome, void> {
     if (toolProtocol !== undefined && (
       dshContextSnapshot?.state !== 'ready'
@@ -1334,6 +1401,14 @@ export class AgyAdapter extends LlmAdapter {
     if (options.signal?.aborted) throw abortError()
     const toolSchemaCount = options.tools?.length ?? 0
     const sessionKey = options.sessionId === undefined ? undefined : String(options.sessionId)
+    // Choose the tool transport once per request. The MCP bridge carries the
+    // schemas out of band, so the prompt keeps its whole budget for history and
+    // AGY emits real tool events that the DSH transcript can render.
+    const toolBridge = toolSchemaCount > 0 && this.toolPolicy === 'dsh-owned' && this.mcpBridgeEnabled
+      ? this.resolveToolBridge?.()
+      : undefined
+    const useToolBridge = toolBridge?.active === true
+    if (useToolBridge && sessionKey !== undefined) toolBridge.setSession(sessionKey)
     let toolProtocol: StructuredToolProtocol | undefined
     let dshContextSnapshot: DshContextSnapshot | undefined
     const purposeRoute = purposeRouteFor(options.purpose, this.purposeRoutes)
@@ -1448,7 +1523,10 @@ export class AgyAdapter extends LlmAdapter {
           toolSchemaCount,
         })
         setDshTelemetrySnapshot(telemetry, dshContextSnapshot)
-        if (dshContextSnapshot !== undefined) {
+        // Under the MCP bridge the tool catalogue travels out of band, so the
+        // prompt contract is neither built nor appended; only the fail-closed
+        // capability check above still runs.
+        if (dshContextSnapshot !== undefined && !useToolBridge) {
           try {
             toolProtocol = createStructuredToolProtocol(options.tools ?? [])
           } catch (error) {
@@ -1456,6 +1534,7 @@ export class AgyAdapter extends LlmAdapter {
             throw error
           }
         }
+        if (useToolBridge) telemetry.bridgeOutcome = 'mcp-tools'
       }
       if (toolSchemaCount > 0 && this.toolPolicy === 'reject') {
         throw new LlmError(
@@ -1508,6 +1587,7 @@ export class AgyAdapter extends LlmAdapter {
               persistentProtocolRepair,
               persistentProtocolRepairHint,
               persistentProtocolRepairReason,
+              useToolBridge,
             )
             persistentProtocolRepair = false
             persistentProtocolRepairHint = undefined
@@ -1569,6 +1649,7 @@ export class AgyAdapter extends LlmAdapter {
             protocolRepair,
             protocolRepairHint,
             protocolRepairReason,
+            useToolBridge,
           )
           protocolRepair = false
           protocolRepairHint = undefined
@@ -1636,6 +1717,7 @@ export class AgyAdapter extends LlmAdapter {
       'toolName' | 'issue' | 'missingRequiredKeys'
     > | undefined,
     protocolRepairReason: ToolProtocolRepairReason | undefined,
+    mcpToolsEnabled = false,
   ): AsyncGenerator<StreamChunk, AttemptOutcome, void> {
     if (toolProtocol !== undefined && (
       dshContextSnapshot?.state !== 'ready'
@@ -1696,6 +1778,9 @@ export class AgyAdapter extends LlmAdapter {
     })
 
     let blockStarted = false
+    // Text uses block 0; each bridged tool call takes the next index so
+    // interleaved narration and calls keep stable identities.
+    let toolBlockIndex = 1
     let visibleText = ''
     let resultSeen = false
     let finalResponse: string | undefined
@@ -1757,6 +1842,7 @@ export class AgyAdapter extends LlmAdapter {
           event,
           toolProtocol,
           { prepared, runtime: imageRuntime },
+          mcpToolsEnabled,
         )
         if (internalToolError !== undefined) {
           telemetry.bridgeOutcome = 'agy-internal-tool'
@@ -1772,6 +1858,46 @@ export class AgyAdapter extends LlmAdapter {
           permissionRequested = true
           controller.abort()
           continue
+        }
+
+        if (mcpToolsEnabled) {
+          // Bridge mode keeps both channels live: AGY narrates through ordinary
+          // text deltas, and every DSH tool call arrives as an MCP step. Emitting
+          // each call as a real DSH tool call is what makes intermediate steps
+          // visible in the transcript and lets the host apply its own approval
+          // policy to every execution.
+          const step = mcpToolStepOf(event)
+          if (step !== undefined) {
+            const state = stepStateOf(event)
+            if (state === 'DONE' || state === 'ERROR') {
+              telemetry.toolCallCount += 1
+              telemetry.bridgeOutcome = 'dsh-tool-call'
+              const callId = `agy-mcp-${telemetry.requestId}-${step.stepIndex}` as ToolCallId
+              yield { type: 'block-start', index: toolBlockIndex, blockType: 'tool-call' }
+              yield {
+                type: 'tool-call-delta',
+                index: toolBlockIndex,
+                id: callId,
+                name: step.toolName,
+                argumentsDelta: JSON.stringify(step.arguments ?? {}),
+              }
+              yield {
+                type: 'block-end',
+                index: toolBlockIndex,
+                block: {
+                  type: 'tool-call',
+                  id: callId,
+                  name: step.toolName,
+                  arguments: step.arguments ?? {},
+                } as ContentBlock,
+              }
+              toolBlockIndex += 1
+            }
+            // The MCP plumbing step carries no model text, but other step
+            // shapes (agent_response) do, so fall through to the text channel
+            // instead of skipping the event outright.
+            if (step !== undefined) continue
+          }
         }
 
         const delta = toolProtocol === undefined ? textDeltaOf(event) : undefined

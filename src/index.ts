@@ -76,6 +76,13 @@ export {
   IMAGE_MEDIA_TYPES,
   prepareAgyPrompts,
 } from './provider/image-bridge.js'
+import {
+  startDshMcpBridge,
+  type DshMcpBridge,
+  type DshSessionControllerLike,
+  type DshToolRuntimeLike,
+  type DshWebServerLike,
+} from './mcp/bridge.js'
 export {
   AGENT_PRESET_IDS,
   getAgentPreset,
@@ -176,6 +183,49 @@ export function apply(ctx: Context, config: ConfigType): void {
   // AttachmentStore is optional for the text-only path. Use the reflection
   // lookup instead of reading ctx.attachments directly: Cordis requires every
   // direct service property access to be declared in `inject`.
+
+  // The MCP tool bridge hands DSH tools to AGY out of band (so their schemas
+  // never enter the prompt) and routes every execution back through the host's
+  // own tool pipeline. It starts as an effect so the registration is removed
+  // again when this fiber unloads.
+  let toolBridge: DshMcpBridge | undefined
+  let toolBridgeError: string | undefined
+  const wantsBridge = activeConfig.mcpBridge !== false
+    && activeConfig.toolPolicy === 'dsh-owned'
+  if (wantsBridge) {
+    ctx.effect(() => {
+      let cancelled = false
+      void (async () => {
+        const bridge = await startDshMcpBridge({
+          webServer: ctx.get('webServer') as DshWebServerLike,
+          tools: ctx.get('tools') as DshToolRuntimeLike,
+          sessionController: ctx.get('sessionController') as DshSessionControllerLike | undefined,
+          ...((activeConfig.mcpToolAllowlist ?? []).length > 0 ? { toolAllowlist: activeConfig.mcpToolAllowlist } : {}),
+          serverVersion: '0.0.0',
+          logger: message => logger.info(message),
+        })
+        if (cancelled) {
+          await bridge.dispose()
+          return
+        }
+        toolBridge = bridge
+        if (!bridge.active) {
+          toolBridgeError = bridge.inactiveReason
+          logger.warn('dsh mcp bridge inactive: %s', bridge.inactiveReason ?? 'unknown reason')
+        }
+      })().catch(error => {
+        toolBridgeError = error instanceof Error ? error.message : String(error)
+        logger.warn('dsh mcp bridge failed to start: %s', toolBridgeError)
+      })
+      return async () => {
+        cancelled = true
+        const bridge = toolBridge
+        toolBridge = undefined
+        await bridge?.dispose()
+      }
+    })
+  }
+
   ctx.llm.registerAdapter([provider], new AgyAdapter(activeConfig, {
     logger: record => {
       try {
@@ -187,6 +237,11 @@ export function apply(ctx: Context, config: ConfigType): void {
     // Resolve lazily because attachments is optional and can be composed after
     // this plugin. Text-only requests remain independent of the service.
     resolveAttachmentStore: () => ctx.get('attachments') as Pick<AttachmentStore, 'readImage'> | undefined,
+    resolveToolBridge: () => {
+      if (!wantsBridge) return undefined
+      if (toolBridge?.active === true) return toolBridge
+      return undefined
+    },
     dshContext: ctx as unknown as DshContextLookup,
   }))
 }
