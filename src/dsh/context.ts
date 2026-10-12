@@ -1,5 +1,7 @@
+import { appendFileSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute, parse } from 'node:path'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join, parse } from 'node:path'
 import {
   DSH_APPROVAL_UNAVAILABLE_CODE,
   DSH_CONTEXT_UNAVAILABLE_CODE,
@@ -160,8 +162,23 @@ export class DshContextError extends Error {
 function service<T>(context: DshContextLookup | undefined, name: string): T | undefined {
   if (context === undefined) return undefined
   try {
-    return context.get(name) as T | undefined
-  } catch {
+    const direct = context.get(name) as T | undefined
+    if (direct !== undefined) return direct
+    // Desktop 0.2.0 mounts harness services on the root context while a plugin
+    // sees its own loader scope; fall through to the root before giving up.
+    const root = (context as { root?: DshContextLookup }).root
+    const viaRoot = root?.get?.(name) as T | undefined
+    if (viaRoot !== undefined) return viaRoot
+    return undefined
+  } catch (error) {
+    try {
+      // Temporary diagnostics: swallow-everything hides why a service is
+      // unreadable on a given host (rename vs lifecycle vs scope). Remove once
+      // the desktop runtime picture is settled.
+      appendFileSync(join(tmpdir(), 'dsh-agy-provider-context-diag.log'),
+        `${new Date().toISOString()} get(${name}) threw: ${error instanceof Error ? `${error.message} :: ${(error.stack ?? '').split('\n')[1]?.trim() ?? ''}` : String(error)}\n`,
+        'utf8')
+    } catch {}
     return undefined
   }
 }

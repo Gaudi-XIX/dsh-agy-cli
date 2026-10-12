@@ -22,7 +22,7 @@ import { configuredModels } from './provider/config.js'
 import type { DshContextLookup } from './dsh/context.js'
 
 export const name = 'dsh-agy-provider'
-export const inject = ['llm']
+export const inject = ['llm', 'sessions', 'workspaceRegistry', 'sandboxPolicy', 'permissionPresets', 'approval']
 
 /** Programmatic library default: enabled=false, toolPolicy=reject. */
 export const Config = ConfigSchema
