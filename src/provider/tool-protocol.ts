@@ -3,7 +3,12 @@ import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 
 /** Upper bounds for the provider-side structured tool protocol. */
 export const TOOL_PROTOCOL_LIMITS = Object.freeze({
-  maxTools: 32,
+  // The byte budgets below are the real guards: a desktop profile with many
+  // bundles installed hands one adapter the union of every plugin's tools (56 on
+  // a stock DSH 0.2.0-rc.2 profile), which 32 rejected outright. 64 clears that
+  // headroom with room to spare while the prompt/schema byte ceilings still stop
+  // an oversized set on their own terms.
+  maxTools: 64,
   maxToolNameLength: 128,
   maxDescriptionLength: 4_096,
   maxSchemaDepth: 10,
@@ -193,10 +198,10 @@ function schemaArray(value: unknown, depth: number, path: string): unknown[] {
   if (!Array.isArray(value) || value.length > 128) {
     throw new ToolProtocolError(TOOL_PROTOCOL_SCHEMA_INVALID_CODE, `${path} must be a bounded array`)
   }
-  return value.map((entry, index) => sanitizeSchema(entry, depth + 1, `${path}[${index}]`))
+  return value.map((entry, index) => sanitizeSchemaNode(entry, depth + 1, `${path}[${index}]`))
 }
 
-function sanitizeSchema(value: unknown, depth: number, path: string): JsonRecord {
+function sanitizeSchemaNode(value: unknown, depth: number, path: string): JsonRecord {
   if (!isRecord(value)) {
     throw new ToolProtocolError(TOOL_PROTOCOL_SCHEMA_INVALID_CODE, `${path} must be an object`)
   }
@@ -234,7 +239,7 @@ function sanitizeSchema(value: unknown, depth: number, path: string): JsonRecord
           if (property.length === 0 || property.length > 128 || !isSafeObjectKey(property)) {
             throw new ToolProtocolError(TOOL_PROTOCOL_SCHEMA_INVALID_CODE, 'property name')
           }
-          properties[property] = sanitizeSchema(propertySchema, depth + 1, `${path}.${property}`)
+          properties[property] = sanitizeSchemaNode(propertySchema, depth + 1, `${path}.${property}`)
         }
         output[key] = properties
         break
@@ -249,12 +254,12 @@ function sanitizeSchema(value: unknown, depth: number, path: string): JsonRecord
       }
       case 'additionalProperties': {
         if (typeof entry === 'boolean') output[key] = entry
-        else output[key] = sanitizeSchema(entry, depth + 1, `${path}.additionalProperties`)
+        else output[key] = sanitizeSchemaNode(entry, depth + 1, `${path}.additionalProperties`)
         break
       }
       case 'items':
       case 'not': {
-        output[key] = sanitizeSchema(entry, depth + 1, `${path}.${key}`)
+        output[key] = sanitizeSchemaNode(entry, depth + 1, `${path}.${key}`)
         break
       }
       case 'oneOf':
@@ -302,6 +307,15 @@ function sanitizeSchema(value: unknown, depth: number, path: string): JsonRecord
     }
   }
   return output
+}
+
+/**
+ * Whitelist one JSON Schema down to the keywords the DSH tool protocol
+ * supports. Exported so the MCP tool projection can reuse exactly the same
+ * gate instead of duplicating the keyword policy.
+ */
+export function sanitizeSchema(value: unknown, depth: number, label: string): unknown {
+  return sanitizeSchemaNode(value, depth, label)
 }
 
 function validateToolDefinition(tool: ToolSchema, index: number): { name: string; description: string; parameters: JsonRecord } {
@@ -820,7 +834,7 @@ export function parseStructuredEnvelope(
   if (argumentBytes > TOOL_PROTOCOL_LIMITS.maxArgumentsBytes) {
     throw new ToolProtocolError(TOOL_PROTOCOL_RESPONSE_LIMIT_CODE, 'arguments bytes')
   }
-  const parameters = sanitizeSchema(tool.parameters, 0, `tool ${tool.name}.parameters`)
+  const parameters = sanitizeSchema(tool.parameters, 0, `tool ${tool.name}.parameters`) as JsonRecord
   let argumentsValue = value.arguments
   const compatibility = compatibilityArgumentsOf(tool.name, argumentsValue, parameters)
   if (compatibility !== undefined) {

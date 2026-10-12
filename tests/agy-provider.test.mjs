@@ -6,6 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { AgyAdapter } from '../lib/provider/agy.js'
 import { getAgyUserMessageByteLength } from '../lib/agy/stream-protocol.js'
+import { DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES } from '../lib/provider/prompt-budget.js'
 
 function result(exitCode = 0) {
   return {
@@ -63,8 +64,8 @@ function trustedDshContext() {
       },
     },
     permissionPresets: {
-      current: events => {
-        assert.equal(events, session.events)
+      current: observed => {
+        assert.equal(observed, session)
         return 'workspace-write'
       },
     },
@@ -1060,7 +1061,7 @@ test('AgyAdapter records safe history compaction telemetry and preserves the cur
   const completed = logs.find(record => record.event === 'agy.request.completed')
   assert.equal(completed?.historyCompacted, true)
   assert.ok((completed?.omittedMessageCount ?? 0) > 0)
-  assert.equal(completed?.promptLimitBytes, 56 * 1024)
+  assert.equal(completed?.promptLimitBytes, DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES)
 })
 
 test('AgyAdapter rejects an oversized current DSH prompt before AGY can return an invalid envelope', async () => {
@@ -1083,7 +1084,7 @@ test('AgyAdapter rejects an oversized current DSH prompt before AGY can return a
         sessionId: 'session-1',
         messages: [{
           role: 'user',
-          content: [{ type: 'text', text: 'x'.repeat(70_000) }],
+          content: [{ type: 'text', text: 'x'.repeat(DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES + 8_000) }],
         }],
         tools: [readFileTool],
       })) {}

@@ -5,13 +5,17 @@ export const DEFAULT_INPUT_FRAME_LIMIT_BYTES = 256 * 1024
 // Keep a margin below the observed ~192 KiB cutoff so the current turn and
 // the DSH protocol cannot disappear from the tail of AGY's input.
 export const DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES = 180 * 1024
-// AGY 1.1.18's DSH-owned structured envelope has an additional effective
-// ceiling from the injected Agent/system contract. In real Desktop requests,
-// prompts around 61 KiB still exit without a usable structured response even
-// though the stream frame is valid; 56 KiB is the largest tested safe band.
-// Keep a lower tool-mode bound so the Provider fails closed with
-// AGY_INPUT_TOO_LARGE instead of surfacing AGY_EXIT/not-JSON.
-export const DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES = 56 * 1024
+// AGY 1.1.18's DSH-owned structured envelope appeared to have an additional
+// effective ceiling from the injected Agent/system contract: prompts around
+// 61 KiB exited without a usable structured response, so 56 KiB was pinned as
+// the largest tested safe band. AGY 1.3.2 no longer shows that ceiling — the
+// envelope came back parseable at 58 KiB and again at 136 KiB of prompt
+// (frame 141,879 bytes), both exit 0. The old bound is now smaller than the
+// protocol text alone on a Desktop profile: oneOf branches over ~59 tools
+// serialize to ~58 KiB, so every dsh-owned request started by tripping
+// AGY_INPUT_TOO_LARGE and by dropping history messages instead. 128 KiB keeps
+// ~2.2x headroom over that fixed cost and stays well under the 256 KiB frame.
+export const DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES = 128 * 1024
 export const DEFAULT_MAX_SINGLE_TOOL_RESULT_BYTES = 32 * 1024
 export const DEFAULT_MAX_HISTORICAL_TOOL_RESULT_BYTES = 96 * 1024
 

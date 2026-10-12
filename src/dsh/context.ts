@@ -1,6 +1,4 @@
-import { appendFileSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { isAbsolute, join, parse } from 'node:path'
 import {
   DSH_APPROVAL_UNAVAILABLE_CODE,
@@ -52,7 +50,12 @@ export interface DshSandboxPolicyLike {
 }
 
 export interface DshPermissionPresetServiceLike {
-  current(events: readonly unknown[]): unknown
+  /**
+   * The host resolves a preset from a session's `permissions` projection
+   * (`ctx.sessionProjections.stateOf(session, 'permissions')`); passing the
+   * session object is the contract the host itself calls with.
+   */
+  current(session: DshSessionLike): unknown
 }
 
 export interface DshApprovalServiceLike {
@@ -170,15 +173,9 @@ function service<T>(context: DshContextLookup | undefined, name: string): T | un
     const viaRoot = root?.get?.(name) as T | undefined
     if (viaRoot !== undefined) return viaRoot
     return undefined
-  } catch (error) {
-    try {
-      // Temporary diagnostics: swallow-everything hides why a service is
-      // unreadable on a given host (rename vs lifecycle vs scope). Remove once
-      // the desktop runtime picture is settled.
-      appendFileSync(join(tmpdir(), 'dsh-agy-provider-context-diag.log'),
-        `${new Date().toISOString()} get(${name}) threw: ${error instanceof Error ? `${error.message} :: ${(error.stack ?? '').split('\n')[1]?.trim() ?? ''}` : String(error)}\n`,
-        'utf8')
-    } catch {}
+  } catch {
+    // A host that throws on an unknown service is reported as "absent" so the
+    // fail-closed checks downstream decide; never leak service names upward.
     return undefined
   }
 }
@@ -475,11 +472,9 @@ export async function resolveDshContext(
 
   const permissionPresets = services.permissionPresets
   if (permissionPresets === undefined) throw new DshContextError(DSH_PERMISSION_UNAVAILABLE_CODE)
-  const events = session.events
-  if (!Array.isArray(events)) throw new DshContextError(DSH_PERMISSION_UNAVAILABLE_CODE)
   let permissionPreset: unknown
   try {
-    permissionPreset = permissionPresets.current(events)
+    permissionPreset = permissionPresets.current(session)
   } catch {
     throw new DshContextError(DSH_PERMISSION_UNAVAILABLE_CODE)
   }

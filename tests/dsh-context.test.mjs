@@ -40,8 +40,8 @@ async function trustedContext() {
         },
       },
       permissionPresets: {
-        current: events => {
-          assert.equal(events, session.events)
+        current: observed => {
+          assert.equal(observed, session)
           return 'workspace-write'
         },
       },
