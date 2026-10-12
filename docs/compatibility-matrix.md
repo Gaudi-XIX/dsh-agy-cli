@@ -21,6 +21,8 @@
 | AGY | `1.1.15` | 通过 stream-json 真实协议与 persistent | V8-M1 捕获 `{event:"user"}` 帧、3-turn 同会话、V8-M4 warm 79% 改善，无串线 |
 | AGY models | `agy models` plain text + 归一化 base | 通过 | V3-M1/V9-M2 解析、去重、显式目录合并和 fallback；0.9.0 `normalizeModelId/extractEffort` 按 base 去重，`filterVisibleModels` |
 | AGY Agent | `deepseek-proxy` | 通过 | `agy agents` 与 Provider 默认配置 |
+| DSH host | `0.2.0-rc.2`（Windows 桌面版，desktop profile） | 通过（fork 适配） | peers 放宽至 `>=0.1.7-rc.2 <0.3.0-0` + 三类 API 适配（`ToolCallId` 改名 / tool-result 消息化 / SettingsForms 取代 register）；typecheck 0 错、219/219、live 通路 PASS；详见 `docs/compatibility-dsh-0.2.0-rc.2.md` |
+| AGY | `1.3.2` | 通过 live 通路（真实一轮对话） | `agy models` 全量目录 14 模型 + `gemini-3.8-flash-medium` 真实回话；Windows 凭据管理器 keyring + `HTTPS_PROXY` 续期实测 |
 | Diagnostic catalog | `static`/`discovered`/`merged`/`cache`/`fallback` | 通过无额度验证 | V3-M5 machine schema、warning code 和 `quotaUsed=false` 测试 |
 | npm registry | `dsh-agy-provider@0.10.0`, `latest=0.10.0` | 通过 | 0.10.0 69-file pack；线上 tarball/integrity/shasum 已核验，`dsh.bundle.patch` 可读取 |
 | Publish workflow | `v*.*.*` tag + package version match + npm Trusted Publishing | 通过 | `v0.10.0` → merge `ab68e83`（PR #2，CI run `32714261279`：17/17）；npm public publish 与 GitHub Release 已完成 |
