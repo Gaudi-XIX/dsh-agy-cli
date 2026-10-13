@@ -626,7 +626,9 @@ test('AgyAdapter bridges a validated DSH-owned tool call without exposing AGY to
     tools: [readFileTool],
   })) chunks.push(chunk)
 
-  assert.equal(captured[0]?.agent, 'dsh-agy-tool-free')
+  // DSH-owned requests run under the MCP executor template: AGY's own tools are
+  // removed there, so the DSH catalogue is the only way to act.
+  assert.equal(captured[0]?.agent, 'dsh-agy-mcp-executor')
   assert.equal(Object.hasOwn(captured[0] ?? {}, 'jsonSchemaPath'), false)
   assert.equal(Object.hasOwn(captured[0] ?? {}, 'cwd'), false)
   assert.equal(Object.hasOwn(captured[0] ?? {}, 'addDirs'), false)

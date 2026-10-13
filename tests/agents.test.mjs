@@ -12,11 +12,17 @@ import {
 
 test('bundled Agent presets expose separated tool capabilities', () => {
   const presets = describeAgentPresets()
-  assert.deepEqual(presets.map(preset => preset.id), ['tool-free', 'image-view', 'read-only', 'workspace-write'])
+  assert.deepEqual(
+    presets.map(preset => preset.id),
+    ['tool-free', 'mcp-executor', 'image-view', 'read-only', 'workspace-write'],
+  )
   assert.deepEqual(presets[0]?.tools, [])
-  assert.deepEqual(presets[1]?.tools, ['view_file'])
-  assert.deepEqual(presets[2]?.tools, ['find_by_name', 'grep_search', 'view_file', 'list_dir'])
-  assert.deepEqual(presets[3]?.tools, [
+  // The MCP executor is the DSH-owned default: built-in tools are removed so
+  // every action has to travel back through the DSH MCP server.
+  assert.deepEqual(presets[1]?.tools, [])
+  assert.deepEqual(presets[2]?.tools, ['view_file'])
+  assert.deepEqual(presets[3]?.tools, ['find_by_name', 'grep_search', 'view_file', 'list_dir'])
+  assert.deepEqual(presets[4]?.tools, [
     'find_by_name',
     'grep_search',
     'view_file',
@@ -25,7 +31,7 @@ test('bundled Agent presets expose separated tool capabilities', () => {
     'replace_file_content',
     'write_to_file',
   ])
-  assert.equal(presets[3]?.writeAccess, true)
+  assert.equal(presets[4]?.writeAccess, true)
   assert.equal(presets.some(preset => preset.tools.includes('run_command')), false)
 })
 
@@ -78,7 +84,7 @@ test('Agent CLI exposes quota-free list and preview JSON', async () => {
   assert.equal(listExit, 0)
   assert.equal(stderr, '')
   assert.equal(JSON.parse(stdout).quotaUsed, false)
-  assert.equal(JSON.parse(stdout).presets.length, 4)
+  assert.equal(JSON.parse(stdout).presets.length, 5)
 
   const directory = await mkdtemp(join(tmpdir(), 'dsh-agent-cli-'))
   try {

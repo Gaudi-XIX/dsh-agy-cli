@@ -23,7 +23,7 @@ Commands:
   install <preset>        Preview or install one preset
 
 Options:
-  --dir <path>            Agent directory (default: $AGY_AGENT_DIR or ~/.gemini/config/agents)
+  --dir <path>            Agent directory (default: $AGY_AGENT_DIR or the AGY config root's agents/)
   --apply                 Write the template; omitted means preview only
   --backup                Move an existing file aside before --apply
   --json                  Output structured JSON
@@ -33,7 +33,7 @@ Presets: ${AGENT_PRESET_IDS.join(', ')}
 
 Examples:
   npx dsh-agy-provider agents list
-  npx dsh-agy-provider agents install read-only --dir .gemini/config/agents
+  npx dsh-agy-provider agents install read-only --dir ~/.gemini/antigravity-cli/gemini-root-config/agents
   npx dsh-agy-provider agents install workspace-write --apply --backup
 `
 }

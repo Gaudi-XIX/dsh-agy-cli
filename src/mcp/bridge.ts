@@ -26,7 +26,7 @@ import {
   projectDshTools,
   type DshToolRegistryLike,
 } from './tool-projection.js'
-import type { McpCallResult, McpTextContent } from './protocol.js'
+import type { McpCallResult, McpTextContent, McpToolDescriptor } from './protocol.js'
 
 /** The subset of the DSH tool registry this bridge uses. */
 export interface DshToolRuntimeLike extends DshToolRegistryLike {
@@ -136,14 +136,16 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
   }
 
   let endpoint: McpEndpoint
+  let exposedTools: readonly McpToolDescriptor[]
   try {
+    exposedTools = projectDshTools(options.tools, {
+      ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
+    }).tools
     endpoint = mountMcpEndpoint(options.webServer, {
       serverName: AGY_MCP_SERVER_NAME,
       serverVersion: options.serverVersion,
       instructions: INSTRUCTIONS,
-      listTools: async () => projectDshTools(options.tools, {
-        ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
-      }).tools,
+      listTools: async () => exposedTools,
       callTool: (sessionHandle, name, args) => executeDshTool(options, sessionHandle, name, args),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     })
@@ -157,7 +159,13 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
 
   try {
     await registerAgyMcpServer(
-      { url: endpoint.url, token: endpoint.token },
+      {
+        url: endpoint.url,
+        token: endpoint.token,
+        // The allow rules AGY needs are per tool, so they are written from the
+        // same projection the endpoint serves.
+        toolNames: exposedTools.map(tool => tool.name),
+      },
       {
         ...(options.agyConfigRoot === undefined ? {} : { configRoot: options.agyConfigRoot }),
         ...(options.logger === undefined ? {} : { logger: options.logger }),

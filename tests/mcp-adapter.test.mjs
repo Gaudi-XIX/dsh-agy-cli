@@ -254,6 +254,91 @@ test('an inactive bridge falls back to the prompt contract instead of failing', 
   assert.equal(text, 'no bridge')
 })
 
+/**
+ * AGY sometimes finishes a bridged turn with no `agent_response` step at all:
+ * the whole turn goes into MCP tool steps and `result.response` carries either
+ * the answer or the empty string. Neither case may surface as EMPTY_RESPONSE —
+ * the tool call is the turn's real output.
+ */
+const RESULT_WITHOUT_STREAMED_TEXT = JSON.stringify({
+  event: 'result',
+  result: {
+    conversation_id: 'conv-mcp-1',
+    status: 'SUCCESS',
+    response: 'Read README.md and found the deployment notes.',
+    usage: { input_tokens: 120, output_tokens: 12 },
+  },
+})
+
+const RESULT_EMPTY_RESPONSE = JSON.stringify({
+  event: 'result',
+  result: {
+    conversation_id: 'conv-mcp-1',
+    status: 'SUCCESS',
+    response: '',
+    usage: { input_tokens: 120, output_tokens: 12 },
+  },
+})
+
+test('bridge mode recovers a final response that never streamed as a delta', async () => {
+  const { handle } = liveBridge()
+  const adapter = new AgyAdapter(
+    { enabled: true, toolPolicy: 'dsh-owned', model: 'gemini-3.8-flash' },
+    adapterOptions(
+      scriptedRunner([INIT, MCP_CALL_ACTIVE, MCP_CALL_DONE, RESULT_WITHOUT_STREAMED_TEXT]),
+      { resolveToolBridge: () => handle },
+    ),
+  )
+
+  const chunks = []
+  for await (const chunk of adapter.stream({
+    provider: 'agy',
+    model: 'gemini-3.8-flash',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'read it' }] }],
+    sessionId: 'session-1',
+    tools: [{ name: 'read', description: 'r', parameters: { type: 'object', properties: {} } }],
+  })) chunks.push(chunk)
+
+  const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
+  assert.equal(text, 'Read README.md and found the deployment notes.')
+  const finish = chunks.find(chunk => chunk.type === 'finish')
+  assert.deepEqual(finish.reason, { kind: 'stop' })
+})
+
+test('bridge mode reports a turn that only made tool calls instead of failing empty', async () => {
+  const { handle } = liveBridge()
+  const adapter = new AgyAdapter(
+    { enabled: true, toolPolicy: 'dsh-owned', model: 'gemini-3.8-flash' },
+    adapterOptions(
+      scriptedRunner([INIT, MCP_CALL_ACTIVE, MCP_CALL_DONE, RESULT_EMPTY_RESPONSE]),
+      { resolveToolBridge: () => handle },
+    ),
+  )
+
+  const chunks = []
+  for await (const chunk of adapter.stream({
+    provider: 'agy',
+    model: 'gemini-3.8-flash',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'read it' }] }],
+    sessionId: 'session-1',
+    tools: [{ name: 'read', description: 'r', parameters: { type: 'object', properties: {} } }],
+  })) chunks.push(chunk)
+
+  const calls = chunks.filter(chunk => chunk.type === 'block-end' && chunk.block?.type === 'tool-call')
+  assert.equal(calls.length, 1)
+  // AGY narrated nothing this turn, so the tool-call block is the whole record.
+  // The turn must still close instead of throwing EMPTY_RESPONSE: the tool calls
+  // already ran, and retrying would repeat them. It must NOT emit an empty text
+  // block either — that lands in the transcript as a blank assistant message,
+  // and the host refuses to `session/follow` a session holding one.
+  const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
+  assert.equal(text, '')
+  const textBlock = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'text')
+  assert.equal(textBlock, undefined)
+  const finish = chunks.find(chunk => chunk.type === 'finish')
+  assert.deepEqual(finish.reason, { kind: 'stop' })
+})
+
 test('mcpBridge:false keeps the prompt-contract path even with a live bridge', async () => {
   const { handle } = liveBridge()
   const adapter = new AgyAdapter(

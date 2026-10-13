@@ -505,7 +505,7 @@ function resolveAgyAgentRuntime(config: Config, toolPolicy: ToolPolicy): AgyAgen
     throw new RangeError('agentPreset must be one of: tool-free, read-only, workspace-write')
   }
   const preset = dshOwned
-    ? getAgentPreset('tool-free')
+    ? getAgentPreset('mcp-executor')
     : configuredPreset
   const workspaceRoot = dshOwned ? undefined : canonicalWorkspaceRoot(config.workspaceRoot)
   if (preset?.writeAccess === true && workspaceRoot === undefined) {
@@ -1351,9 +1351,14 @@ export class AgyAdapter extends LlmAdapter {
       }
       if (envelope.kind === 'message') {
         telemetry.bridgeOutcome = 'dsh-message'
-        yield { type: 'block-start', index: 0, blockType: 'text' }
-        if (envelope.content.length > 0) yield { type: 'text-delta', index: 0, text: envelope.content }
-        yield { type: 'block-end', index: 0, block: { type: 'text', text: envelope.content } }
+        // An empty envelope message is a turn with nothing to say: emit no text
+        // block rather than a blank one (a blank assistant message makes the
+        // host refuse `session/follow` for the whole session).
+        if (envelope.content.length > 0) {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text: envelope.content }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text: envelope.content } }
+        }
         if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
         yield { type: 'finish', reason: { kind: 'stop' } }
         return { retryWithFullPrompt: false }
@@ -1369,14 +1374,27 @@ export class AgyAdapter extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return { retryWithFullPrompt: false }
     }
-    // Text-only: already yielded deltas, need to close block and finish
+    // Text-only: already yielded deltas, need to close block and finish.
+    // `result.response` is the authoritative full answer; when no delta was
+    // streamed (AGY spent the turn on tool steps and only summarised at the
+    // end) emit it as the answer. Nothing to emit for a tool-only step: its
+    // tool-call block is the whole record, and a blank text block would land in
+    // the transcript as an empty assistant message (see the one-shot path).
+    if (finalResponse !== undefined && finalResponse.length > 0) {
+      const suffix = visibleText.length === 0
+        ? finalResponse
+        : finalResponse.startsWith(visibleText) ? finalResponse.slice(visibleText.length) : ''
+      if (suffix.length > 0) {
+        if (!blockStarted) {
+          blockStarted = true
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+        }
+        visibleText += suffix
+        yield { type: 'text-delta', index: 0, text: suffix }
+      }
+    }
     if (blockStarted) {
       yield { type: 'block-end', index: 0, block: { type: 'text', text: visibleText } }
-    } else if (finalResponse !== undefined) {
-      // No delta was yielded, but result has response
-      yield { type: 'block-start', index: 0, blockType: 'text' }
-      yield { type: 'text-delta', index: 0, text: finalResponse }
-      yield { type: 'block-end', index: 0, block: { type: 'text', text: finalResponse } }
     }
     if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
     yield { type: 'finish', reason: { kind: 'stop' } }
@@ -1990,9 +2008,14 @@ export class AgyAdapter extends LlmAdapter {
       }
       if (envelope.kind === 'message') {
         telemetry.bridgeOutcome = 'dsh-message'
-        yield { type: 'block-start', index: 0, blockType: 'text' }
-        if (envelope.content.length > 0) yield { type: 'text-delta', index: 0, text: envelope.content }
-        yield { type: 'block-end', index: 0, block: { type: 'text', text: envelope.content } }
+        // An empty envelope message is a turn with nothing to say: emit no text
+        // block rather than a blank one (a blank assistant message makes the
+        // host refuse `session/follow` for the whole session).
+        if (envelope.content.length > 0) {
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+          yield { type: 'text-delta', index: 0, text: envelope.content }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text: envelope.content } }
+        }
         if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
         yield { type: 'finish', reason: { kind: 'stop' } }
         return { retryWithFullPrompt: false }
@@ -2038,10 +2061,19 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
 
-    if (!blockStarted) {
+    if (blockStarted) {
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: visibleText } }
+    } else if (telemetry.toolCallCount > 0) {
+      // Every tool call ran and the turn closed without narration. Emit nothing
+      // for the text channel: a tool-only step ends on its tool-call block, and
+      // an empty text block is not harmless — it lands in the transcript as a
+      // blank assistant message, and a session holding one is refused by the
+      // host's `session/follow` (pocket then retries it forever). The turn is
+      // still a success; EMPTY_RESPONSE would be worse, since the code is
+      // retryable and would re-run side effects that already happened.
+    } else {
       throw new LlmError('AGY completed without a text response', EMPTY_RESPONSE_CODE)
     }
-    yield { type: 'block-end', index: 0, block: { type: 'text', text: visibleText } }
     if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
     yield { type: 'finish', reason: { kind: 'stop' } }
     return { retryWithFullPrompt: false }

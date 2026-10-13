@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 
-export const AGENT_PRESET_IDS = ['tool-free', 'image-view', 'read-only', 'workspace-write'] as const
+export const AGENT_PRESET_IDS = ['tool-free', 'mcp-executor', 'image-view', 'read-only', 'workspace-write'] as const
 export type AgentPresetId = typeof AGENT_PRESET_IDS[number]
 export type AgentExecutionMode = 'plan' | 'accept-edits'
 
@@ -20,6 +20,19 @@ const PRESETS: Readonly<Record<AgentPresetId, AgentPreset>> = Object.freeze({
     agentName: 'dsh-agy-tool-free',
     fileName: 'dsh-agy-tool-free.md',
     description: 'Text-only reasoning with no AGY tools.',
+    tools: Object.freeze([]),
+    writeAccess: false,
+    mode: undefined,
+  }),
+  'mcp-executor': Object.freeze({
+    id: 'mcp-executor',
+    agentName: 'dsh-agy-mcp-executor',
+    fileName: 'dsh-agy-mcp-executor.md',
+    // Built-in tools are removed rather than intercepted: a tool that does not
+    // exist cannot be called, which is the only reliable way to keep AGY's own
+    // executors out of the loop (an agent template that merely asks the model
+    // not to use them is bypassed probabilistically).
+    description: 'All actions through the DSH MCP server; no AGY built-in tools.',
     tools: Object.freeze([]),
     writeAccess: false,
     mode: undefined,

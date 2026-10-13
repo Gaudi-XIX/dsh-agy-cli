@@ -11,7 +11,20 @@ import {
   type AgentPresetId,
 } from './agent-presets.js'
 
-export const DEFAULT_AGENT_DIRECTORY = join(homedir(), '.gemini', 'config', 'agents')
+/**
+ * Where the AGY CLI discovers agent templates.
+ *
+ * This is `gemini-root-config/agents`, not `~/.gemini/config/agents`: the CLI
+ * keeps a second, differently-populated `agents` directory under its data root
+ * and only scans this one (`agy agents` lists a template added here and ignores
+ * one removed from the other). `DSH_AGY_CONFIG_ROOT` mirrors
+ * {@link agyConfigRoot} in `mcp/agy-registration.ts`, so pointing AGY at
+ * another root moves both the MCP table and the templates together.
+ */
+export const DEFAULT_AGENT_DIRECTORY = join(
+  process.env.DSH_AGY_CONFIG_ROOT?.trim() || join(homedir(), '.gemini', 'antigravity-cli', 'gemini-root-config'),
+  'agents',
+)
 
 export type AgentInstallAction = 'create' | 'unchanged' | 'conflict' | 'backup-and-create'
 
