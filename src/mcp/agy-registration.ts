@@ -2,8 +2,9 @@
  * Register the DSH tool bridge as an MCP server inside the AGY CLI.
  *
  * AGY keeps its MCP server table in its own config root
- * (`~/.gemini/antigravity-cli/gemini-root-config/`, see {@link agyConfigRoot}),
- * so this is the one place where the plugin writes outside the DSH profile.
+ * (`~/.gemini/antigravity-cli/gemini-root-config/`, see {@link agyConfigRoot})
+ * and its settings one level above that root (see {@link agySettingsRoot}), so
+ * this is the one place where the plugin writes outside the DSH profile.
  * Three rules keep that honest:
  *
  * 1. every write is attributed — the entry is named and tagged by this plugin,
@@ -48,21 +49,24 @@ export interface AgyMcpConfigFile {
 }
 
 export interface AgyMcpRegistrationOptions {
-  /** Overrides the AGY config root; tests pass a temporary directory. */
+  /** Overrides the AGY MCP-config root; tests pass a temporary directory. */
   readonly configRoot?: string
+  /**
+   * Overrides the AGY settings root. Settings and MCP config live one level
+   * apart, so this is a separate knob; defaulting it to `configRoot` keeps
+   * single-directory test fixtures working.
+   */
+  readonly settingsRoot?: string
   readonly logger?: (message: string) => void
 }
 
 /**
- * The directory AGY actually reads `mcp_config.json`, `settings.json` and
- * `agents/` from.
+ * The directory AGY reads `mcp_config.json` and `agents/` from.
  *
- * It is the `gemini-root-config` child of the CLI data directory, not the data
- * directory itself: the CLI keeps session state at
- * `~/.gemini/antigravity-cli/` and a second, differently-populated
- * `mcp_config.json` there, but `agy mcp list` and `agy agents` only ever read
- * the nested root. Writing the outer copy is silently ignored — the file looks
- * correct on disk while AGY reports `No MCP servers configured`.
+ * It is the `gemini-root-config` child of the CLI data directory. `agy mcp
+ * list`, `agy agents`, and `agy mcp add` all read and write this nested root —
+ * verified by adding a server with the CLI and watching only the nested copy
+ * change on disk.
  *
  * `HOME`/`USERPROFILE` overrides do not relocate this either: the CLI resolves
  * it through the Windows known-folder API, so tests must pass `configRoot`
@@ -74,6 +78,25 @@ export function agyConfigRoot(): string {
   return join(homedir(), '.gemini', 'antigravity-cli', 'gemini-root-config')
 }
 
+/**
+ * The directory AGY reads `settings.json` from.
+ *
+ * Settings live one level *above* the MCP config, not beside it. Measured with
+ * a signed probe rule: a rule added to the nested `settings.json` never reaches
+ * the `Allow:[...]` table AGY logs at startup, while the same rule added to the
+ * outer file shows up immediately. Only the outer file is ever loaded.
+ *
+ * Getting this wrong is silent in the worst way: the nested file looks correct
+ * on disk, and every MCP tool call is then auto-denied in headless mode. AGY
+ * logs the real table as `CLI settings initialized: permissions=&{Allow:[...]}`,
+ * which is the fastest way to confirm which file won.
+ */
+export function agySettingsRoot(): string {
+  const explicit = process.env.DSH_AGY_SETTINGS_ROOT
+  if (typeof explicit === 'string' && explicit.trim().length > 0) return explicit.trim()
+  return join(homedir(), '.gemini', 'antigravity-cli')
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -83,7 +106,7 @@ function mcpConfigPath(options: AgyMcpRegistrationOptions): string {
 }
 
 function settingsPath(options: AgyMcpRegistrationOptions): string {
-  return join(options.configRoot ?? agyConfigRoot(), 'settings.json')
+  return join(options.settingsRoot ?? options.configRoot ?? agyConfigRoot(), 'settings.json')
 }
 
 async function readConfig(path: string): Promise<Record<string, unknown>> {
@@ -245,3 +268,4 @@ export async function unregisterAgyMcpServer(
   await clearAllowRules(options).catch(() => false)
   return true
 }
+

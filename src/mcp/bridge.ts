@@ -18,6 +18,7 @@ import { mountMcpEndpoint, type DshWebServerLike, type McpEndpoint } from './end
 export type { DshWebServerLike, McpEndpoint }
 import {
   agyConfigRoot,
+  agySettingsRoot,
   registerAgyMcpServer,
   unregisterAgyMcpServer,
   AGY_MCP_SERVER_NAME,
@@ -58,8 +59,13 @@ export interface DshMcpBridgeOptions {
   /** Optional allowlist of DSH tool names exposed to AGY. */
   readonly toolAllowlist?: readonly string[] | undefined
   readonly serverVersion: string
-  /** Overrides the AGY config root; tests pass a temporary directory. */
+  /** Overrides the AGY MCP-config root; tests pass a temporary directory. */
   readonly agyConfigRoot?: string | undefined
+  /**
+   * Overrides the AGY settings root. Defaults to `agyConfigRoot` so a test can
+   * keep both files in one temporary directory.
+   */
+  readonly agySettingsRoot?: string | undefined
   readonly logger?: (message: string) => void
 }
 
@@ -168,6 +174,7 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
       },
       {
         ...(options.agyConfigRoot === undefined ? {} : { configRoot: options.agyConfigRoot }),
+        ...(options.agySettingsRoot === undefined ? {} : { settingsRoot: options.agySettingsRoot }),
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       },
     )
@@ -186,6 +193,7 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
       endpoint.dispose()
       await unregisterAgyMcpServer({
         ...(options.agyConfigRoot === undefined ? {} : { configRoot: options.agyConfigRoot }),
+        ...(options.agySettingsRoot === undefined ? {} : { settingsRoot: options.agySettingsRoot }),
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       }).catch(() => {})
     },
@@ -219,4 +227,4 @@ async function executeDshTool(
   return resultToCallResult(result)
 }
 
-export { AGY_MCP_SERVER_NAME, agyConfigRoot }
+export { AGY_MCP_SERVER_NAME, agyConfigRoot, agySettingsRoot }

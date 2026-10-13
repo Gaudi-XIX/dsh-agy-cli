@@ -265,6 +265,35 @@ test('AGY MCP cleanup leaves a foreign server that happens to be named dsh', asy
   }
 })
 
+test('AGY settings are written one directory above the MCP config, not beside it', async () => {
+  // Measured against the real CLI: a rule placed in the `settings.json` next to
+  // `mcp_config.json` never reaches the Allow table AGY logs at startup, while
+  // the same rule one level up does. Writing both into one root looks correct
+  // on disk and then auto-denies every MCP call in headless mode.
+  //
+  // Only `settingsRoot` is overridden, so this pins the *default* relationship
+  // between the two roots rather than whatever a fixture passes in.
+  const cliRoot = await mkdtemp(join(tmpdir(), 'agy-cli-root-'))
+  const settingsRoot = await mkdtemp(join(tmpdir(), 'agy-settings-root-'))
+  try {
+    await registerAgyMcpServer(
+      { url: 'http://127.0.0.1:1234/x', token: 'tok', toolNames: ['read'] },
+      { settingsRoot, configRoot: cliRoot },
+    )
+
+    const mcpConfig = JSON.parse(await readFile(join(cliRoot, 'mcp_config.json'), 'utf8'))
+    assert.ok(mcpConfig.mcpServers[AGY_MCP_SERVER_NAME], 'the MCP server entry lives in the nested root')
+
+    const settings = JSON.parse(await readFile(join(settingsRoot, 'settings.json'), 'utf8'))
+    assert.deepEqual(settings.permissions.allow, [`mcp(${AGY_MCP_SERVER_NAME}/read)`])
+
+    await unregisterAgyMcpServer({ settingsRoot, configRoot: cliRoot })
+  } finally {
+    await rm(cliRoot, { recursive: true, force: true })
+    await rm(settingsRoot, { recursive: true, force: true })
+  }
+})
+
 test('the bridge executes a tool through the host pipeline with the resolved agent', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agy-mcp-bridge-'))
   try {
