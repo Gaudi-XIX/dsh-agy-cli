@@ -190,7 +190,11 @@ test('bridge mode turns each MCP step into a real DSH tool call', async () => {
   const calls = chunks.filter(chunk => chunk.type === 'block-end' && chunk.block?.type === 'tool-call')
   assert.equal(calls.length, 1, 'exactly one tool call is emitted for the completed step')
   assert.equal(calls[0].block.name, 'read', 'the real tool name is unwrapped from ToolName')
-  assert.deepEqual(calls[0].block.arguments, { path: 'README.md' })
+  // The content-block contract types `arguments` as a JSON string, and the
+  // session format validator compares the advertised block against the later
+  // tool/call event by reference — an object here is rejected at restore time.
+  assert.equal(typeof calls[0].block.arguments, 'string', 'arguments must be a JSON string')
+  assert.deepEqual(JSON.parse(calls[0].block.arguments), { path: 'README.md' })
   assert.match(String(calls[0].block.id), /^agy-mcp-/)
 
   // The host already executed the call through the bridge, so the emitted

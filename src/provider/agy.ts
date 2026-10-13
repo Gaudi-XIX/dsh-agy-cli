@@ -1891,13 +1891,19 @@ export class AgyAdapter extends LlmAdapter {
               telemetry.toolCallCount += 1
               telemetry.bridgeOutcome = 'dsh-tool-call'
               const callId = `agy-mcp-${telemetry.requestId}-${step.stepIndex}` as ToolCallId
+              // `arguments` is a JSON string in the content-block contract, not an
+              // object. The session format validator compares the advertised block
+              // against the later tool/call event by reference, so an object (two
+              // distinct instances after the round-trip) is rejected as "does not
+              // match one advertised tool call" while the identical string passes.
+              const argumentsJson = JSON.stringify(step.arguments ?? {})
               yield { type: 'block-start', index: toolBlockIndex, blockType: 'tool-call' }
               yield {
                 type: 'tool-call-delta',
                 index: toolBlockIndex,
                 id: callId,
                 name: step.toolName,
-                argumentsDelta: JSON.stringify(step.arguments ?? {}),
+                argumentsDelta: argumentsJson,
               }
               yield {
                 type: 'block-end',
@@ -1906,7 +1912,7 @@ export class AgyAdapter extends LlmAdapter {
                   type: 'tool-call',
                   id: callId,
                   name: step.toolName,
-                  arguments: step.arguments ?? {},
+                  arguments: argumentsJson,
                 } as ContentBlock,
               }
               toolBlockIndex += 1
