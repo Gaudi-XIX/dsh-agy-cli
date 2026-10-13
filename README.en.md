@@ -145,13 +145,15 @@ sessionMode: full
 modelDiscovery: auto
 retryPolicy:
   maxRetries: 5
-  retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+  retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, AGY_INPUT_FAILED, AGY_SPAWN_FAILED]
 imageInput: off
 ~~~
 
 > Compat: legacy `model: gemini-3.7-flash-high` still resolves to `base + high` with a warning; prefer base + per-session `reasoningEffort`.
 
 Retries follow the DSH normal policy by default: up to five retries after the initial request, including `TIMEOUT` (at most six AGY requests total). `retryPolicy` can narrow the count and error-code allowlist in `settings.yaml`.
+
+`AGY_INPUT_FAILED` and `AGY_SPAWN_FAILED` are **startup** failures and are retryable by default. Before AGY accepts any stream-json input it runs its own eligibility check (`loadCodeAssist`); when that request leaves through the local proxy it is occasionally reset, AGY exits immediately, and our write to its stdin lands on a closed pipe — surfacing as `Unable to write AGY stream-json input (Error:EOF stage=stdin)`. Nothing about the request is wrong, so one more attempt recovers. `AGY_INPUT_TOO_LARGE` is deliberately **not** retryable: an oversized frame never shrinks between attempts. Codes in the allowlist that are no longer retryable are dropped with a process warning rather than rejected, so an existing profile can never fail to start because the allowlist changed.
 
 ## Diagnostics and development
 

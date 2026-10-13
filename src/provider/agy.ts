@@ -80,6 +80,7 @@ import {
   extractModelEffort,
   filterVisibleModels,
   normalizeModelId,
+  type AgyRetryableCode,
   type AgyRetryPolicyConfig,
   type Config,
   type ModelConfig,
@@ -834,13 +835,27 @@ function resolveAgyRetryPolicy(config: AgyRetryPolicyConfig | undefined): Resolv
     throw new RangeError('AGY retryPolicy.maxRetries must be an integer between 0 and 5')
   }
   const retryableCodes = config?.retryableCodes ?? [...AGY_RETRYABLE_CODES]
-  if (retryableCodes.length === 0 || retryableCodes.some(code => !AGY_RETRYABLE_CODES.includes(code))) {
-    throw new RangeError(`AGY retryPolicy.retryableCodes must use only: ${AGY_RETRYABLE_CODES.join(', ')}`)
+  // A configured list is normalized against the allowlist rather than rejected:
+  // a profile written before AGY_INPUT_FAILED/AGY_SPAWN_FAILED joined the list
+  // would otherwise make this resolver throw on every call, and the failure mode
+  // of a stale config must never be "the provider refuses to start". Codes that
+  // are no longer retryable are dropped, except when that would leave nothing to
+  // retry — a non-empty list is a schema requirement, so falling back to the full
+  // allowlist is safer than silently disabling retries.
+  const allowed = new Set<string>(AGY_RETRYABLE_CODES)
+  const dropped = [...new Set(retryableCodes.filter(code => !allowed.has(code)))]
+  if (dropped.length > 0) {
+    process.emitWarning(
+      `AGY retryPolicy.retryableCodes dropped codes that are not retryable: ${dropped.join(', ')}`,
+      { code: 'DSH_AGY_RETRY_CODES' },
+    )
   }
+  const filtered = retryableCodes.filter((code): code is AgyRetryableCode => allowed.has(code))
+  const effectiveCodes = filtered.length > 0 ? filtered : [...AGY_RETRYABLE_CODES]
   return resolveRetryPolicy({
     mode: 'normal',
     maxRetries,
-    retryableCodes: [...retryableCodes],
+    retryableCodes: [...effectiveCodes],
   }, 'dsh-agy-provider.retryPolicy')
 }
 

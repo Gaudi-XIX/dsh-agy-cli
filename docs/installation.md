@@ -97,7 +97,7 @@ modelDiscoveryTtlMs: 300000
 modelDiscoveryTimeoutMs: 10000
 retryPolicy:
   maxRetries: 5
-  retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+  retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, AGY_INPUT_FAILED, AGY_SPAWN_FAILED]
 imageInput: off
 ```
 

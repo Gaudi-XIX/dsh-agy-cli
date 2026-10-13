@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Config, configuredModels } from '../lib/provider/config.js'
+import { Config, configuredModels, AGY_RETRYABLE_CODES } from '../lib/provider/config.js'
 import {
   Config as ExportedConfig,
   BundleConfig as ExportedBundleConfig,
@@ -27,7 +27,7 @@ test('Config applies safe M7 defaults and rejects invalid concurrency values', (
   assert.equal(config.agentPreset, undefined)
   assert.deepEqual(config.retryPolicy, {
     maxRetries: 5,
-    retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+    retryableCodes: [...AGY_RETRYABLE_CODES],
   })
   assert.throws(() => Config({ maxConcurrent: 0 }), error => error.name === 'ValidationError')
   assert.throws(() => Config({ minimumAgyVersion: 'latest' }), error => error.name === 'ValidationError')
@@ -36,7 +36,14 @@ test('Config applies safe M7 defaults and rejects invalid concurrency values', (
   assert.throws(() => Config({ modelDiscoveryTimeoutMs: 99 }), error => error.name === 'ValidationError')
   assert.throws(() => Config({ toolPolicy: 'bridge' }), error => error.name === 'ValidationError')
   assert.throws(() => Config({ retryPolicy: { maxRetries: 6 } }), error => error.name === 'ValidationError')
-  assert.throws(() => Config({ retryPolicy: { retryableCodes: ['UNKNOWN'] } }), error => error.name === 'ValidationError')
+  // A code that is no longer retryable must stay storable: rejecting it here would
+  // make an existing profile fail to load, so the resolver drops it with a warning.
+  assert.deepEqual(
+    Config({ retryPolicy: { retryableCodes: ['AGY_INPUT_TOO_LARGE'] } }).retryPolicy?.retryableCodes,
+    ['AGY_INPUT_TOO_LARGE'],
+  )
+  assert.throws(() => Config({ retryPolicy: { retryableCodes: [] } }), error => error.name === 'ValidationError')
+  assert.throws(() => Config({ retryPolicy: { retryableCodes: ['not-a-code'] } }), error => error.name === 'ValidationError')
   assert.throws(() => Config({ agentPreset: 'full-access' }), error => error.name === 'ValidationError')
   assert.throws(() => Config({ workspaceRoot: '   ' }), error => error.name === 'ValidationError')
   assert.throws(() => Config({ imageInput: 'always' }), error => error.name === 'ValidationError')
@@ -56,6 +63,18 @@ test('Config accepts only bounded transient retry policy overrides', () => {
     maxRetries: 5,
     retryableCodes: ['TIMEOUT'],
   })
+  // The schema must keep the default list and the allowlist in lockstep: adding a
+  // code to AGY_RETRYABLE_CODES without widening the zod union would make every
+  // profile that names it fail validation.
+  assert.deepEqual(
+    Config({}).retryPolicy?.retryableCodes,
+    [...AGY_RETRYABLE_CODES],
+  )
+  assert.ok(AGY_RETRYABLE_CODES.includes('AGY_INPUT_FAILED'))
+  assert.ok(AGY_RETRYABLE_CODES.includes('AGY_SPAWN_FAILED'))
+  // AGY_INPUT_TOO_LARGE is intentionally not retryable: an oversized frame never
+  // shrinks between attempts, so a retry only burns quota.
+  assert.ok(!AGY_RETRYABLE_CODES.includes('AGY_INPUT_TOO_LARGE'))
 })
 
 test('Config normalizes model ids by stripping -high/-medium/-low suffix', () => {
@@ -175,7 +194,10 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     maxHistoricalToolResultBytes: 96 * 1024,
     toolProtocolRepairRetries: 1,
     toolProtocolPlainTextFallback: 'final-message',
-    retryPolicy: { maxRetries: 5, retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'] },
+    retryPolicy: {
+      maxRetries: 5,
+      retryableCodes: [...AGY_RETRYABLE_CODES],
+    },
     purposeRoutes: { compaction: {}, sessionTitle: {} },
     response: 'AGY mock provider is ready.',
     delayMs: 0,

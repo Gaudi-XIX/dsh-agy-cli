@@ -145,13 +145,15 @@ sessionMode: full
 modelDiscovery: auto
 retryPolicy:
   maxRetries: 5
-  retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+  retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, AGY_INPUT_FAILED, AGY_SPAWN_FAILED]
 imageInput: off
 ~~~
 
 > 兼容：旧 `model: gemini-3.7-flash-high` 仍可解析为 `base + high` 并 warning，建议改为 base + 会话级 `reasoningEffort`。
 
 重试默认遵循 DSH normal 策略：首次请求失败后最多重试 5 次；`TIMEOUT` 会进入重试，最终总计最多 6 次 AGY 请求。可通过 `retryPolicy` 在 `settings.yaml` 中收窄次数和错误码白名单。
+
+`AGY_INPUT_FAILED` / `AGY_SPAWN_FAILED` 属**启动期**失败，已列入默认可重试码：AGY 进程在接受 stream-json 输入前会先做一次资格检查（`loadCodeAssist`），该请求经本机代理出网时偶发被重置，AGY 随即退出，我们写 stdin 便撞上已关闭的管道，对外表现为 `Unable to write AGY stream-json input (Error:EOF stage=stdin)`。此类失败与请求内容无关，重试一次即可自愈。`AGY_INPUT_TOO_LARGE` **不**可重试——超限的帧不会在两次尝试之间变小。白名单中已废弃的码会被丢弃并发出进程告警（不抛错），因此旧 profile 不会因白名单变化而无法启动。
 
 ## 诊断与开发
 

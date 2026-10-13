@@ -123,11 +123,28 @@ test('AgyAdapter exposes the DSH default bounded retry policy', () => {
   assert.deepEqual(defaultAdapter.providerRetryPolicy('agy-test'), {
     mode: 'normal',
     maxRetries: 5,
-    retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+    retryableCodes: [
+      'EMPTY_RESPONSE',
+      'RATE_LIMIT',
+      'SERVER',
+      'TIMEOUT',
+      'TRANSPORT',
+      // Added 2026-10-13: AGY can die during its own startup eligibility check
+      // (loadCodeAssist EOF through the local proxy) before it reads our stdin,
+      // which is transient and worth one more attempt.
+      'AGY_INPUT_FAILED',
+      'AGY_SPAWN_FAILED',
+    ],
     initialDelayMs: 500,
     maxDelayMs: 10_000,
     jitterRatio: 0.1,
   })
+  // A profile that still names a code which is no longer retryable must not make
+  // the adapter throw; the stale entry is dropped instead.
+  const staleAdapter = new AgyAdapter({
+    retryPolicy: { maxRetries: 5, retryableCodes: ['TIMEOUT', 'AGY_INPUT_TOO_LARGE'] },
+  })
+  assert.deepEqual(staleAdapter.providerRetryPolicy('agy-test').retryableCodes, ['TIMEOUT'])
 
   const optInAdapter = new AgyAdapter({
     retryPolicy: { maxRetries: 5, retryableCodes: ['TIMEOUT'] },

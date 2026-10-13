@@ -98,7 +98,26 @@ export type PersistentFallbackMode = 'never' | 'before-accept'
 // Keep the default route policy aligned with @deepseek-ai/dsh-llm.
 // The DSH retry executor owns the retry loop; this list only declares which
 // stable provider failures are eligible for that executor.
-export const AGY_RETRYABLE_CODES = ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'] as const
+//
+// AGY_INPUT_FAILED and AGY_SPAWN_FAILED are transient on this host: the AGY
+// binary runs its own eligibility check (loadCodeAssist) against Google before
+// it accepts any stream-json input, and that call is intermittently reset when
+// it goes through the local HTTP proxy. AGY then exits 1-2s after start, so our
+// write to the child's stdin lands on a closed pipe and surfaces as "Unable to
+// write AGY stream-json input (Error:EOF stage=stdin)" — observed verbatim at
+// 2026-10-13 15:02 and reproduced with an 184 KB frame. Nothing about the
+// request is wrong, so one more attempt genuinely fixes it. AGY_INPUT_TOO_LARGE
+// is deliberately absent: a frame above the configured limit never shrinks on
+// its own, and retrying it only burns quota.
+export const AGY_RETRYABLE_CODES = [
+  'EMPTY_RESPONSE',
+  'RATE_LIMIT',
+  'SERVER',
+  'TIMEOUT',
+  'TRANSPORT',
+  'AGY_INPUT_FAILED',
+  'AGY_SPAWN_FAILED',
+] as const
 export type AgyRetryableCode = typeof AGY_RETRYABLE_CODES[number]
 
 export interface AgyRetryPolicyConfig {
@@ -147,7 +166,11 @@ const ModelConfig = z.object({
 
 const RetryPolicyConfig = z.object({
   maxRetries: z.natural().max(5).default(5),
-  retryableCodes: z.array(z.union(AGY_RETRYABLE_CODES)).default([...AGY_RETRYABLE_CODES]),
+  // Deliberately open-ended: the allowlist must be able to grow (AGY_INPUT_FAILED
+  // and AGY_SPAWN_FAILED were added on 2026-10-13) without rejecting every profile
+  // that was written against the previous list. Anything not in AGY_RETRYABLE_CODES
+  // is dropped by resolveAgyRetryPolicy with a process warning.
+  retryableCodes: z.array(z.string().pattern(/^[A-Z][A-Z0-9_]*$/)).min(1).default([...AGY_RETRYABLE_CODES]),
 }) as unknown as z<AgyRetryPolicyConfig>
 
 const PurposeRoute = z.object({
