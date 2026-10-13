@@ -97,6 +97,55 @@ export function requireAgentPreset(value: string): AgentPreset {
   return preset
 }
 
+/**
+ * The Agent templates one request can reach, given the effective settings.
+ *
+ * AGY resolves `--agent` itself and exits with `unknown agent` when the named
+ * profile has no template on disk, so the set that must exist is derivable from
+ * the config without starting anything:
+ *
+ * - `dsh-owned` pins the executor preset, but an image-bearing request swaps in
+ *   the image preset, so an enabled `imageInput: experimental` adds it;
+ * - every other tool policy uses the configured `agent` string verbatim. That
+ *   string is matched against the bundled names first, because a user who typed
+ *   `dsh-agy-read-only` is naming a bundled template and deserves the same
+ *   presence check; an unmatched name is returned with no preset so callers can
+ *   see it is the user's own template to keep in place.
+ */
+export function agentTemplatesForRequest(options: {
+  readonly toolPolicy: 'reject' | 'agy-owned' | 'dsh-owned'
+  readonly agentPreset?: AgentPresetId | undefined
+  readonly agent?: string | undefined
+  readonly imageInput?: 'off' | 'experimental' | undefined
+}): readonly { readonly preset: AgentPreset | undefined; readonly agentName: string }[] {
+  const names: { preset: AgentPreset | undefined; agentName: string }[] = []
+  const push = (preset: AgentPreset | undefined, agentName: string | undefined): void => {
+    if (agentName === undefined || names.some(entry => entry.agentName === agentName)) return
+    names.push({ preset, agentName })
+  }
+
+  if (options.toolPolicy === 'dsh-owned') {
+    const executor = getAgentPreset('mcp-executor')
+    push(executor, executor?.agentName)
+    if (options.imageInput === 'experimental') {
+      const image = getAgentPreset('image-view')
+      push(image, image?.agentName)
+    }
+    return names
+  }
+
+  const byPresetId = options.agentPreset === undefined ? undefined : getAgentPreset(options.agentPreset)
+  if (byPresetId !== undefined) {
+    push(byPresetId, byPresetId.agentName)
+    return names
+  }
+  const byName = options.agent === undefined
+    ? undefined
+    : listAgentPresets().find(preset => preset.agentName === options.agent || preset.id === options.agent)
+  push(byName, options.agent)
+  return names
+}
+
 /** Read a bundled template; the template file is included in the npm tarball. */
 export async function readAgentPresetTemplate(value: AgentPresetId | AgentPreset): Promise<string> {
   const preset = typeof value === 'string' ? requireAgentPreset(value) : value

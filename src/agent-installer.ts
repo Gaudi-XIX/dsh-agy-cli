@@ -173,6 +173,39 @@ export interface AgentDirectoryEntry {
   writeAccess: boolean
 }
 
+/** One bundled template that is not present in the directory AGY scans. */
+export interface MissingAgentTemplate {
+  readonly preset: AgentPresetId
+  readonly agentName: string
+  readonly targetPath: string
+}
+
+/**
+ * Which bundled templates are absent from the AGY agent directory.
+ *
+ * AGY refuses an unknown profile before it accepts any input, exiting with
+ * `error: unknown agent "<name>" (available: ...)`; the adapter then sees a
+ * child that died while its stdin was being written and reports
+ * `AGY_INPUT_FAILED`, which names the wrong component. Checking the directory up
+ * front turns that into one actionable line.
+ *
+ * Only presence is checked, never the contents: a user who edited their copy of
+ * a template meant to, and overwriting it is not this function's business.
+ */
+export async function findMissingAgentTemplates(
+  presets: readonly AgentPreset[],
+  directory?: string,
+): Promise<readonly MissingAgentTemplate[]> {
+  const root = configuredAgentDirectory(directory)
+  const missing: MissingAgentTemplate[] = []
+  for (const preset of presets) {
+    const targetPath = join(root, preset.fileName)
+    const state = await targetState(targetPath)
+    if (!state.exists || !state.file) missing.push({ preset: preset.id, agentName: preset.agentName, targetPath })
+  }
+  return missing
+}
+
 export function describeAgentPresets(): readonly AgentDirectoryEntry[] {
   return listAgentPresets().map(preset => ({
     id: preset.id,

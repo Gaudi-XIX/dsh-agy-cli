@@ -83,7 +83,12 @@ import {
   type DshToolRuntimeLike,
   type DshWebServerLike,
 } from './mcp/bridge.js'
-export {
+import {
+  findMissingAgentTemplates,
+  type MissingAgentTemplate,
+} from './agent-installer.js'
+import { agentTemplatesForRequest } from './agent-presets.js'
+import {
   AGENT_PRESET_IDS,
   getAgentPreset,
   listAgentPresets,
@@ -91,9 +96,18 @@ export {
   requireAgentPreset,
 } from './agent-presets.js'
 export {
+  AGENT_PRESET_IDS,
+  agentTemplatesForRequest,
+  getAgentPreset,
+  listAgentPresets,
+  readAgentPresetTemplate,
+  requireAgentPreset,
+}
+export {
   DEFAULT_AGENT_DIRECTORY,
   AgentInstallError,
   describeAgentPresets,
+  findMissingAgentTemplates,
   installAgentPreset,
   isAgentPreset,
 } from './agent-installer.js'
@@ -115,8 +129,9 @@ export type {
 export type {
   AgentDirectoryEntry,
   AgentInstallAction,
-  AgentInstallOptions,
   AgentInstallResult,
+  AgentInstallOptions,
+  MissingAgentTemplate,
 } from './agent-installer.js'
 export type {
   AgyImageAttachmentStore,
@@ -180,6 +195,47 @@ export function apply(ctx: Context, config: ConfigType): void {
     return
   }
   const logger = ctx.logger('dsh-agy-provider')
+
+  // AGY exits with `unknown agent "<name>" (available: ...)` *before* it reads
+  // any input when the profile named on the command line has no template on
+  // disk. The child then dies while its stdin is being written, and the adapter
+  // reports that as AGY_INPUT_FAILED — an error naming the wrong component.
+  // Report the real cause once, at startup, naming the exact missing files.
+  // This only warns: installing templates is a deliberate user action, and
+  // writing into another application's config directory unprompted is not
+  // something a provider should do.
+  ctx.effect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const wanted = agentTemplatesForRequest({
+          toolPolicy: activeConfig.toolPolicy === 'agy-owned'
+            ? 'agy-owned'
+            : activeConfig.toolPolicy === 'dsh-owned' ? 'dsh-owned' : 'reject',
+          agentPreset: activeConfig.agentPreset,
+          agent: activeConfig.agent,
+          imageInput: activeConfig.imageInput === 'experimental' ? 'experimental' : 'off',
+        })
+        const missing = (await Promise.all(wanted.map(async entry => {
+          if (entry.preset === undefined) return undefined
+          const absent = await findMissingAgentTemplates([entry.preset])
+          return absent.length === 0 ? undefined : absent[0]
+        }))).filter((entry): entry is MissingAgentTemplate => entry !== undefined)
+        if (cancelled || missing.length === 0) return
+        logger.warn(
+          'AGY agent template(s) missing: %s. AGY rejects an unknown agent before reading any input, '
+          + 'which surfaces as AGY_INPUT_FAILED. Install them with: npx dsh-agy-provider agents install %s --apply',
+          missing.map(entry => `${entry.agentName} (${entry.targetPath})`).join(', '),
+          missing.map(entry => entry.preset).join(' '),
+        )
+      } catch (error) {
+        logger.warn('could not check AGY agent templates: %s', error instanceof Error ? error.message : String(error))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  })
   // AttachmentStore is optional for the text-only path. Use the reflection
   // lookup instead of reading ctx.attachments directly: Cordis requires every
   // direct service property access to be declared in `inject`.
