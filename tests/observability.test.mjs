@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { realpath } from 'node:fs/promises'
 import { AgyAdapter } from '../lib/provider/agy.js'
-import { AgyProcessError } from '../lib/agy/process.js'
+import { AgyProcessError, runProcess } from '../lib/agy/process.js'
 import { sanitizeAgyLogRecord } from '../lib/agy/log.js'
 
 function result() {
@@ -480,4 +483,114 @@ test('AgyAdapter limits active AGY processes across separate sessions', async ()
     maxQueue: 2,
     queueTimeoutMs: 1_000,
   })
+})
+
+
+test('A stdin failure carries the AGY stderr cause instead of a bare EOF', async () => {
+  // A real failure looks like this: AGY dies during its own eligibility check,
+  // so the only evidence is a stderr line, and the write to its dead stdin
+  // reports a meaningless "Error:EOF". The diagnostic must carry the cause.
+  const caused = 'E1013 16:03:20.943440 1 printmode.go:291] Print mode: eligibility check failed: failed to get load code assist response: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": EOF'
+  const noise = 'I1013 16:03:18.577877 1 model_resolver.go:155] model alias "gemini-3.8-flash" resolved to "gemini-3.8-flash-high"'
+
+  const { stderrSummaryOf } = await import('../lib/agy/process.js')
+  assert.equal(stderrSummaryOf(`${noise}\n${caused}\n`), caused.slice(0, 200))
+  assert.equal(stderrSummaryOf(''), undefined)
+  assert.equal(stderrSummaryOf('\n \n'), undefined)
+
+  // Credentials and user paths must not survive the excerpt.
+  const secret = 'authorization: Bearer THIS-MUST-NOT-SURVIVE-REDACTION'
+  const redacted = stderrSummaryOf(secret)
+  assert.equal(redacted.includes('THIS-MUST-NOT-SURVIVE-REDACTION'), false)
+  assert.match(redacted, /\[REDACTED\]/)
+
+  // The excerpt is capped so a pathological stderr cannot inflate telemetry.
+  assert.equal(stderrSummaryOf('x'.repeat(5000)).length, 200)
+
+  const logs = []
+  const diagnostic = {
+    stage: 'stdin',
+    errorName: 'Error',
+    errorCode: 'EOF',
+    stdoutLineCount: 1,
+    stdoutBytes: 310,
+    stderrBytes: 76,
+    stderrSummary: caused,
+  }
+  // Drive the real adapter so the assertion covers the whole path from the
+  // process diagnostic to the structured log record, not just the sanitizer.
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    agent: 'deepseek-proxy',
+    toolPolicy: 'agy-owned',
+    modelDiscovery: 'off',
+  }, {
+    logger: record => logs.push(record),
+    runAgyProcess: async () => {
+      throw new AgyProcessError(
+        'Unable to write AGY stream-json input (Error:EOF stage=stdin)',
+        'INPUT_FAILED',
+        { cause: Object.assign(new Error('write EOF'), { code: 'EOF' }) },
+        diagnostic,
+      )
+    },
+  })
+
+  await assert.rejects(async () => {
+    for await (const _chunk of adapter.stream({
+      provider: 'agy-test',
+      model: 'gemini-test',
+      system: 'system',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    })) { /* drain the stream to drive the failure path */ }
+  })
+
+  const failed = logs.find(log => log.event === 'agy.request.failed')
+  assert.equal(failed?.errorCode, 'AGY_INPUT_FAILED')
+  assert.equal(failed?.processDiagnostic?.stderrSummary, caused)
+  assert.equal(failed?.processDiagnostic?.stage, 'stdin')
+  assert.equal(JSON.stringify(logs).includes('THIS-MUST-NOT-SURVIVE-REDACTION'), false)
+})
+
+test('runProcess captures the stderr cause when the child dies before accepting stdin', async () => {
+  // Collection-side guard: the excerpt above is only useful if runProcess
+  // actually reads it off the dying child. A real launch reproduces the exact
+  // shape seen in production, where AGY exits during its eligibility check and
+  // the caller's stdin write then fails with EOF.
+  const dir = mkdtempSync(join(tmpdir(), 'agy-stdin-cause-'))
+  try {
+    const caused = 'E printmode.go:291] Print mode: eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": EOF'
+    const script = join(dir, 'die-before-stdin.mjs')
+    // Emit one stdout line, print the cause on stderr, then exit without ever
+    // reading stdin -- the shape of an AGY process that dies during startup.
+    writeFileSync(script, [
+      'process.stdout.write(JSON.stringify({ event: "init" }) + "\\n")',
+      `process.stderr.write(${JSON.stringify(`${caused}\n`)})`,
+      'process.exit(1)',
+      '',
+    ].join('\n'), 'utf8')
+
+    await assert.rejects(
+      () => runProcess({
+        executable: process.execPath,
+        args: [script],
+        cwd: dir,
+        stdin: `${JSON.stringify({ event: 'user', message: { role: 'user', content: [{ type: 'text', text: 'x'.repeat(400_000) }] } })}\n`,
+        windowsNoConsole: false,
+        timeoutMs: 30_000,
+      }),
+      error => {
+        assert.ok(error instanceof AgyProcessError)
+        assert.equal(error.code, 'INPUT_FAILED')
+        assert.equal(error.diagnostic?.stage, 'stdin')
+        // The cause survives capture, rather than being reported as a bare EOF.
+        assert.match(String(error.diagnostic?.stderrSummary), /eligibility check failed/)
+        // It is also surfaced to the operator-facing message.
+        assert.match(error.message, /eligibility check failed/)
+        return true
+      },
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

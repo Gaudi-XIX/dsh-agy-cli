@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'n
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
+import { redactText } from './redact.js'
 import { AgyStreamProtocolError, encodeAgyUserMessage } from './stream-protocol.js'
 import { buildWindowsNoConsoleLaunch } from './windows-launcher.js'
 
@@ -37,7 +38,16 @@ export class AgyProcessError extends Error {
 
 export type AgyProcessDiagnosticStage = 'prepare' | 'spawn' | 'stdin' | 'stdout-handler'
 
-/** Safe process-failure metadata; never contains prompt, response, stderr, or paths. */
+/**
+ * Safe process-failure metadata; never contains the prompt, the response, or paths.
+ *
+ * `stderrSummary` is the one deliberate exception on the stderr side. When AGY
+ * dies before the first stdin write, the EOF is only a symptom: the cause is a
+ * line AGY already printed to stderr (an eligibility failure, a rejected model,
+ * a broken upstream connection). Without that line every such failure reads as
+ * the same uninformative `(Error:EOF stage=stdin)`. It is therefore carried as a
+ * single redacted, capped line, and only on the stdin stage.
+ */
 export interface AgyProcessDiagnostic {
   readonly stage: AgyProcessDiagnosticStage
   readonly errorName?: string
@@ -48,6 +58,21 @@ export interface AgyProcessDiagnostic {
   readonly stdoutLineCount?: number
   readonly stdoutBytes?: number
   readonly stderrBytes?: number
+  readonly stderrSummary?: string
+}
+
+/** Longest stderr excerpt carried on a stdin failure. */
+const STDERR_SUMMARY_MAX_LENGTH = 200
+
+/**
+ * Pick the most informative stderr line for a failed launch: AGY writes its
+ * fatal reason last, after progress chatter, so the last non-empty line wins.
+ */
+export function stderrSummaryOf(stderr: string): string | undefined {
+  const lines = stderr.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0)
+  const chosen = lines.at(-1)
+  if (chosen === undefined) return undefined
+  return redactText(chosen, STDERR_SUMMARY_MAX_LENGTH)
 }
 
 function errorNameOf(error: unknown): string | undefined {
@@ -78,6 +103,7 @@ function processDiagnosticFor(
     stdoutLineCount?: number
     stdoutBytes?: number
     stderrBytes?: number
+    stderrSummary?: string
   } = {},
 ): AgyProcessDiagnostic {
   const line = details.line
@@ -96,6 +122,7 @@ function processDiagnosticFor(
     ...(details.stdoutLineCount === undefined ? {} : { stdoutLineCount: details.stdoutLineCount }),
     ...(details.stdoutBytes === undefined ? {} : { stdoutBytes: details.stdoutBytes }),
     ...(details.stderrBytes === undefined ? {} : { stderrBytes: details.stderrBytes }),
+    ...(details.stderrSummary === undefined ? {} : { stderrSummary: details.stderrSummary }),
   }
 }
 
@@ -105,7 +132,8 @@ function diagnosticLabel(diagnostic: AgyProcessDiagnostic | undefined): string {
   const line = diagnostic.lineNumber === undefined ? '' : ` line=${diagnostic.lineNumber}`
   const length = diagnostic.lineLength === undefined ? '' : ` length=${diagnostic.lineLength}`
   const stage = `stage=${diagnostic.stage}`
-  return ` (${[cause || undefined, stage, line.trim(), length.trim()].filter(Boolean).join(' ')})`
+  const stderr = diagnostic.stderrSummary === undefined ? '' : ` stderr=${JSON.stringify(diagnostic.stderrSummary)}`
+  return ` (${[cause || undefined, stage, line.trim(), length.trim(), stderr.trim()].filter(Boolean).join(' ')})`
 }
 
 /** Find process diagnostics through the LlmError -> cause chain. */
@@ -434,10 +462,12 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
         return
       }
       if (inputError !== undefined) {
+        const stderrSummary = stderrSummaryOf(stderr)
         const diagnostic = processDiagnosticFor(inputError, 'stdin', {
           stdoutLineCount: stdoutLines.length,
           stdoutBytes,
           stderrBytes,
+          ...(stderrSummary === undefined ? {} : { stderrSummary }),
         })
         rejectResult(new AgyProcessError(
           `Unable to write AGY stream-json input${diagnosticLabel(diagnostic)}`,

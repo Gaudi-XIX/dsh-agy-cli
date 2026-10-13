@@ -539,6 +539,7 @@ function sanitizeProcessDiagnostic(value: unknown): AgyProcessDiagnostic | undef
   const stdoutLineCount = safeNumber('stdoutLineCount')
   const stdoutBytes = safeNumber('stdoutBytes')
   const stderrBytes = safeNumber('stderrBytes')
+  const stderrSummary = safeText('stderrSummary', 200)
   return {
     stage: safeStage,
     ...(errorName === undefined ? {} : { errorName }),
@@ -551,6 +552,7 @@ function sanitizeProcessDiagnostic(value: unknown): AgyProcessDiagnostic | undef
     ...(stdoutLineCount === undefined ? {} : { stdoutLineCount }),
     ...(stdoutBytes === undefined ? {} : { stdoutBytes }),
     ...(stderrBytes === undefined ? {} : { stderrBytes }),
+    ...(stderrSummary === undefined ? {} : { stderrSummary }),
   }
 }
 
