@@ -60,7 +60,18 @@ test('parser does not classify a generic step name as an internal tool event', (
     step_update: { step_type: 'agent_response', name: 'Inspect' },
   }) + '\n')
   assert.equal(isToolEvent(event), false)
-  assert.equal(eventCategoryOf(event), 'step_update')
+  // A step_update's own step_type wins over the outer envelope: text that AGY
+  // nests under `agent_response` is counted there, not buried in `step_update`.
+  assert.equal(eventCategoryOf(event), 'agent_response')
+})
+
+test('parser keeps non-text step types inside the step_update category', () => {
+  const parser = new AgyStreamParser()
+  const [userInput] = parser.push(JSON.stringify({
+    event: 'step_update',
+    step_update: { step_type: 'user_input', state: 'DONE' },
+  }) + '\n')
+  assert.equal(eventCategoryOf(userInput), 'step_update')
 })
 
 test('parser extracts the double-encoded default_api send_message carrier', () => {

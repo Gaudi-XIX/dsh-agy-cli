@@ -1243,6 +1243,8 @@ export class AgyAdapter extends LlmAdapter {
       : prepared.fullPrompt
     const prompt = this.preparePrompt(basePrompt, toolProtocol, protocolRepair, protocolRepairHint, protocolRepairReason, telemetry)
     // Persistent worker is session-affine, single active turn, reuse AGY conversation
+    telemetry.dispatch = 'persistent'
+    const dispatchStartedAt = Date.now()
     const result = await this.persistentTransport!.request({
       sessionId: sessionKey,
       text: prompt,
@@ -1250,6 +1252,7 @@ export class AgyAdapter extends LlmAdapter {
       maxOutputBytes: this.maxOutputBytes,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
+    telemetry.firstEventMs = result.firstEventMs
     // Reuse one-shot event handling by feeding raw events through the same parser logic.
     // Persistent transport returns already-parsed AGY JSON objects.
     let blockStarted = false
@@ -1318,9 +1321,37 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
     // Now yield using same logic as one-shot for toolProtocol handling
+    let toolBlockIndex = 1
     for (const event of queue) {
       const internalToolError = dshOwnedToolEventError(event, toolProtocol)
       if (internalToolError !== undefined) throw internalToolError
+      if (mcpToolsEnabled) {
+        const step = mcpToolStepOf(event)
+        if (step !== undefined) {
+          const state = stepStateOf(event)
+          if (state === 'DONE' || state === 'ERROR') {
+            telemetry.toolCallCount += 1
+            telemetry.bridgeOutcome = 'dsh-tool-call'
+            const callId = `agy-mcp-${telemetry.requestId}-${step.stepIndex}` as ToolCallId
+            const argumentsJson = JSON.stringify(step.arguments ?? {})
+            yield { type: 'block-start', index: toolBlockIndex, blockType: 'tool-call' }
+            yield {
+              type: 'tool-call-delta',
+              index: toolBlockIndex,
+              id: callId,
+              name: step.toolName,
+              argumentsDelta: argumentsJson,
+            }
+            yield {
+              type: 'block-end',
+              index: toolBlockIndex,
+              block: { type: 'tool-call', id: callId, name: step.toolName, arguments: argumentsJson } as ContentBlock,
+            }
+            toolBlockIndex += 1
+          }
+          continue
+        }
+      }
       const delta = toolProtocol === undefined ? textDeltaOf(event) : undefined
       if (delta !== undefined && delta.length > 0) {
         if (!blockStarted) {
@@ -1529,6 +1560,9 @@ export class AgyAdapter extends LlmAdapter {
       toolEventCount: 0,
       permissionEventCount: 0,
       eventCategoryCounts: emptyAgyEventCategoryCounts(),
+      dispatch: undefined,
+      firstEventMs: undefined,
+      firstTextMs: undefined,
       finalStatus: undefined,
       conversationId: undefined,
       queueWaitMs: undefined,
@@ -1799,6 +1833,10 @@ export class AgyAdapter extends LlmAdapter {
       ...(requestMode === undefined ? {} : { mode: requestMode }),
       ...(requestDisableSlashCommands === undefined ? {} : { disableSlashCommands: requestDisableSlashCommands }),
     }
+    // Cold dispatch: the AGY process is spawned for this attempt, so the whole
+    // startup cost (spawn, auth, MCP handshake) shows up before the first event.
+    telemetry.dispatch = 'cold'
+    const dispatchStartedAt = Date.now()
     const processPromise = this.run(request).then(processResultValue => {
       result = processResultValue
       telemetry.process = processResultValue
@@ -1830,6 +1868,7 @@ export class AgyAdapter extends LlmAdapter {
     try {
       for await (const event of queue) {
         if (carrierResponseAccepted) continue
+        telemetry.firstEventMs ??= Date.now() - dispatchStartedAt
         telemetry.eventCount += 1
         telemetry.eventCategoryCounts[eventCategoryOf(event)] += 1
         const observedConversationId = conversationIdOf(event)
@@ -1941,6 +1980,7 @@ export class AgyAdapter extends LlmAdapter {
 
         const delta = toolProtocol === undefined ? textDeltaOf(event) : undefined
         if (delta !== undefined && delta.length > 0) {
+          telemetry.firstTextMs ??= Date.now() - dispatchStartedAt
           if (!blockStarted) {
             blockStarted = true
             yield { type: 'block-start', index: 0, blockType: 'text' }

@@ -72,6 +72,14 @@ test('AgyAdapter emits redacted structured lifecycle metadata', async () => {
   assert.equal(completed.toolEventCount, 1)
   assert.equal(completed.toolEventKind, 'step-type-tool')
   assert.equal(completed.permissionEventCount, 0)
+  // The stub resolves instantly, so the latency probes must exist and be tiny:
+  // a cold dispatch is stamped as soon as the first event / first text is seen.
+  assert.equal(completed.dispatch, 'cold')
+  assert.equal(typeof completed.firstEventMs, 'number')
+  assert.ok(completed.firstEventMs < 1000, `firstEventMs should be near zero, got ${completed.firstEventMs}`)
+  // The stub's step_update carries text_delta, so the first-text probe is stamped.
+  assert.equal(typeof completed.firstTextMs, 'number')
+  assert.ok(completed.firstTextMs >= completed.firstEventMs, 'first text cannot precede the first event')
   assert.deepEqual(completed.eventCategoryCounts, {
     init: 1,
     step_update: 0,

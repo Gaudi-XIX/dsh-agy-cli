@@ -50,6 +50,7 @@ export type AgyBridgeOutcome =
   | 'failed'
 
 export type AgyRequestMode = 'full' | 'bootstrap' | 'delta' | 'full-fallback'
+export type AgyDispatchKind = 'cold' | 'persistent'
 export type AgyUsageSource = 'step' | 'result-fallback'
 
 export type AgyCarrierValidation =
@@ -212,6 +213,17 @@ export interface AgyLogRecord {
   toolEventCount: number
   permissionEventCount: number
   eventCategoryCounts: Readonly<AgyEventCategoryCounts>
+  /**
+   * Which AGY process served the attempt: `persistent` reuses a warm worker for
+   * this DSH session, `cold` spawned a fresh AGY process. The two paths differ by
+   * AGY's whole startup cost (process spawn, auth, MCP handshake), so every
+   * latency field below is meaningless without this marker.
+   */
+  dispatch?: AgyDispatchKind
+  /** Milliseconds from process start to the first parsed AGY event. */
+  firstEventMs?: number
+  /** Milliseconds from process start to the first streamed text delta. */
+  firstTextMs?: number
   finalStatus?: string
   sessionId?: string
   conversationId?: string
@@ -306,6 +318,9 @@ export interface AgyTelemetry {
   toolEventCount: number
   permissionEventCount: number
   eventCategoryCounts: AgyEventCategoryCounts
+  dispatch: AgyDispatchKind | undefined
+  firstEventMs: number | undefined
+  firstTextMs: number | undefined
   finalStatus: string | undefined
   conversationId: string | undefined
   queueWaitMs: number | undefined
@@ -376,6 +391,7 @@ function baseRecord(telemetry: AgyTelemetry): AgyLogRecord {
     toolEventCount: telemetry.toolEventCount,
     permissionEventCount: telemetry.permissionEventCount,
     eventCategoryCounts: { ...telemetry.eventCategoryCounts },
+    ...(telemetry.dispatch === undefined ? {} : { dispatch: telemetry.dispatch }),
   }
 }
 
@@ -390,6 +406,8 @@ export function buildAgyLogRecord(
     ...baseRecord(telemetry),
     event,
     ...(telemetry.queueWaitMs === undefined ? {} : { queueWaitMs: telemetry.queueWaitMs }),
+    ...(telemetry.firstEventMs === undefined ? {} : { firstEventMs: telemetry.firstEventMs }),
+    ...(telemetry.firstTextMs === undefined ? {} : { firstTextMs: telemetry.firstTextMs }),
     ...(telemetry.finalStatus === undefined ? {} : { finalStatus: telemetry.finalStatus }),
     ...(telemetry.usage === undefined ? {} : { usage: telemetry.usage }),
     ...(telemetry.usageSource === undefined ? {} : { usageSource: telemetry.usageSource }),
@@ -668,6 +686,13 @@ export function sanitizeAgyLogRecord(record: AgyLogRecord): AgyLogRecord {
       unknown: record.eventCategoryCounts.unknown,
     },
     ...(record.durationMs === undefined ? {} : { durationMs: record.durationMs }),
+    ...(record.dispatch === 'cold' || record.dispatch === 'persistent' ? { dispatch: record.dispatch } : {}),
+    ...(record.firstEventMs === undefined
+      ? {}
+      : { firstEventMs: safeNonNegativeNumber(record.firstEventMs) }),
+    ...(record.firstTextMs === undefined
+      ? {}
+      : { firstTextMs: safeNonNegativeNumber(record.firstTextMs) }),
     ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }),
     ...(record.termination === undefined ? {} : { termination: record.termination }),
     ...(record.queueWaitMs === undefined ? {} : { queueWaitMs: record.queueWaitMs }),

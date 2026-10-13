@@ -474,15 +474,25 @@ export function isPermissionEvent(event: AgyJsonEvent): boolean {
     || stepNameOf(event) === 'ask_permission'
 }
 
-/** Classify only stable event categories; unknown event names remain forward-compatible. */
+/**
+ * Classify only stable event categories; unknown event names remain forward-compatible.
+ *
+ * A step_update carries its own step_type, so a nested `agent_response` update is
+ * counted as `agent_response` rather than being swallowed by the outer `step_update`
+ * case. Counts must reflect what the model actually emitted: reading `agent_response`
+ * as `step_update` made telemetry report zero streamed text on every turn, even
+ * though AGY streams text deltas natively.
+ */
 export function eventCategoryOf(event: AgyJsonEvent): AgyEventCategory {
   if (isPermissionEvent(event)) return 'permission'
   if (isToolEvent(event)) return 'tool'
   switch (event.event) {
     case 'init':
       return 'init'
-    case 'step_update':
+    case 'step_update': {
+      if (stepTypeOf(event) === 'agent_response') return 'agent_response'
       return 'step_update'
+    }
     case 'checkpoint':
       return 'checkpoint'
     case 'agent_response':
