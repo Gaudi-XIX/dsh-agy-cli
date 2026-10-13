@@ -142,16 +142,23 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
   }
 
   let endpoint: McpEndpoint
-  let exposedTools: readonly McpToolDescriptor[]
   try {
-    exposedTools = projectDshTools(options.tools, {
+    // Project lazily on every `tools/list`: the bridge starts during plugin
+    // load, but the file, shell, and web tools only join `ctx.tools` once the
+    // agent presets and the remaining services finish mounting. Snapshotting
+    // here froze a host that had 18 tools and never exposed the rest.
+    if (projectDshTools(options.tools, {
       ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
-    }).tools
+    }).tools.length === 0) {
+      return inactive('host tools service exposed no tools')
+    }
     endpoint = mountMcpEndpoint(options.webServer, {
       serverName: AGY_MCP_SERVER_NAME,
       serverVersion: options.serverVersion,
       instructions: INSTRUCTIONS,
-      listTools: async () => exposedTools,
+      listTools: async () => projectDshTools(options.tools, {
+        ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
+      }).tools,
       callTool: (sessionHandle, name, args) => executeDshTool(options, sessionHandle, name, args),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     })
@@ -168,9 +175,12 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
       {
         url: endpoint.url,
         token: endpoint.token,
-        // The allow rules AGY needs are per tool, so they are written from the
-        // same projection the endpoint serves.
-        toolNames: exposedTools.map(tool => tool.name),
+        // The allow rules AGY needs are per tool. `writeAllowRules` only
+        // replaces this bridge's own `mcp(dsh/*)` rules, so a later re-read can
+        // widen the set without disturbing anything the user added.
+        toolNames: projectDshTools(options.tools, {
+          ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
+        }).tools.map(tool => tool.name),
       },
       {
         ...(options.agyConfigRoot === undefined ? {} : { configRoot: options.agyConfigRoot }),

@@ -28,10 +28,14 @@ const PRESETS: Readonly<Record<AgentPresetId, AgentPreset>> = Object.freeze({
     id: 'mcp-executor',
     agentName: 'dsh-agy-mcp-executor',
     fileName: 'dsh-agy-mcp-executor.md',
-    // Built-in tools are removed rather than intercepted: a tool that does not
-    // exist cannot be called, which is the only reliable way to keep AGY's own
-    // executors out of the loop (an agent template that merely asks the model
-    // not to use them is bypassed probabilistically).
+    // `excludeDefaultComponents: true` in the template is what removes the
+    // built-in tools; `tools: []` alone does not. Measured against AGY 1.3.2:
+    // an otherwise identical template carrying only `tools: []` still exposed
+    // all 60 built-ins, and the model called `run_command`, which headless mode
+    // then soft-denied, producing an empty response. A tool that does not exist
+    // cannot be called, which is the only reliable way to keep AGY's own
+    // executors out of the loop — an agent template that merely asks the model
+    // not to use them is bypassed probabilistically.
     description: 'All actions through the DSH MCP server; no AGY built-in tools.',
     tools: Object.freeze([]),
     writeAccess: false,
