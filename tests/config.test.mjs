@@ -173,7 +173,7 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     // MCP tool bridge: on by default, empty allowlist means every DSH tool
     mcpBridge: true,
     mcpToolAllowlist: [],
-    agent: 'deepseek-proxy',
+    agent: 'dsh-agy-mcp-executor',
     agentPreset: 'workspace-write',
     workspaceRoot: 'C:\\workspace',
     agyPath: '',
@@ -253,13 +253,19 @@ test('cordis.patch.yml defines DSH-owned bundle defaults while library defaults 
   assert.equal(toolPolicyMatch?.[1], 'dsh-owned')
   assert.equal(providerMatch?.[1], 'agy')
   assert.equal(modelMatch?.[1], 'gemini-3.1-pro')
-  assert.equal(agentMatch?.[1], 'deepseek-proxy')
+  // BOTH spellings must name an installed AGY template. This assertion used to
+  // pin `deepseek-proxy`, which only ever existed in the upstream author's own
+  // environment: the shipped bundle therefore failed with `unknown agent` on
+  // every fresh install. Pin the installable name instead, and check the bundle
+  // and the library default agree.
+  assert.equal(agentMatch?.[1], 'dsh-agy-mcp-executor')
   assert.equal(sessionModeMatch?.[1], 'full')
 
   // Verify library defaults are disabled and reject
   const libraryDefault = Config({})
   assert.equal(libraryDefault.enabled, false)
   assert.equal(libraryDefault.toolPolicy, 'reject')
+  assert.equal(libraryDefault.agent, agentMatch?.[1])
 })
 
 test('public Config remains safe while BundleConfig exposes ready defaults', () => {

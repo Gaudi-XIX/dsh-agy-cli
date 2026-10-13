@@ -37,7 +37,7 @@ export interface Config {
   mcpBridge?: boolean
   /** Restrict the MCP tool projection to these DSH tool names; empty exposes all. */
   mcpToolAllowlist?: string[]
-  /** AGY agent profile, for example `deepseek-proxy`. */
+  /** AGY agent profile; must name a template installed under AGY's `agents/` directory. */
   agent?: string
   /** Optional bundled Agent capability profile; omitted preserves the configured agent. */
   agentPreset?: AgentPresetId
@@ -156,6 +156,21 @@ export interface ModelConfig {
 
 export const DEFAULT_MODEL = 'gemini-3.1-pro'
 
+/**
+ * The AGY agent profile used when the config does not name one.
+ *
+ * This must be a template that ships with this package and is installed under
+ * AGY's `agents/` directory: AGY rejects an unknown profile outright, before it
+ * accepts any input, with `exit 1` and
+ * `error: unknown agent "<name>" (available: ...)`. The host sees that as an
+ * early process death and reports it as a stdin failure, so a name that is not
+ * installable turns into a misleading error far from the cause.
+ *
+ * It used to be `deepseek-proxy`, an agent that exists only in the upstream
+ * author's own environment; every fresh install therefore failed out of the box.
+ */
+export const DEFAULT_AGENT = 'dsh-agy-mcp-executor'
+
 const ModelConfig = z.object({
   id: z.string().pattern(/^\S(?:.*\S)?$/).required(),
   name: z.string().pattern(/^\S(?:.*\S)?$/),
@@ -205,7 +220,7 @@ export function createConfigSchema(defaults: {
     toolPolicy: z.union(['reject', 'agy-owned', 'dsh-owned'] as const).default(defaultToolPolicy).description('Tool ownership policy'),
     mcpBridge: z.boolean().default(true).description('Expose DSH tools to AGY over MCP instead of embedding their schemas in the prompt'),
     mcpToolAllowlist: z.array(z.string().pattern(/^\S(?:.*\S)?$/)).default([]).description('MCP tool projection allowlist; empty exposes every DSH tool'),
-    agent: z.string().default('deepseek-proxy').description('AGY agent profile'),
+    agent: z.string().default(DEFAULT_AGENT).description('AGY agent profile'),
     agentPreset: z.union(AGENT_PRESET_IDS).description('Optional agent preset'),
     workspaceRoot: z.string().pattern(/^\S(?:.*\S)?$/).description('Deprecated: use DSH session workspace').deprecated().hidden(),
     agyPath: z.string().default('').description('AGY executable path').hidden(),
@@ -255,7 +270,7 @@ export function createConfigSchema(defaults: {
       toolPolicy: { $description: '工具所有权：reject=拒绝 DSH 工具, agy-owned=旧版 AGY 执行, dsh-owned=推荐 DSH 执行' },
       mcpBridge: { $description: '通过 MCP 把 DSH 工具交给 AGY（推荐）；关闭则退回把工具 schema 写进提示词的旧方式' },
       mcpToolAllowlist: { $description: 'MCP 工具白名单；为空时暴露全部 DSH 工具' },
-      agent: { $description: 'AGY 代理名称，如 deepseek-proxy' },
+      agent: { $description: 'AGY 代理名称，须为已安装的模板（如 dsh-agy-mcp-executor）' },
       agentPreset: { $description: '代理能力预设' },
       workspaceRoot: { $description: '已废弃：请使用 DSH 会话的项目目录，无需手动配置' },
       agyPath: { $description: 'AGY 可执行文件路径，空则自动发现' },
@@ -289,7 +304,7 @@ export function createConfigSchema(defaults: {
       modelDiscoveryTtlMs: { $description: 'Discovery cache TTL (ms)' },
       modelDiscoveryTimeoutMs: { $description: 'Discovery timeout (ms)' },
       toolPolicy: { $description: 'Tool ownership: reject, agy-owned (legacy), dsh-owned (recommended)' },
-      agent: { $description: 'AGY agent profile, e.g. deepseek-proxy' },
+      agent: { $description: 'AGY agent profile; must be an installed template (e.g. dsh-agy-mcp-executor)' },
       agentPreset: { $description: 'Agent capability preset' },
       workspaceRoot: { $description: 'Deprecated: uses DSH session workspace, no manual path needed' },
       agyPath: { $description: 'AGY executable path, empty auto-discovers' },

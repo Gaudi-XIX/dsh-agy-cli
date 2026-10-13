@@ -76,6 +76,7 @@ import { resolveAgyExecutable } from '../agy/process.js'
 import {
   AGY_RETRYABLE_CODES,
   configuredModels,
+  DEFAULT_AGENT,
   DEFAULT_MODEL,
   extractModelEffort,
   filterVisibleModels,
@@ -243,7 +244,6 @@ class AsyncQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
   }
 }
 
-const DEFAULT_AGENT = 'deepseek-proxy'
 const DEFAULT_MINIMUM_AGY_VERSION = '1.1.15'
 const DEFAULT_MAX_CONCURRENT = 4
 const DEFAULT_MAX_QUEUE = 32

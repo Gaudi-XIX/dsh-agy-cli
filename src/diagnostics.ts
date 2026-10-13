@@ -17,6 +17,7 @@ import { redactText } from './agy/redact.js'
 import {
   Config as ConfigSchema,
   configuredModels,
+  DEFAULT_AGENT,
   type Config,
   type ModelConfig,
   type ToolPolicy,
@@ -177,7 +178,7 @@ export async function diagnoseProvider(
   const models = modelCatalog.models.map(model => modelDiagnostic(model, config.imageInput))
   const agyOptions: AgyDiagnosticOptions = {
     ...(executable === undefined || executable.trim().length === 0 ? {} : { executable }),
-    expectedAgent: config.agent ?? 'deepseek-proxy',
+    expectedAgent: config.agent ?? DEFAULT_AGENT,
     minimumVersion: config.minimumAgyVersion ?? '1.1.15',
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.runCommand === undefined ? {} : { runCommand: options.runCommand }),
@@ -240,7 +241,7 @@ export async function diagnoseProvider(
     },
     configuration: {
       provider: config.provider ?? 'agy',
-      agent: config.agent ?? 'deepseek-proxy',
+      agent: config.agent ?? DEFAULT_AGENT,
       defaultModel: config.model ?? models[0]?.id ?? 'unknown',
       modelDiscovery: config.modelDiscovery === 'off' ? 'off' : 'auto',
       toolPolicy: config.toolPolicy === 'agy-owned'

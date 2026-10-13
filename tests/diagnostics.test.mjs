@@ -148,12 +148,16 @@ test('diagnoseProvider reports component issues without invoking a model', async
 })
 
 test('diagnoseProvider reports static catalog mode without discovery', async () => {
+  // No `agent` in the config, so this exercises the library default. The stub
+  // `agy agents` output has to name that same default, otherwise the doctor
+  // correctly reports AGY_AGENT_MISSING and this case fails for the wrong
+  // reason.
   const resultValue = await diagnoseProvider({
     config: { model: 'static-model', modelDiscovery: 'off' },
     bundlePatchPresent: true,
     runCommand: async request => request.args[0] === '--version'
       ? result(['agy 1.1.15'])
-      : result(['deepseek-proxy']),
+      : result(['dsh-agy-mcp-executor']),
   })
 
   assert.equal(resultValue.ok, true)
