@@ -277,7 +277,7 @@ test('AGY settings are written one directory above the MCP config, not beside it
   const settingsRoot = await mkdtemp(join(tmpdir(), 'agy-settings-root-'))
   try {
     await registerAgyMcpServer(
-      { url: 'http://127.0.0.1:1234/x', token: 'tok', toolNames: ['read'] },
+      { url: 'http://127.0.0.1:1234/x', token: 'tok', toolNames: ['read', 'write'] },
       { settingsRoot, configRoot: cliRoot },
     )
 
@@ -285,9 +285,20 @@ test('AGY settings are written one directory above the MCP config, not beside it
     assert.ok(mcpConfig.mcpServers[AGY_MCP_SERVER_NAME], 'the MCP server entry lives in the nested root')
 
     const settings = JSON.parse(await readFile(join(settingsRoot, 'settings.json'), 'utf8'))
-    assert.deepEqual(settings.permissions.allow, [`mcp(${AGY_MCP_SERVER_NAME}/read)`])
+    // One server-scoped wildcard, not one rule per tool. AGY matches
+    // `mcp(<server>/*)` — the syntax its own binary documents for the bundled
+    // `chrome_devtools` server — so DSH-side grants stay the only control point
+    // and adding a DSH tool needs no rewrite of this file. Enumerating tools was
+    // the old behaviour and is what made every tool-set change a config churn.
+    assert.deepEqual(settings.permissions.allow, [`mcp(${AGY_MCP_SERVER_NAME}/*)`])
 
     await unregisterAgyMcpServer({ settingsRoot, configRoot: cliRoot })
+    const cleared = JSON.parse(await readFile(join(settingsRoot, 'settings.json'), 'utf8'))
+    assert.equal(
+      (cleared.permissions?.allow ?? []).some(rule => rule.startsWith(`mcp(${AGY_MCP_SERVER_NAME}/`)),
+      false,
+      'cleanup removes the wildcard rule',
+    )
   } finally {
     await rm(cliRoot, { recursive: true, force: true })
     await rm(settingsRoot, { recursive: true, force: true })

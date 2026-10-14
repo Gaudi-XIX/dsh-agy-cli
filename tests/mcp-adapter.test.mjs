@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { AgyAdapter } from '../lib/provider/agy.js'
+import { DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES } from '../lib/provider/prompt-budget.js'
 
 /**
  * Drive the adapter with a scripted AGY stream. The runner seam lets us assert
@@ -341,6 +342,38 @@ test('bridge mode reports a turn that only made tool calls instead of failing em
   assert.equal(textBlock, undefined)
   const finish = chunks.find(chunk => chunk.type === 'finish')
   assert.deepEqual(finish.reason, { kind: 'stop' })
+})
+
+test('bridge mode still rejects an oversized user message instead of clipping it', async () => {
+  // 2026-10-14: the oversized-section clamp is allowed ONLY for requests with no
+  // tool catalog (side channels: session title, compaction, auto-review). A
+  // bridge-mode main turn ships tools while the schemas leave the prompt, so
+  // `toolProtocol === undefined` alone would misclassify it as a side channel and
+  // silently clip the start of the user's message. `toolSchemaCount` is what
+  // keeps it strict.
+  const { handle } = liveBridge()
+  const adapter = new AgyAdapter(
+    { enabled: true, toolPolicy: 'dsh-owned', model: 'gemini-3.8-flash' },
+    adapterOptions(scriptedRunner([INIT, RESULT]), {
+      resolveToolBridge: () => handle,
+    }),
+  )
+
+  await assert.rejects(
+    (async () => {
+      for await (const _chunk of adapter.stream({
+        provider: 'agy',
+        model: 'gemini-3.8-flash',
+        messages: [{
+          role: 'user',
+          content: [{ type: 'text', text: 'x'.repeat(DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES + 8_000) }],
+        }],
+        sessionId: 'session-1',
+        tools: [{ name: 'read', description: 'r', parameters: { type: 'object', properties: {} } }],
+      })) {}
+    })(),
+    error => error?.code === 'AGY_INPUT_TOO_LARGE',
+  )
 })
 
 test('mcpBridge:false keeps the prompt-contract path even with a live bridge', async () => {

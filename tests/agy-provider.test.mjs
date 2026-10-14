@@ -6,7 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { AgyAdapter } from '../lib/provider/agy.js'
 import { getAgyUserMessageByteLength } from '../lib/agy/stream-protocol.js'
-import { DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES } from '../lib/provider/prompt-budget.js'
+import { DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES, DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES } from '../lib/provider/prompt-budget.js'
 
 function result(exitCode = 0) {
   return {
@@ -1111,6 +1111,83 @@ test('AgyAdapter rejects an oversized current DSH prompt before AGY can return a
     error => error?.code === 'AGY_INPUT_TOO_LARGE',
   )
   assert.equal(captured.length, 0)
+})
+
+// 2026-10-14: the session-title plugin sends a whole-conversation summary as
+// one user section. When that single section exceeds the text-only budget,
+// evicting history cannot help — the old behaviour threw AGY_INPUT_TOO_LARGE
+// and the title simply never refreshed (two such failures in real telemetry).
+// Side channels now clip the head of that section and still run.
+test('AgyAdapter clamps one oversized section for a side-channel request instead of rejecting', async () => {
+  const captured = []
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    modelDiscovery: 'off',
+  }, {
+    dshContext: trustedDshContext(),
+    runAgyProcess: fakeRunner([
+      { event: 'result', result: { status: 'SUCCESS', response: '会话标题', usage: { totalTokens: 4 } } },
+    ], captured),
+  })
+
+  const chunks = []
+  for await (const chunk of adapter.stream({
+    ...request,
+    sessionId: 'session-1',
+    purpose: 'session-title',
+    messages: [{
+      role: 'user',
+      content: [{ type: 'text', text: 'x'.repeat(DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES + 8_000) }],
+    }],
+  })) chunks.push(chunk)
+
+  assert.equal(captured.length, 1, 'side channel must still spawn AGY')
+  const prompt = captured[0].prompt
+  assert.match(prompt, /=== USER ===/)
+  assert.match(prompt, /\[DSH OLDER CONTEXT CLIPPED FROM HEAD/)
+  assert.ok(Buffer.byteLength(prompt, 'utf8') <= DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES)
+  assert.equal(
+    chunks.find(chunk => chunk.type === 'block-end')?.block?.text,
+    '会话标题',
+  )
+})
+
+// A request that carries no tool catalog cannot be a user turn: DSH ships its
+// tool list whenever the model is expected to act, and the MCP bridge still
+// counts the schemas in `toolSchemaCount` even though they leave the prompt.
+// So "no protocol AND zero schemas" is the discriminator — chosen over
+// `purpose` because `@deepseek-ai/dsh-experimental-auto-review` builds its
+// review request with no purpose field at all. The real main turn stays strict
+// in both of its shapes: pinned by the protocol test above and by the
+// bridge-mode test in mcp-adapter.test.mjs.
+test('AgyAdapter clamps an oversized dump for a tool-less request', async () => {
+  const captured = []
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    modelDiscovery: 'off',
+  }, {
+    dshContext: trustedDshContext(),
+    runAgyProcess: fakeRunner([
+      { event: 'result', result: { status: 'SUCCESS', response: '已审阅' } },
+    ], captured),
+  })
+
+  const chunks = []
+  for await (const chunk of adapter.stream({
+    ...request,
+    sessionId: 'session-1',
+    messages: [{
+      role: 'user',
+      content: [{ type: 'text', text: 'x'.repeat(DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES + 8_000) }],
+    }],
+  })) chunks.push(chunk)
+
+  assert.equal(captured.length, 1, 'a tool-less dump must be clipped and still run, not rejected')
+  assert.match(captured[0].prompt, /\[DSH OLDER CONTEXT CLIPPED FROM HEAD/)
+  assert.equal(
+    chunks.find(chunk => chunk.type === 'block-end')?.block?.text,
+    '已审阅',
+  )
 })
 
 test('AgyAdapter repairs one non-JSON DSH-owned response and records the retry', async () => {

@@ -907,6 +907,27 @@ function purposeRouteFor(
   return undefined
 }
 
+/**
+ * A request with no tool catalog is never a user turn: DSH ships its tool list
+ * whenever the model is expected to act, and the MCP bridge still reports the
+ * schemas in `toolSchemaCount` even though they leave the prompt. Such calls are
+ * side channels, and their payload is a serialized dump of the conversation as
+ * ONE message — the session-title provider (`@weibaohui/dsh-smart-title`,
+ * `purpose: 'session-title'`), compaction, and `@deepseek-ai/dsh-experimental-auto-review`
+ * (whose review request has no `purpose` at all and whose text is
+ * ENVIRONMENT / PROJECT_INSTRUCTIONS / FILTERED_HISTORY / PENDING_ACTION joined).
+ * A dump is the only place where a single section can exceed the prompt budget,
+ * and clipping its head drops just the oldest context. A real turn keeps the
+ * strict path: losing the start of the user's own message silently is worse than
+ * a clean AGY_INPUT_TOO_LARGE.
+ */
+function isSideChannelRequest(
+  toolProtocol: StructuredToolProtocol | undefined,
+  toolSchemaCount: number,
+): boolean {
+  return toolProtocol === undefined && toolSchemaCount === 0
+}
+
 /** DSH text-only adapter backed by the locally authenticated AGY CLI. */
 export class AgyAdapter extends LlmAdapter {
   private readonly model: string
@@ -1086,6 +1107,12 @@ export class AgyAdapter extends LlmAdapter {
     if (toolProtocol !== undefined && protocolRepair) {
       prompt = appendToolProtocolRepairPrompt(prompt, protocolRepairHint, protocolRepairReason)
     }
+    // Side channels (session title, compaction, auto-review) are the only
+    // requests with no tool catalog, and their payload is one huge conversation
+    // dump. Clipping the head of that dump beats AGY_INPUT_TOO_LARGE, which
+    // leaves the title stale and the tool call unreviewed. See the helper.
+    const oversizedSectionPolicy: 'reject' | 'clamp' =
+      isSideChannelRequest(toolProtocol, telemetry.toolSchemaCount) ? 'clamp' : 'reject'
     const bounded = boundAgyPrompt(prompt, {
       maxFrameBytes: this.inputFrameLimitBytes,
       maxPromptBytes: toolProtocol === undefined
@@ -1093,6 +1120,7 @@ export class AgyAdapter extends LlmAdapter {
         : DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES,
       maxSingleToolResultBytes: this.maxSingleToolResultBytes,
       maxHistoricalToolResultBytes: this.maxHistoricalToolResultBytes,
+      oversizedSectionPolicy,
     })
     telemetry.promptBytes = bounded.promptBytes
     telemetry.promptLimitBytes = bounded.promptLimitBytes

@@ -15,9 +15,14 @@
  * 3. an allow rule is written alongside the entry, because headless AGY cannot
  *    prompt for the `mcp` permission and auto-denies every MCP call without one
  *    (stderr: `a tool required the "mcp" permission that headless mode cannot
- *    prompt for, so it was auto-denied`). The rule is scoped to
- *    `mcp(<server>/<tool>)` per exposed tool: `mcp(<server>)` alone does not
- *    match, and `mcp(*)` would hand AGY every MCP server on the machine.
+ *    prompt for, so it was auto-denied`). The rule is the server-scoped
+ *    wildcard `mcp(<server>/*)` — the syntax AGY itself documents for its
+ *    bundled servers (`mcp(chrome_devtools/*)` appears in the CLI binary).
+ *    `mcp(<server>)` alone does not match, and the bare `mcp(*)` would hand
+ *    AGY every MCP server on the machine. Enumerating one rule per tool was
+ *    the original approach and is what forced this plugin to rewrite the file
+ *    every time DSH changed its tool set; the wildcard makes DSH-side grants
+ *    the only control point.
  *
  * The edit is a read-modify-write of the AGY config with a backup, matching
  * what the AGY CLI itself does for `agy mcp add`. The AGY CLI is used only to
@@ -153,9 +158,14 @@ async function writeConfig(path: string, root: Record<string, unknown>): Promise
   await rename(temporary, path)
 }
 
-/** One allow rule per exposed tool: `mcp(<server>)` alone does not match. */
-export function agyAllowRule(toolName: string): string {
-  return `mcp(${AGY_MCP_SERVER_NAME}/${toolName})`
+/**
+ * The single allow rule this plugin needs: the server-scoped wildcard. AGY
+ * matches `mcp(<server>/*)` (the syntax its own binary documents, e.g.
+ * `mcp(chrome_devtools/*)`), so every DSH tool the bridge reports is granted
+ * without enumerating names — and a DSH tool added later needs no config edit.
+ */
+export function agyAllowRule(_toolName?: string): string {
+  return `mcp(${AGY_MCP_SERVER_NAME}/*)`
 }
 
 function isAllowRuleForThisBridge(rule: string): boolean {
@@ -234,7 +244,7 @@ export async function registerAgyMcpServer(
   servers[AGY_MCP_SERVER_NAME] = entryFor(entry)
   await writeConfig(path, { ...root, mcpServers: servers })
   options.logger?.(`registered AGY MCP server "${AGY_MCP_SERVER_NAME}" at ${path}`)
-  await writeAllowRules((entry.toolNames ?? []).map(agyAllowRule), options)
+  await writeAllowRules([agyAllowRule()], options)
   return { path, root }
 }
 

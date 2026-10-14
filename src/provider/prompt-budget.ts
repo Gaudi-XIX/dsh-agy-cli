@@ -42,6 +42,17 @@ export interface AgyPromptBudgetOptions {
   maxPromptBytes?: number
   maxSingleToolResultBytes?: number
   maxHistoricalToolResultBytes?: number
+  /**
+   * What to do when a single serialized section alone exceeds the prompt
+   * budget. `'reject'` (default) throws AGY_INPUT_TOO_LARGE; `'clamp'` clips
+   * that section's head and keeps its tail. The main turn stays on `'reject'`:
+   * silently losing the beginning of the user's own message is worse than a
+   * clean error. Side-channel requests (a session-title or compaction summary
+   * over the whole conversation, which arrive as one oversized section) use
+   * `'clamp'` — they have no tool protocol to protect, the newest content is
+   * what a summary needs, and failing them outright only stalls the panel.
+   */
+  oversizedSectionPolicy?: 'reject' | 'clamp'
 }
 
 export interface AgyPromptBudgetResult {
@@ -86,6 +97,37 @@ function truncateUtf8(value: string, maxBytes: number): string {
   const suffixBytes = byteLength(TRUNCATION_SUFFIX)
   if (maxBytes <= suffixBytes) return prefixForBytes(value, maxBytes)
   return `${prefixForBytes(value, maxBytes - suffixBytes)}${TRUNCATION_SUFFIX}`
+}
+
+function suffixForBytes(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  if (byteLength(value) <= maxBytes) return value
+  let low = 0
+  let high = value.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (byteLength(value.slice(middle)) <= maxBytes) high = middle
+    else low = middle + 1
+  }
+  return value.slice(low)
+}
+
+/**
+ * Keep the newest content of a serialized history section when the section is
+ * too large to fit on its own. Side-channel requests (a session-title refresh
+ * over the whole conversation) arrive as a single section, so section-level
+ * eviction cannot help — only clipping that section can. The tail wins because
+ * in a conversation tail the newest turn lives; the marker tells AGY the head
+ * was clipped rather than that nothing was said.
+ */
+function clampSectionToBytes(value: string, maxBytes: number): string {
+  if (byteLength(value) <= maxBytes) return value
+  const headerMatch = /^(=== (?:USER|ASSISTANT|TOOL|SYSTEM) ===\n)/.exec(value)
+  const header = headerMatch?.[1] ?? ''
+  const marker = '[DSH OLDER CONTEXT CLIPPED FROM HEAD: THIS SECTION WAS TOO LARGE]\n'
+  const bodyBudget = maxBytes - byteLength(header) - byteLength(marker)
+  if (bodyBudget <= 0) return suffixForBytes(value, maxBytes)
+  return `${header}${marker}${suffixForBytes(value.slice(header.length), bodyBudget)}`
 }
 
 function collectToolResultSegments(prompt: string): ToolResultSegment[] {
@@ -244,6 +286,7 @@ function joinHistorySections(
 function compactSerializedHistory(
   prompt: string,
   maxPromptBytes: number,
+  oversizedSectionPolicy: 'reject' | 'clamp' = 'reject',
 ): { prompt: string; compacted: boolean; omittedMessageCount: number } {
   if (byteLength(prompt) <= maxPromptBytes) {
     return { prompt, compacted: false, omittedMessageCount: 0 }
@@ -329,6 +372,24 @@ function compactSerializedHistory(
     compactedPrompt = joinHistorySections(preservedSections, protocol, protocolBeforeHistory)
   }
   if (byteLength(compactedPrompt) > maxPromptBytes) {
+    if (oversizedSectionPolicy === 'reject') {
+      throw new AgyPromptBudgetError(byteLength(compactedPrompt), maxPromptBytes)
+    }
+    // Eviction cannot help any more: even the latest section plus the protocol
+    // overflows, which means one serialized section is bigger than the whole
+    // budget. Side-channel requests do this — the session-title plugin sends a
+    // full-conversation summary as a single user section. Clamping every
+    // section to the space the protocol leaves is strictly better than throwing
+    // AGY_INPUT_TOO_LARGE: the caller still gets an answer over the newest
+    // content. The main turn keeps `reject` — see the option docs.
+    const historyBudget = Math.max(128, maxPromptBytes - byteLength(protocol) - 2)
+    compactedPrompt = joinHistorySections(
+      [...selected].sort((left, right) => left - right).map(index => clampSectionToBytes(sectionAt(index), historyBudget)),
+      protocol,
+      protocolBeforeHistory,
+    )
+  }
+  if (byteLength(compactedPrompt) > maxPromptBytes) {
     throw new AgyPromptBudgetError(byteLength(compactedPrompt), maxPromptBytes)
   }
 
@@ -387,7 +448,11 @@ export function boundAgyPrompt(
     maxSingleToolResultBytes,
     maxHistoricalToolResultBytes,
   )
-  const history = compactSerializedHistory(compacted.prompt, maxPromptBytes)
+  const history = compactSerializedHistory(
+    compacted.prompt,
+    maxPromptBytes,
+    options.oversizedSectionPolicy ?? 'reject',
+  )
   const boundedPrompt = fitPromptToFrame(history.prompt, options.maxFrameBytes)
   const segments = collectToolResultSegments(boundedPrompt)
   const frameBytes = getAgyUserMessageByteLength(boundedPrompt)

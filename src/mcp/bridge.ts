@@ -62,7 +62,8 @@ export interface DshMcpBridgeOptions {
   /** Overrides the AGY MCP-config root; tests pass a temporary directory. */
   readonly agyConfigRoot?: string | undefined
   /**
-   * Overrides the AGY settings root. Defaults to `agyConfigRoot` so a test can
+   * Overrides the AGY settings root. `agySettingsRoot()` is the production
+   * default (the outer directory); this knob only exists so a test can
    * keep both files in one temporary directory.
    */
   readonly agySettingsRoot?: string | undefined
