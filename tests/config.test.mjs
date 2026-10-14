@@ -179,6 +179,8 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     agyPath: '',
     timeoutMs: 120_000,
     sessionMode: 'full',
+    // Durable sessionId -> conversationId map; '' means <DSH_HOME>/agy-provider/sessions.json
+    sessionStorePath: '',
     minimumAgyVersion: '1.1.15',
     maxConcurrent: 4,
     maxQueue: 32,

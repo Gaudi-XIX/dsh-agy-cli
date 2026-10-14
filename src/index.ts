@@ -19,6 +19,8 @@ import { MockAdapter } from './provider/mock.js'
 import { AgyModelDiscovery } from './agy/models.js'
 import { appendAgyDiagnosticRecord } from './agy/log.js'
 import { configuredModels } from './provider/config.js'
+import { SessionRegistry } from './session/store.js'
+import { FileSessionStore, resolveSessionStorePath } from './session/file-store.js'
 import type { DshContextLookup } from './dsh/context.js'
 
 export const name = 'dsh-agy-provider'
@@ -290,6 +292,14 @@ export function apply(ctx: Context, config: ConfigType): void {
         appendAgyDiagnosticRecord(record)
       }
     },
+    // With sessionMode 'resume' the sessionId -> conversationId map must outlive
+    // the plugin: AGY keeps every conversation on disk, so a durable map turns
+    // the first turn after a host restart from a full-history re-serialization
+    // (pinned at the input limit, missing the upstream prompt cache) into an
+    // incremental one. 'full' never reads the map, so it stays in memory.
+    ...(activeConfig.sessionMode === 'resume'
+      ? { sessionRegistry: new SessionRegistry(new FileSessionStore({ path: resolveSessionStorePath(activeConfig.sessionStorePath) })) }
+      : {}),
     // Resolve lazily because attachments is optional and can be composed after
     // this plugin. Text-only requests remain independent of the service.
     resolveAttachmentStore: () => ctx.get('attachments') as Pick<AttachmentStore, 'readImage'> | undefined,

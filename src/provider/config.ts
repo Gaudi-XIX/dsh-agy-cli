@@ -49,6 +49,13 @@ export interface Config {
   timeoutMs?: number
   /** `full` sends DSH history; `resume` reuses an AGY conversation. */
   sessionMode?: 'resume' | 'full'
+  /**
+   * Where the durable `DSH sessionId -> AGY conversationId` map lives, so
+   * `sessionMode: resume` survives a host restart. Empty uses
+   * `<DSH_HOME>/agy-provider/sessions.json`. A value ending in `.json` is a
+   * file; anything else is a directory holding `sessions.json`.
+   */
+  sessionStorePath?: string
   /** Minimum AGY version accepted by the diagnostic command. */
   minimumAgyVersion?: string
   /** Maximum number of active AGY child processes per adapter instance. */
@@ -226,6 +233,7 @@ export function createConfigSchema(defaults: {
     agyPath: z.string().default('').description('AGY executable path').hidden(),
     timeoutMs: z.number().min(1).max(3_600_000).default(120_000).description('Per-request timeout ms').hidden(),
     sessionMode: z.union(['resume', 'full'] as const).default('full').description('Session mode'),
+    sessionStorePath: z.string().default('').description('Durable sessionId to conversationId map path; empty uses DSH_HOME/agy-provider/sessions.json'),
     minimumAgyVersion: z.string().pattern(/^\d+\.\d+\.\d+$/).default('1.1.15').description('Minimum AGY version').hidden(),
     maxConcurrent: z.natural().min(1).max(64).default(4).description('Max concurrent AGY processes').hidden(),
     maxQueue: z.natural().max(256).default(32).description('Max queue length').hidden(),
@@ -276,6 +284,7 @@ export function createConfigSchema(defaults: {
       agyPath: { $description: 'AGY 可执行文件路径，空则自动发现' },
       timeoutMs: { $description: '单次请求超时（毫秒）' },
       sessionMode: { $description: '会话模式：full=每轮完整历史, resume=复用 AGY 会话' },
+      sessionStorePath: { $description: '会话映射（DSH 会话→AGY 对话）的落盘路径；留空用 DSH_HOME/agy-provider/sessions.json，让 resume 模式在宿主重启后仍能续话' },
       minimumAgyVersion: { $description: '最低允许的 AGY 版本' },
       maxConcurrent: { $description: '最大并发 AGY 进程数' },
       maxQueue: { $description: '最大排队长度' },
@@ -310,6 +319,7 @@ export function createConfigSchema(defaults: {
       agyPath: { $description: 'AGY executable path, empty auto-discovers' },
       timeoutMs: { $description: 'Per-request timeout (ms)' },
       sessionMode: { $description: 'Session mode: full or resume' },
+      sessionStorePath: { $description: 'Path of the durable DSH session to AGY conversation map; empty uses DSH_HOME/agy-provider/sessions.json so resume keeps working after a host restart' },
       minimumAgyVersion: { $description: 'Minimum AGY version' },
       maxConcurrent: { $description: 'Max concurrent AGY processes' },
       maxQueue: { $description: 'Max queue length' },

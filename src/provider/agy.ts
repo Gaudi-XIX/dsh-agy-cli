@@ -145,7 +145,7 @@ export interface AgyAdapterDependencies {
   runAgyProcess?: AgyProcessRunner
   /** Injectable quota-free `agy models` command for deterministic tests. */
   runModelDiscovery?: AgyModelDiscoveryCommand
-  /** Injectable session mapping for tests or a future persistent store. */
+  /** Injectable session mapping; production uses the durable file-backed store. */
   sessionRegistry?: SessionRegistry
   /** Optional structured logger; logging failures never affect the request. */
   logger?: AgyLogger
