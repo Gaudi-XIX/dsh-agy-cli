@@ -1190,6 +1190,74 @@ test('AgyAdapter clamps an oversized dump for a tool-less request', async () => 
   )
 })
 
+// `sessionMode: 'resume'` ships the complete DSH history as one prompt, so once
+// a conversation is long enough every turn overflowed. Dropping whole messages
+// until the newest one fit produced a prompt pinned at exactly the limit; AGY
+// then missed its upstream prompt cache on the next turn and re-read the whole
+// conversation. The clip must (a) stay under the limit, (b) keep the newest
+// message whole, and (c) repeat the same bytes for the same history, so the
+// cached prefix survives.
+test('AgyAdapter clips a resume-mode overflow at a message boundary and keeps it stable', async () => {
+  const runs = []
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    modelDiscovery: 'off',
+    sessionMode: 'resume',
+  }, {
+    dshContext: trustedDshContext(),
+    runAgyProcess: fakeRunner([
+      { event: 'result', result: { status: 'SUCCESS', response: 'ok', usage: { totalTokens: 3 } } },
+    ], runs),
+  })
+
+  // Every message is far below the limit, but the conversation as a whole is
+  // not: this is the shape that used to be pinned at exactly the limit.
+  const messages = []
+  for (let index = 0; index < 24; index += 1) {
+    messages.push({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: [{ type: 'text', text: `message-${index} ` + 'y'.repeat(9_000) }],
+    })
+  }
+
+  const captured = []
+  for await (const chunk of adapter.stream({
+    ...request,
+    sessionId: 'session-1',
+    messages,
+  })) captured.push(chunk)
+
+  assert.equal(runs.length, 1, 'the clipped turn must still reach AGY')
+  const prompt = runs[0].prompt
+  assert.ok(
+    Buffer.byteLength(prompt, 'utf8') <= DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES,
+    'clipped prompt must stay inside the AGY input budget',
+  )
+  assert.ok(
+    prompt.includes(messages[messages.length - 1].content[0].text),
+    'the newest message must survive the clip whole',
+  )
+  assert.match(prompt, /\[DSH HISTORY COMPACTED/)
+  assert.ok(
+    !prompt.includes('message-0 '),
+    'the oldest messages must be the ones that were dropped',
+  )
+  assert.ok(
+    Buffer.byteLength(prompt, 'utf8') < DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES - 1_000,
+    'the clip must not be pinned to the exact limit, or the prompt changes every turn',
+  )
+
+  // The same history must render the same bytes: this is what lets AGY's
+  // upstream cache of the previous prefix hit.
+  const second = []
+  for await (const chunk of adapter.stream({
+    ...request,
+    sessionId: 'session-1',
+    messages,
+  })) second.push(chunk)
+  assert.equal(runs[1].prompt, prompt, 'an unchanged history must produce identical prompt bytes')
+})
+
 test('AgyAdapter repairs one non-JSON DSH-owned response and records the retry', async () => {
   const captured = []
   const logs = []

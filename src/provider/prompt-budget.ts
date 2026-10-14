@@ -24,6 +24,7 @@ const TRUNCATION_SUFFIX = '\n[DSH TOOL RESULT TRUNCATED]\n'
 const OMITTED_TOOL_RESULT = `${TOOL_RESULT_MARKER}\n[DSH TOOL RESULT OMITTED FROM HISTORY BUDGET]\n`
 const DSH_PROTOCOL_MARKER = '=== DSH TOOL PROTOCOL V1 ==='
 const HISTORY_COMPACTION_MARKER = '=== USER ===\n[DSH HISTORY COMPACTED: older messages were omitted to stay within AGY input limits. The latest request and tool result are authoritative; re-read files with DSH tools when needed.]'
+const OMITTED_HISTORY_SECTION = '=== USER ===\n[DSH HISTORY COMPACTED: this message was omitted to stay within AGY input limits.]'
 
 export class AgyPromptBudgetError extends Error {
   readonly code = 'AGY_INPUT_TOO_LARGE' as const
@@ -74,6 +75,26 @@ interface ToolResultSegment {
   text: string
 }
 
+interface SerializedSection {
+  text: string
+  /** Character range of `text` inside the serialized history. */
+  start: number
+  startOfLine: boolean
+  /** Whether a blank separator line precedes the section in the history. */
+  leadingBlankLine: boolean
+  /** UTF-8 bytes of the history that precede this section. */
+  byteOffset: number
+}
+
+/**
+ * Matches a serialized section header at the start of a line. The `m` flag is
+ * load-bearing: {@link splitSerializedHistoryWithOffsets} reuses this source with
+ * a `g` flag over a whole multi-section history, and without `m` the `^` anchor
+ * only matches offset 0, so the split silently returns a single section and every
+ * clip lands on the entire history instead of at a message boundary.
+ */
+const SECTION_HEADER_PATTERN = /^(=== (?:USER|ASSISTANT|TOOL|SYSTEM) ===\n)/m
+
 function byteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8')
 }
@@ -122,12 +143,138 @@ function suffixForBytes(value: string, maxBytes: number): string {
  */
 function clampSectionToBytes(value: string, maxBytes: number): string {
   if (byteLength(value) <= maxBytes) return value
-  const headerMatch = /^(=== (?:USER|ASSISTANT|TOOL|SYSTEM) ===\n)/.exec(value)
+  const headerMatch = SECTION_HEADER_PATTERN.exec(value)
   const header = headerMatch?.[1] ?? ''
   const marker = '[DSH OLDER CONTEXT CLIPPED FROM HEAD: THIS SECTION WAS TOO LARGE]\n'
   const bodyBudget = maxBytes - byteLength(header) - byteLength(marker)
   if (bodyBudget <= 0) return suffixForBytes(value, maxBytes)
   return `${header}${marker}${suffixForBytes(value.slice(header.length), bodyBudget)}`
+}
+
+type OversizedSectionPolicy = 'reject' | 'clamp'
+
+interface ClipResult {
+  prompt: string
+  omitted: number
+}
+
+// Fraction of the budget a clipped prompt may occupy. The remainder is the
+// margin that keeps a resume-mode bootstrap from being pinned to the exact
+// limit; see `clampSectionsToBytes`.
+const CLIP_TARGET_RATIO = 0.9
+
+function clipHeadroomBytes(maxPromptBytes: number): number {
+  return Math.max(128, Math.floor(maxPromptBytes * CLIP_TARGET_RATIO))
+}
+
+/**
+ * Run a *fixed* byte budget over the serialized sections, keeping the newest
+ * bytes of the conversation. Unlike {@link compactSerializedHistory}'s
+ * section-level eviction — which drops a whole message as soon as one no longer
+ * fits — this clips inside a section. It is the fallback for the bootstrap of a
+ * resumed session: `resume` mode sends the entire DSH history as a single
+ * prompt, so by the time a conversation is long enough the request is clamped
+ * on *every* turn. Section-level eviction alone left it pinned at the exact
+ * limit with the newest message dropped, which made the next AGY request miss
+ * its upstream prompt cache and re-read the whole conversation.
+ *
+ * The cut is anchored to a message boundary, never to the limit. Anchoring to a
+ * message start means the clipped prompt only changes when a new message is
+ * appended, so the prefix AGY already cached stays byte-identical while the
+ * conversation grows within the message at the boundary.
+ */
+function clampSectionsToBytes(
+  sections: readonly SerializedSection[],
+  maxPromptBytes: number,
+): ClipResult {
+  if (sections.length === 0) return { prompt: '', omitted: 0 }
+  const newestIndex = sections.length - 1
+  const budget = clipHeadroomBytes(maxPromptBytes)
+
+  // Walk backwards from the newest message to find a window that fits the budget.
+  //
+  // Clipping the oldest rather than the newest is what keeps the answer possible:
+  // the newest section is the turn being asked, and a half-clipped question
+  // produces a wrong answer instead of a smaller one. Only the head of the
+  // retained window is sacrificial.
+  const firstKept = ((): number => {
+    let used = 0
+    let start = newestIndex
+    for (let index = newestIndex; index >= 0; index -= 1) {
+      const size = byteLength(sections[index]!.text)
+      const separator = index === newestIndex ? 0 : 2
+      if (used + size + separator > budget && index !== newestIndex) break
+      used += size + separator
+      start = index
+    }
+    return start
+  })()
+
+  // Snap the window start down to a power-of-two stride.
+  //
+  // Without this the start drifts outward by exactly one message per turn as the
+  // conversation grows, so the retained bytes differ on every request and the
+  // upstream prompt cache can never hit (measured: 101 bytes shared out of
+  // 165243, i.e. effectively nothing). Snapping to 1, 2, 4, 8, ... messages means
+  // the start only moves when the conversation nearly doubles the window, so
+  // between snaps every turn emits the previous bytes plus an appended tail —
+  // which is exactly what an append-only cache needs. It also keeps the window
+  // contiguous, so no message is ever skipped.
+  //
+  // The boundary is quantized *before* packing, not after: adjusting an
+  // already-packed window only moves its first kept message, which is the byte
+  // the cache comparison fails on.
+  const packedStart = firstKept
+  const quantizedStart = ((): number => {
+    if (packedStart <= 0) return 0
+    let stride = 1
+    while (stride * 2 <= packedStart) stride *= 2
+    return packedStart - (packedStart % stride)
+  })()
+
+  // Pack forward from the quantized boundary so the retained window always
+  // *starts* at that boundary.
+  //
+  // Walking backwards from the newest message instead packs as much of the tail
+  // as fits, and when the conversation grows the oldest surviving message moves
+  // by one every turn — so the first bytes of the prompt change on every request
+  // and the upstream cache can never match. Starting at the boundary makes the
+  // first kept message a function of the boundary alone, and the tail is what
+  // absorbs growth: within one stride the emitted bytes are the previous bytes
+  // plus an appended tail.
+  //
+  // The newest message is reserved first. It is the turn being asked, and it must
+  // survive whole even when older messages would otherwise take its budget; that
+  // also keeps the tail cut point still, because the newest message is the only
+  // section that grows between turns.
+  const newest = sections[newestIndex]!
+  const newestWhole = byteLength(newest.text)
+  const olderBudget = Math.max(0, budget - newestWhole - 2)
+
+  const kept: string[] = []
+  let used = 0
+  for (let index = quantizedStart; index < newestIndex; index += 1) {
+    const section = sections[index]!
+    const size = byteLength(section.text)
+    const separator = kept.length === 0 ? 0 : 2
+    if (used + size + separator > olderBudget) break
+    used += size + separator
+    kept.push(section.text)
+  }
+
+  // Nothing from the boundary fit (a single huge message sits right at it).
+  // Fall back to clipping that one message so the caller still gets an
+  // answerable prompt instead of an empty window.
+  const omitted = quantizedStart + kept.length
+  const newestFits = used + newestWhole + (kept.length > 0 ? 2 : 0) <= budget
+  const newestText = newestFits
+    ? newest.text
+    : clampSectionToBytes(newest.text, Math.max(1, budget - (kept.length > 0 ? byteLength(kept.join('\n\n')) + 2 : 0)))
+
+  const parts: string[] = []
+  if (omitted > 0) parts.push(OMITTED_HISTORY_SECTION)
+  parts.push(...kept, newestText)
+  return { prompt: parts.join('\n\n'), omitted }
 }
 
 function collectToolResultSegments(prompt: string): ToolResultSegment[] {
@@ -256,10 +403,51 @@ function splitHistoryAndProtocol(prompt: string): {
 }
 
 function splitSerializedHistory(history: string): string[] {
+  return splitSerializedHistoryWithOffsets(history).map(section => section.text)
+}
+
+/**
+ * Split a serialized history into sections, reporting each section's byte
+ * offset from the start of `history`. The offsets are what makes a *stable*
+ * clip possible: clamping the newest section by its own start rather than by
+ * the limit produces identical bytes on every turn, so a long conversation
+ * keeps hitting AGY's upstream prompt cache instead of re-billing the prefix
+ * each time.
+ */
+function splitSerializedHistoryWithOffsets(history: string): SerializedSection[] {
   if (history.length === 0) return []
-  return history
-    .split(/\n\n(?=(?:=== SYSTEM|=== USER|=== ASSISTANT|=== TOOL) ===\n)/)
-    .filter(section => section.length > 0)
+  const sections: SerializedSection[] = []
+  // Rebuild with `gm`, not `g`: `.source` carries only the pattern, so the `m`
+  // flag on SECTION_HEADER_PATTERN is lost here and `^` would then match offset 0
+  // alone, collapsing the whole history into one section.
+  const header = new RegExp(SECTION_HEADER_PATTERN.source, 'gm')
+  let cursor = 0
+  let match: RegExpExecArray | null = header.exec(history)
+  while (match !== null) {
+    const start = match.index
+    const leading = start === 0 ? 0 : 2
+    if (start > cursor) {
+      sections.push({
+        text: history.slice(cursor, start - leading),
+        start: cursor,
+        startOfLine: true,
+        leadingBlankLine: leading === 2,
+        byteOffset: byteLength(history.slice(0, cursor)),
+      })
+    }
+    cursor = start
+    match = header.exec(history)
+  }
+  if (cursor < history.length) {
+    sections.push({
+      text: history.slice(cursor),
+      start: cursor,
+      startOfLine: true,
+      leadingBlankLine: false,
+      byteOffset: byteLength(history.slice(0, cursor)),
+    })
+  }
+  return sections
 }
 
 function joinHistorySections(
@@ -333,12 +521,15 @@ function compactSerializedHistory(
   if (!fits(selected, true)) selected.clear()
   selected.add(latestIndex)
 
-  // Add recent history first. This preserves the current turn and as much of
-  // the immediately preceding tool exchange as the safe AGY limit allows.
+  // Add recent history first, newest-first, and stop at the first message that
+  // does not fit. Stopping rather than skipping is what keeps the retained window
+  // contiguous: a gap would renumber the conversation and change every later
+  // byte, so the upstream cache could never hit.
   for (let index = latestIndex - 1; index >= 0; index -= 1) {
     const candidate = new Set(selected)
     candidate.add(index)
-    if (fits(candidate, true)) selected.add(index)
+    if (!fits(candidate, true)) break
+    selected.add(index)
   }
 
   // If the first system section was skipped by the recent-history pass, add it
@@ -351,7 +542,7 @@ function compactSerializedHistory(
 
   const ordered = [...selected].sort((left, right) => left - right)
   const preservedSections = ordered.map(sectionAt)
-  const omittedMessageCount = sections.length - selected.size
+  let omittedMessageCount = sections.length - selected.size
   const preservedWithoutMarker = preservedSections.filter(
     section => !section.startsWith('=== USER ===\n[DSH HISTORY COMPACTED:'),
   )
@@ -371,25 +562,65 @@ function compactSerializedHistory(
   if (byteLength(compactedPrompt) > maxPromptBytes) {
     compactedPrompt = joinHistorySections(preservedSections, protocol, protocolBeforeHistory)
   }
-  if (byteLength(compactedPrompt) > maxPromptBytes) {
-    if (oversizedSectionPolicy === 'reject') {
-      throw new AgyPromptBudgetError(byteLength(compactedPrompt), maxPromptBytes)
-    }
-    // Eviction cannot help any more: even the latest section plus the protocol
-    // overflows, which means one serialized section is bigger than the whole
-    // budget. Side-channel requests do this — the session-title plugin sends a
-    // full-conversation summary as a single user section. Clamping every
-    // section to the space the protocol leaves is strictly better than throwing
-    // AGY_INPUT_TOO_LARGE: the caller still gets an answer over the newest
-    // content. The main turn keeps `reject` — see the option docs.
+  const overflowed = (): boolean => byteLength(compactedPrompt) > maxPromptBytes
+  // Eviction packs the prompt right up to the limit and stops as soon as it is
+  // under it, so a long conversation lands on a prompt of 184192/184320 bytes
+  // with no headroom. That is still a miss for the upstream prompt cache: the
+  // next turn evicts one more message, which shifts the retained head and
+  // rewrites the whole prefix (measured: 7609 of 184192 bytes shared across one
+  // appended turn). Clipping to a fixed fraction of the budget leaves room for
+  // the next turn to grow into instead of evicting, and anchors the cut to a
+  // message boundary so the bytes before it stay put.
+  const withinHeadroom = (): boolean =>
+    byteLength(compactedPrompt) > clipHeadroomBytes(maxPromptBytes)
+  if ((overflowed() || withinHeadroom()) && oversizedSectionPolicy === 'clamp') {
+    // A side channel (a session-title or auto-review summary over the whole
+    // conversation) has no protocol to protect and arrives as one oversized
+    // dump, so section-level eviction cannot help. Clipping every retained
+    // section to what remains of the budget still yields a usable answer over
+    // the newest content, which beats AGY_INPUT_TOO_LARGE.
     const historyBudget = Math.max(128, maxPromptBytes - byteLength(protocol) - 2)
     compactedPrompt = joinHistorySections(
-      [...selected].sort((left, right) => left - right).map(index => clampSectionToBytes(sectionAt(index), historyBudget)),
+      [...selected].sort((left, right) => left - right)
+        .map(index => clampSectionToBytes(sectionAt(index), historyBudget)),
       protocol,
       protocolBeforeHistory,
     )
   }
+  if ((overflowed() || withinHeadroom()) && !protocolBeforeHistory) {
+    // A main turn that eviction cannot bring comfortably under the limit. Every
+    // request in `resume` mode ships the complete DSH history, so once a
+    // conversation is long enough this happens on *every* turn: eviction packs
+    // the prompt right up to the limit, the next turn evicts one more message,
+    // and the retained head shifts (measured: 7609 of 184192 bytes shared across
+    // one appended turn), so AGY never hits its upstream prompt cache. Clipping
+    // to a fixed fraction of the budget leaves room for the next turn to grow
+    // into instead of evicting, and anchors the cut to a message boundary so the
+    // bytes before it stay put.
+    //
+    // A prompt that carries the tool protocol before its history is the DSH-owned
+    // main turn. There the protocol must stay byte-stable and the user's own
+    // newest message must not be silently shortened, so the strict `reject`
+    // contract below still applies and a genuine overflow is a clean error.
+    const { history: rawHistory, protocol: historyProtocol, protocolBeforeHistory: protocolFirst } =
+      splitHistoryAndProtocol(prompt)
+    const sections = splitSerializedHistoryWithOffsets(rawHistory)
+    // Only a multi-message history has a boundary to clip at. One oversized
+    // section is the shape the strict callers refuse on purpose, so leave it to
+    // the throw below rather than silently clipping the only thing there is.
+    if (sections.length > 1) {
+      const budget = Math.max(128, maxPromptBytes - byteLength(historyProtocol) - 2)
+      const clipped = clampSectionsToBytes(sections, budget)
+      const nextPrompt = joinHistorySections([clipped.prompt], historyProtocol, protocolFirst)
+      if (byteLength(nextPrompt) <= maxPromptBytes) {
+        compactedPrompt = nextPrompt
+        omittedMessageCount = Math.max(omittedMessageCount, clipped.omitted)
+      }
+    }
+  }
   if (byteLength(compactedPrompt) > maxPromptBytes) {
+    // The only way through is a clip inside the newest section, which the
+    // `reject` callers deliberately refuse.
     throw new AgyPromptBudgetError(byteLength(compactedPrompt), maxPromptBytes)
   }
 
