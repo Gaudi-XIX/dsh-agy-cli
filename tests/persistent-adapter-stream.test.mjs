@@ -348,3 +348,82 @@ test('one-shot stays in force when the bridge is inactive', async () => {
     'via one-shot',
   )
 })
+
+/**
+ * The stored AGY conversation is the only thing an incremental prompt can build
+ * on. A worker that comes up with a different conversation must therefore fail
+ * the turn rather than answer without context: the binding is dropped and the
+ * same turn is resent one-shot from the full DSH history.
+ */
+test('a persisted conversation that cannot be continued falls back to full history', async () => {
+  const { SessionRegistry } = await import('../lib/session/store.js')
+  const sessions = new SessionRegistry()
+  sessions.set('session-persistent-1', 'conv-stale-1')
+
+  const persistentInputs = []
+  const runnerInputs = []
+  const adapter = new AgyAdapter(
+    {
+      enabled: true,
+      provider: 'agy',
+      model: 'gemini-3.8-flash',
+      toolPolicy: 'dsh-owned',
+      sessionMode: 'resume',
+      transport: 'persistent',
+    },
+    {
+      dshContext: trustedDshContext(),
+      resolveToolBridge: () => liveBridge(),
+      sessionRegistry: sessions,
+      persistentTransport: {
+        request: input => {
+          persistentInputs.push(input)
+          const error = new Error('Persistent AGY worker was asked to continue conversation conv-stale-1 but started conv-fresh-1')
+          error.code = 'CONVERSATION_MISMATCH'
+          return Promise.reject(error)
+        },
+      },
+      runAgyProcess: async request => {
+        runnerInputs.push(request)
+        for (const line of [
+          JSON.stringify({ event: 'init', conversation_id: 'conv-fresh-1' }),
+          JSON.stringify({
+            event: 'result',
+            result: {
+              conversation_id: 'conv-fresh-1',
+              status: 'SUCCESS',
+              response: 'answered from full history',
+              usage: { input_tokens: 10, output_tokens: 2 },
+            },
+          }),
+        ]) request.onStdoutLine(line)
+        return {
+          exitCode: 0,
+          signal: null,
+          termination: 'completed',
+          stdoutLines: [],
+          stderr: '',
+          durationMs: 1,
+        }
+      },
+    },
+  )
+
+  const chunks = await collect(adapter.stream(baseRequest()))
+
+  assert.equal(persistentInputs.length, 1)
+  assert.equal(persistentInputs[0].conversation, 'conv-stale-1',
+    'the worker is told which conversation to continue instead of being trusted to remember')
+  assert.equal(persistentInputs[0].model, 'gemini-3.8-flash')
+  assert.equal(persistentInputs[0].agent, 'dsh-agy-mcp-executor')
+  assert.equal(runnerInputs.length, 1, 'the turn is resent one-shot')
+  assert.equal(runnerInputs[0].conversation, undefined,
+    'a dropped binding must not be reused: the resend starts a fresh conversation')
+  assert.equal(adapter.getSession('session-persistent-1')?.conversationId, 'conv-fresh-1',
+    'the unusable binding is replaced by the conversation the resend actually used')
+  assert.equal(
+    chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''),
+    'answered from full history',
+  )
+  assert.equal(chunks.find(chunk => chunk.type === 'finish').reason.kind, 'stop')
+})

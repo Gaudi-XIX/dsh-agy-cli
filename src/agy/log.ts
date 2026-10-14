@@ -240,6 +240,11 @@ export interface AgyLogRecord {
   cacheTokenShare?: number
   requestMode?: AgyRequestMode
   conversationReused?: boolean
+  /**
+   * A persistent worker came up with a different conversation than the stored
+   * binding, so the binding was dropped and the turn resent from full history.
+   */
+  conversationMismatch?: boolean
   stablePrefixBytes?: number
   stablePrefixHash?: string
   toolSchemaHash?: string
@@ -332,6 +337,8 @@ export interface AgyTelemetry {
   cacheTokenShare: number | undefined
   requestMode: AgyRequestMode | undefined
   conversationReused: boolean | undefined
+  /** A persistent worker could not continue the stored conversation; binding dropped, resent from full history. */
+  conversationMismatch: boolean | undefined
   stablePrefixBytes: number | undefined
   stablePrefixHash: string | undefined
   toolSchemaHash: string | undefined
@@ -416,6 +423,7 @@ export function buildAgyLogRecord(
     ...(telemetry.cacheTokenShare === undefined ? {} : { cacheTokenShare: telemetry.cacheTokenShare }),
     ...(telemetry.requestMode === undefined ? {} : { requestMode: telemetry.requestMode }),
     ...(telemetry.conversationReused === undefined ? {} : { conversationReused: telemetry.conversationReused }),
+    ...(telemetry.conversationMismatch === undefined ? {} : { conversationMismatch: telemetry.conversationMismatch }),
     ...(telemetry.stablePrefixBytes === undefined ? {} : { stablePrefixBytes: telemetry.stablePrefixBytes }),
     ...(telemetry.stablePrefixHash === undefined ? {} : { stablePrefixHash: telemetry.stablePrefixHash }),
     ...(telemetry.toolSchemaHash === undefined ? {} : { toolSchemaHash: telemetry.toolSchemaHash }),
@@ -715,6 +723,7 @@ export function sanitizeAgyLogRecord(record: AgyLogRecord): AgyLogRecord {
       ? { requestMode: record.requestMode }
       : {}),
     ...(record.conversationReused === undefined ? {} : { conversationReused: record.conversationReused === true }),
+    ...(record.conversationMismatch === undefined ? {} : { conversationMismatch: record.conversationMismatch === true }),
     ...(record.stablePrefixBytes === undefined
       ? {}
       : { stablePrefixBytes: safeNonNegativeNumber(record.stablePrefixBytes) }),

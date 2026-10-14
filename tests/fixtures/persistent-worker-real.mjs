@@ -2,7 +2,16 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 
-const conversationId = randomUUID();
+// --conversation X resumes X. The real CLI starts a fresh id when X is unknown
+// (verified against agy.exe: it warns `conversation "..." not found` and emits a
+// new conversation_id), so `--conversation no-resume-*` simulates exactly that.
+const seedIndex = process.argv.indexOf("--conversation");
+const seed = seedIndex !== -1 && typeof process.argv[seedIndex + 1] === "string"
+  ? process.argv[seedIndex + 1]
+  : undefined;
+const conversationId = seed !== undefined && !seed.startsWith("no-resume-")
+  ? seed
+  : randomUUID();
 const init = {
   event: "init",
   conversation_id: conversationId,
@@ -68,6 +77,14 @@ input.on("line", line => {
   }
   if (text.includes("mode:malformed")) {
     process.stdout.write("not-json\n");
+    return;
+  }
+  if (text.includes("mode:argv")) {
+    // Echo the launch argv so a test can assert the route (--agent/--model/
+    // --effort/--conversation) actually reached the spawned process.
+    const echoed = JSON.stringify({ argv: process.argv.slice(2) });
+    emit({ event: "step_update", step_update: { conversation_id: conversationId, step_index: turn * 2, state: "DONE", step_type: "agent_response", text_delta: echoed, usage: { input_tokens: 10, output_tokens: 10 } } });
+    emit({ event: "result", result: { conversation_id: conversationId, status: "SUCCESS", response: echoed, duration_seconds: 1, num_turns: turn, usage: { input_tokens: 10, output_tokens: 10 } } });
     return;
   }
   // Normal

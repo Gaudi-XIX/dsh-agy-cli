@@ -131,3 +131,54 @@ test("persistent-transport real: abort/timeout/output-limit/malformed reset", as
     assert.match(afterMalformed.events.find(e=>e.event==="result")?.result?.response ?? "", /after-malformed/);
   } finally { await v.dispose(); }
 });
+
+// A worker cannot answer for a route it was not launched with, and a fresh
+// worker that ignores the stored conversation answers without any context.
+// Both must be structurally impossible, so the request carries its route.
+test("persistent-transport real: route args reach the spawned worker", async () => {
+  const v = transport();
+  try {
+    const r = await v.request({
+      sessionId: "route-session",
+      text: "mode:argv",
+      agent: "dsh-agy-mcp-executor",
+      model: "claude-sonnet-4-6",
+      reasoningEffort: "medium",
+      conversation: "conv-route-1",
+      extraArgs: ["--mode", "plan"],
+    });
+    const response = r.events.find(e=>e.event==="result")?.result?.response ?? "";
+    const argv = JSON.parse(response).argv;
+    assert.deepEqual(argv, [
+      "--agent", "dsh-agy-mcp-executor",
+      "--model", "claude-sonnet-4-6",
+      "--conversation", "conv-route-1",
+      "--effort", "medium",
+      "--mode", "plan",
+    ], "AGY reads the route at process start, so it must be in the spawn argv");
+    assert.equal(r.events.find(e=>e.event==="result")?.result?.conversation_id, "conv-route-1");
+  } finally { await v.dispose(); }
+});
+
+test("persistent-transport real: a different route gets its own worker", async () => {
+  const v = transport();
+  try {
+    await v.request({ sessionId: "switch-session", text: "first", model: "gemini-3.8-flash" });
+    await v.request({ sessionId: "switch-session", text: "second", model: "claude-sonnet-4-6" });
+    assert.equal(v.getStats().totalWorkers, 2,
+      "one session can switch models; a frozen argv would silently answer with the old one");
+  } finally { await v.dispose(); }
+});
+
+test("persistent-transport real: a worker that ignores the seed conversation fails before any delta", async () => {
+  const v = transport();
+  try {
+    // `no-resume-*` makes the fixture start a *fresh* id, the shape a stale or
+    // evicted conversation has in real AGY. The request must fail, not answer.
+    await assert.rejects(
+      v.request({ sessionId: "seed-session", text: "mode:argv", conversation: "no-resume-stale-1" }),
+      e => e instanceof PersistentTransportError && e.code === "CONVERSATION_MISMATCH",
+    );
+    await waitForWorkers(v, 0);
+  } finally { await v.dispose(); }
+});

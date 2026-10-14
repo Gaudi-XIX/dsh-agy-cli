@@ -189,6 +189,11 @@ export interface PersistentTransportLike {
     readonly idleTimeoutMs?: number
     readonly maxOutputBytes?: number
     readonly onEvent?: (payload: unknown) => void
+    readonly agent?: string
+    readonly model?: string
+    readonly reasoningEffort?: AgyReasoningEffort
+    readonly conversation?: string
+    readonly extraArgs?: readonly string[]
   }): Promise<PersistentTransportResult>
 }
 
@@ -961,6 +966,15 @@ function purposeRouteFor(
  * strict path: losing the start of the user's own message silently is worse than
  * a clean AGY_INPUT_TOO_LARGE.
  */
+/**
+ * Per-request argv tail for a persistent worker. `--disable-slash-commands` is
+ * fixed in the transport args (it never varies), while `--mode` travels with
+ * the route so a worker spawned for a preset keeps its bounded mode.
+ */
+function persistentExtraArgsOf(mode: AgyExecutionMode | undefined): readonly string[] {
+  return mode === undefined ? [] : ['--mode', mode]
+}
+
 function isSideChannelRequest(
   toolProtocol: StructuredToolProtocol | undefined,
   toolSchemaCount: number,
@@ -1110,17 +1124,17 @@ export class AgyAdapter extends LlmAdapter {
         ...(dependencies.runModelDiscovery === undefined ? {} : { runCommand: dependencies.runModelDiscovery }),
       })
     // Persistent transport is opt-in; one-shot remains default. It is created only when transport:persistent.
-    // Session-affine: one AGY stream-json worker per DSH session, single active turn.
+    // Route args (--agent/--model/--effort/--conversation) are NOT fixed here:
+    // AGY reads them at process start, and the route varies per request (the
+    // user can switch model inside one session). Each request supplies its own
+    // route and the pool keys workers by it. See PersistentTransportRequest.
     this.persistentTransport = this.transport !== 'persistent' ? undefined : (dependencies.persistentTransport ?? new ExperimentalAgyTransport({
       executable: resolveAgyExecutable(this.agyPath),
       args: [
         '-p', '',
         '--input-format', 'stream-json',
         '--output-format', 'stream-json',
-        '--agent', this.agent,
-        '--model', this.model,
         // workspaceRoot is cwd for persistent worker, not an arg
-        ...(this.mode === undefined ? [] : ['--mode', this.mode]),
         ...(this.disableSlashCommands ? ['--disable-slash-commands'] : []),
       ],
       ...(this.workspaceRoot === undefined ? {} : { cwd: this.workspaceRoot }),
@@ -1310,7 +1324,8 @@ export class AgyAdapter extends LlmAdapter {
       throw new DshContextError(DSH_CONTEXT_UNAVAILABLE_CODE)
     }
     telemetry.processAttemptCount += 1
-    const hasConversation = this.sessions.get(sessionKey)?.conversationId !== undefined
+    const mappedConversationId = this.sessions.get(sessionKey)?.conversationId
+    const hasConversation = mappedConversationId !== undefined
     const basePrompt = hasConversation
       ? (prepared.turnPrompt ?? serializeAgyTurnPrompt(options))
       : prepared.fullPrompt
@@ -1327,6 +1342,17 @@ export class AgyAdapter extends LlmAdapter {
     const requestPromise = this.persistentTransport!.request({
       sessionId: sessionKey,
       text: prompt,
+      // The worker is seeded with the conversation, so an incremental prompt
+      // can never land in a fresh AGY conversation. A worker that comes up
+      // with a different id rejects the request instead of answering without
+      // context, and the caller resends the full DSH history.
+      ...(hasConversation ? { conversation: mappedConversationId } : {}),
+      agent: route.agent,
+      model: route.model,
+      ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
+      ...(persistentExtraArgsOf(this.mode).length === 0
+        ? {}
+        : { extraArgs: persistentExtraArgsOf(this.mode) }),
       timeoutMs: this.timeoutMs,
       idleTimeoutMs: this.idleTimeoutMs,
       maxOutputBytes: this.maxOutputBytes,
@@ -1651,6 +1677,7 @@ export class AgyAdapter extends LlmAdapter {
       cumulativeUsage: undefined,
       cacheHit: undefined,
       cacheTokenShare: undefined,
+      conversationMismatch: undefined,
       stablePrefixBytes: undefined,
       stablePrefixHash: undefined,
       toolSchemaHash: undefined,
@@ -1757,8 +1784,21 @@ export class AgyAdapter extends LlmAdapter {
               if (persistentProtocolRepairReason !== undefined) telemetry.protocolRepairReason = persistentProtocolRepairReason
               continue
             }
-            const beforeAccept = error instanceof Error && (error as any).code !== undefined
-              ? ['WORKER_START_FAILED','WORKER_LIMIT','DISPOSED','ABORTED','WORKER_STOPPED'].includes((error as any).code)
+            const errorCode = error instanceof Error && (error as any).code !== undefined
+              ? String((error as any).code)
+              : undefined
+            if (errorCode === 'CONVERSATION_MISMATCH') {
+              // The stored AGY conversation is not the one a fresh worker came
+              // up with (stale id, evicted conversation, different route).
+              // This is raised at worker start, before any delta, so dropping the
+              // binding and falling through to the full-history one-shot turn
+              // costs one resend and cannot truncate a visible answer.
+              if (sessionKey !== undefined) this.sessions.delete(sessionKey)
+              telemetry.conversationMismatch = true
+              break
+            }
+            const beforeAccept = errorCode !== undefined
+              ? ['WORKER_START_FAILED','WORKER_LIMIT','DISPOSED','ABORTED','WORKER_STOPPED'].includes(errorCode)
               : false
             if (this.persistentFallback === 'before-accept' && beforeAccept) {
               // fallback to one-shot, keep telemetry for retry
@@ -1772,6 +1812,14 @@ export class AgyAdapter extends LlmAdapter {
       let requestedConversationId = sessionKey === undefined || this.sessionMode === 'full'
         ? undefined
         : this.sessions.get(sessionKey)?.conversationId
+
+      if (telemetry.conversationMismatch === true) {
+        // A persistent worker could not continue the stored conversation; the
+        // binding is already dropped, so this turn runs one-shot from the full
+        // DSH history. Mark the mode so telemetry shows why it was resent.
+        telemetry.requestMode = 'full-fallback'
+        requestedConversationId = undefined
+      }
 
       let protocolRepairAttempts = 0
       let protocolRepair = false

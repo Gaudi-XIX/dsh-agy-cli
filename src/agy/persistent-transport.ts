@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { encodeAgyUserMessage } from './stream-protocol.js'
 import { AgyStreamParser } from './parser.js'
 import { buildWindowsNoConsoleLaunch } from './windows-launcher.js'
+import { isAgyReasoningEffort, type AgyReasoningEffort } from './process.js'
 
 export type PersistentTransportErrorCode =
   | 'ABORTED'
@@ -25,6 +26,7 @@ export type PersistentTransportErrorCode =
   | 'WORKER_START_FAILED'
   | 'WORKER_STOPPED'
   | 'OUTPUT_LIMIT'
+  | 'CONVERSATION_MISMATCH'
 
 export class PersistentTransportError extends Error {
   constructor(
@@ -67,6 +69,26 @@ export interface PersistentTransportRequest {
   readonly idleTimeoutMs?: number
   readonly maxOutputBytes?: number
   readonly onEvent?: (payload: unknown) => void
+  /**
+   * Route for a *newly spawned* worker. AGY takes --agent/--model/--effort at
+   * process start, so a worker cannot answer a turn for a different model than
+   * the one it was launched with. These values therefore also key the worker
+   * pool: a request whose route differs from the live worker's gets its own
+   * process instead of silently answering with the wrong model.
+   */
+  readonly agent?: string
+  readonly model?: string
+  readonly reasoningEffort?: AgyReasoningEffort
+  /**
+   * Existing AGY conversation this worker must continue. A freshly spawned
+   * worker is launched with `--conversation <id>`; if AGY answers with a
+   * different conversation_id the request fails with CONVERSATION_MISMATCH
+   * before any delta is emitted, so the caller can fall back to full history
+   * instead of silently answering without context.
+   */
+  readonly conversation?: string
+  /** Extra argv appended after the route args (mode, slash-command switches). */
+  readonly extraArgs?: readonly string[]
 }
 
 export interface PersistentTransportResult {
@@ -187,6 +209,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8')
+}
+
+/**
+ * Route args for one worker. AGY reads --agent/--model/--effort/--conversation
+ * once at process start, so these must be known before spawning; the rest of
+ * the argv comes from the transport options.
+ */
+function routeArgs(input: PersistentTransportRequest): string[] {
+  if (input.reasoningEffort !== undefined && !isAgyReasoningEffort(input.reasoningEffort)) {
+    throw new TypeError('Persistent AGY reasoning effort must be one of: low, medium, high')
+  }
+  return [
+    ...(input.agent === undefined ? [] : ['--agent', input.agent]),
+    ...(input.model === undefined ? [] : ['--model', input.model]),
+    ...(input.conversation === undefined ? [] : ['--conversation', input.conversation]),
+    ...(input.reasoningEffort === undefined ? [] : ['--effort', input.reasoningEffort]),
+    ...(input.extraArgs ?? []),
+  ]
+}
+
+/**
+ * Worker pool key. The session alone is not enough: a session that switches
+ * model, or that must continue a different AGY conversation, needs its own
+ * process. See PersistentTransportRequest.agent/model/reasoningEffort.
+ */
+function workerKeyOf(input: PersistentTransportRequest): string {
+  const route = [
+    input.agent ?? '',
+    input.model ?? '',
+    input.reasoningEffort ?? '',
+    input.conversation ?? '',
+    (input.extraArgs ?? []).join('\u0000'),
+  ].join('\u0001')
+  return `${input.sessionId}\u0002${route}`
 }
 
 /** Encode one bounded NDJSON frame, including its trailing newline. */
@@ -316,6 +372,11 @@ function errorFromUnknown(
 class PersistentAgyWorker {
   private readonly options: NormalizedOptions
   private readonly sessionId: string
+  private readonly workerKey: string
+  /** Route args fixed at spawn time; a different route needs a new process. */
+  private readonly routeArgs: readonly string[]
+  /** Conversation this worker was asked to continue, if any. */
+  private readonly seedConversation: string | undefined
   private readonly onStopped: (worker: PersistentAgyWorker) => void
   private state: PersistentWorkerState = 'starting'
   private child: ChildProcessWithoutNullStreams | undefined
@@ -335,12 +396,27 @@ class PersistentAgyWorker {
 
   constructor(
     sessionId: string,
+    workerKey: string,
+    input: PersistentTransportRequest,
     options: NormalizedOptions,
     onStopped: (worker: PersistentAgyWorker) => void,
   ) {
     this.sessionId = sessionId
+    this.workerKey = workerKey
+    this.routeArgs = routeArgs(input)
+    this.seedConversation = input.conversation
     this.options = options
     this.onStopped = onStopped
+  }
+
+  /** The pool key this worker was created for; see workerKeyOf(). */
+  getWorkerKey(): string {
+    return this.workerKey
+  }
+
+  /** True when this worker already exists and can serve the given route. */
+  matchesRoute(input: PersistentTransportRequest): boolean {
+    return workerKeyOf(input) === this.workerKey
   }
 
   getState(): PersistentWorkerState {
@@ -474,9 +550,10 @@ class PersistentAgyWorker {
       this.readyReject = reject
     })
     try {
+      const args = [...this.options.args, ...this.routeArgs]
       const launch = process.platform === 'win32'
-        ? buildWindowsNoConsoleLaunch(this.options.executable, this.options.args)
-        : { executable: this.options.executable, args: this.options.args }
+        ? buildWindowsNoConsoleLaunch(this.options.executable, args)
+        : { executable: this.options.executable, args }
       const child = spawn(launch.executable, [...launch.args], {
         cwd: this.options.cwd,
         env: {
@@ -598,6 +675,16 @@ class PersistentAgyWorker {
     if (event === 'init') {
       const convId = typeof raw.conversation_id === 'string' ? raw.conversation_id : undefined
       if (convId !== undefined) this.conversationId = convId
+      // A worker asked to continue conversation X that comes up as Y would
+      // answer the turn with no history at all while looking healthy. Fail the
+      // request before any delta so the caller can resend full history.
+      if (this.seedConversation !== undefined && convId !== undefined && convId !== this.seedConversation) {
+        this.rejectReady(new PersistentTransportError(
+          `Persistent AGY worker was asked to continue conversation ${this.seedConversation} but started ${convId}`,
+          'CONVERSATION_MISMATCH',
+        ))
+        return
+      }
       this.resolveReady()
       return
     }
@@ -800,8 +887,9 @@ class PersistentAgyWorker {
 }
 
 /**
- * Experimental worker-per-session transport. It is intentionally not wired
- * into AgyAdapter; callers must opt into this prototype directly.
+ * Worker-per-route persistent transport. One AGY process per (session, route);
+ * the worker holds a single active turn and is keyed by the route because AGY
+ * fixes --agent/--model/--effort at process start.
  */
 export class ExperimentalAgyTransport {
   private readonly options: NormalizedOptions
@@ -819,9 +907,10 @@ export class ExperimentalAgyTransport {
     if (input.sessionId.trim().length === 0) {
       throw new RangeError('sessionId must not be empty')
     }
-    let worker = this.workers.get(input.sessionId)
+    const key = workerKeyOf(input)
+    let worker = this.workers.get(key)
     if (worker?.getState() === 'stopped') {
-      this.workers.delete(input.sessionId)
+      this.workers.delete(key)
       worker = undefined
     }
     if (worker === undefined) {
@@ -831,15 +920,15 @@ export class ExperimentalAgyTransport {
           'WORKER_LIMIT',
         )
       }
-      worker = new PersistentAgyWorker(input.sessionId, this.options, stoppedWorker => {
-        if (this.workers.get(input.sessionId) === stoppedWorker) this.workers.delete(input.sessionId)
+      worker = new PersistentAgyWorker(input.sessionId, key, input, this.options, stoppedWorker => {
+        if (this.workers.get(key) === stoppedWorker) this.workers.delete(key)
       })
-      this.workers.set(input.sessionId, worker)
+      this.workers.set(key, worker)
     }
     try {
       return await worker.request(input)
     } catch (error) {
-      if (worker.getState() === 'stopped') this.workers.delete(input.sessionId)
+      if (worker.getState() === 'stopped') this.workers.delete(key)
       throw error
     }
   }
