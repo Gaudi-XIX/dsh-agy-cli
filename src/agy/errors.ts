@@ -11,6 +11,7 @@ export type AgyClassifiedErrorCode =
   | 'AGY_AGENT_MISSING'
   | 'AGY_STATUS'
   | 'AGY_EXIT'
+  | 'TRANSPORT'
 
 /**
  * Classify observed AGY status/stderr/error-event detail. This is deliberately
@@ -26,6 +27,14 @@ export function classifyAgyFailure(detail: string, fallback: string): string {
     return QUOTA_EXCEEDED_CODE
   }
   if (/(?:rate\s*limit|too\s+many\s+requests|throttl|\b429\b)/i.test(value)) return 'RATE_LIMIT'
+  // Transport-layer flakes: the local proxy or the upstream edge cuts the
+  // connection mid-request. AGY itself labels these `"retryable": true` in its
+  // AGY_ERROR trailer; honoring that keeps a transient blip from killing the
+  // whole turn (observed: `wsarecv`/`EOF` against 127.0.0.1:12450 on exit 3).
+  if (/"retryable"\s*:\s*true/i.test(value)) return 'TRANSPORT'
+  if (/\bEOF\b|wsarecv|forcibly\s+closed|connection\s+(?:reset|aborted|closed)|broken\s+pipe|EPIPE|ECONNRESET/i.test(value)) {
+    return 'TRANSPORT'
+  }
   if (/(?:model|deployment).{0,48}(?:not\s+found|unknown|invalid|unavailable|does\s+not\s+exist)|no\s+such\s+model/i.test(value)) {
     return 'MODEL_NOT_FOUND'
   }

@@ -1999,6 +1999,15 @@ export class AgyAdapter extends LlmAdapter {
           finalStatus = statusOf(event)
           telemetry.finalStatus = finalStatus
           resultUsage = usageOf(event)
+          // The `result` event can carry AGY's own failure detail under
+          // `error` (e.g. its AGY_ERROR trailer with `"retryable": true`).
+          // Without this, `finalErrorDetail` stays empty and a failed turn
+          // degrades to the detail-less `AGY returned status ERROR: ERROR`.
+          if (finalErrorDetail === undefined) {
+            const resultRecord = event.event === 'result' && isRecord(event.result) ? event.result : undefined
+            const resultError = typeof resultRecord?.error === 'string' ? (resultRecord.error as string) : undefined
+            if (resultError !== undefined && resultError.trim().length > 0) finalErrorDetail = resultError
+          }
         }
         const usage = usageOf(event)
         if (usage !== undefined && event.event === 'step_update') latestStepUsage = usage

@@ -32,6 +32,9 @@ test('classifyAgyFailure maps authentication, quota, model, and context details'
     ['agent deepseek-proxy not found', 'AGY_AGENT_MISSING'],
     ['context window exceeded', 'CONTEXT_WINDOW_EXCEEDED'],
     ['unclassified provider failure', 'AGY_EXIT'],
+    ['request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF', 'TRANSPORT'],
+    ['read tcp 127.0.0.1:4891->127.0.0.1:12450: wsarecv: An existing connection was forcibly closed by the remote host.', 'TRANSPORT'],
+    ['AGY_ERROR: {"short_error":"request failed","retryable":true}', 'TRANSPORT'],
   ]
   for (const [detail, expected] of cases) assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), expected)
 })
@@ -81,6 +84,44 @@ test('AgyAdapter maps status and stderr details without exposing raw classificat
   )
   assert.equal(logs.at(-1)?.errorCode, 'MODEL_NOT_FOUND')
   assert.equal(Object.hasOwn(logs.at(-1) ?? {}, 'stderr'), false)
+})
+
+test('AgyAdapter classifies a result-carried AGY_ERROR trailer as a retryable transport flake', async () => {
+  // Real shape from session-efbe73bb turn 9: AGY puts the proxy-cut reason
+  // under result.error, self-labelled retryable. When the process exits 3
+  // with that text on stderr, processFailure classifies it first; this case
+  // pins the result-event path (exit 0, status ERROR, reason under result.error).
+  const adapter = new AgyAdapter({}, {
+    runAgyProcess: async requestValue => {
+      requestValue.onStdoutLine?.(JSON.stringify({
+        event: 'result',
+        result: {
+          status: 'ERROR',
+          error: 'error: API error (attempt 1): request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF\nAGY_ERROR: {"short_error":"API error (attempt 1): request failed","retryable":true,"error_id":"458a609b-3"}',
+        },
+      }))
+      return processResult('', 0)
+    },
+  })
+  await assert.rejects(
+    async () => {
+      for await (const _chunk of adapter.stream(request())) {}
+    },
+    error => error.code === 'TRANSPORT',
+  )
+})
+
+test('AgyAdapter classifies exit-3 stderr with a proxy-cut reason as a retryable transport flake', async () => {
+  // session-efbe73bb turn 10: read tcp ->127.0.0.1:12450 wsarecv forcibly closed.
+  const adapter = new AgyAdapter({}, {
+    runAgyProcess: async () => processResult('error: API error (attempt 1): request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 127.0.0.1:4891->127.0.0.1:12450: wsarecv: An existing connection was forcibly closed by the remote host.\n', 3),
+  })
+  await assert.rejects(
+    async () => {
+      for await (const _chunk of adapter.stream(request())) {}
+    },
+    error => error.code === 'TRANSPORT',
+  )
 })
 
 test('AgyAdapter keeps process, parser, status, and empty-response codes stable', async () => {
