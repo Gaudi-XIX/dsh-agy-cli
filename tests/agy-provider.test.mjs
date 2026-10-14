@@ -2078,7 +2078,12 @@ test('AgyAdapter maps a DSH Session to --conversation and sends only the new tur
   assert.equal(adapter.getSession(sessionId), undefined)
 })
 
-test('AgyAdapter clears a resumed AGY conversation after a one-shot timeout', async () => {
+// AGY keeps a conversation on disk even when its process was killed mid-answer,
+// and resuming it still works. Deleting the binding here threw away a usable
+// conversation, which is what kept a large session permanently in the
+// full-history bootstrap shape (bootstrap -> TIMEOUT -> binding erased -> the
+// next turn is a bootstrap again, at the input limit).
+test('AgyAdapter keeps a resumed AGY conversation after a one-shot timeout', async () => {
   const sessionId = 'session-timeout'
   const timeoutResult = { ...result(), termination: 'timeout' }
   const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
@@ -2091,7 +2096,7 @@ test('AgyAdapter clears a resumed AGY conversation after a one-shot timeout', as
   await assert.rejects((async () => {
     for await (const _chunk of adapter.stream({ ...request, sessionId })) {}
   })(), error => error.code === 'TIMEOUT')
-  assert.equal(adapter.getSession(sessionId), undefined)
+  assert.equal(adapter.getSession(sessionId)?.conversationId, 'conversation-partial')
 })
 
 test('AgyAdapter retries with full DSH history when AGY resumes a different conversation', async () => {

@@ -1781,10 +1781,6 @@ export class AgyAdapter extends LlmAdapter {
     } catch (error) {
       telemetry.processDiagnostic = agyProcessDiagnosticOf(error)
       const mapped = asLlmError(error)
-      // A timed-out AGY conversation may have emitted an init/step event before
-      // its process tree was killed. Do not let DSH retry against that partial
-      // conversation; the next attempt must use the complete DSH history.
-      if (mapped.code === 'TIMEOUT' && sessionKey !== undefined) this.sessions.delete(sessionKey)
       telemetry.bridgeOutcome = bridgeOutcomeForError(mapped.code, telemetry.bridgeOutcome)
       telemetry.durationMs = Date.now() - telemetry.startedAt
       emitAgyLog(this.logger, buildAgyLogRecord(telemetry, 'agy.request.failed', mapped.code))
