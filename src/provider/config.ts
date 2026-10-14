@@ -47,6 +47,13 @@ export interface Config {
   agyPath?: string
   /** Hard upper bound for one AGY child process. */
   timeoutMs?: number
+  /**
+   * Inactivity budget for one AGY child process: killed when no stdout/stderr
+   * line arrives for this long. Re-armed on every line, so a turn that keeps
+   * producing output is never cut off by `timeoutMs`. Omitted means only the
+   * wall-clock ceiling applies.
+   */
+  idleTimeoutMs?: number
   /** `full` sends DSH history; `resume` reuses an AGY conversation. */
   sessionMode?: 'resume' | 'full'
   /**
@@ -231,7 +238,8 @@ export function createConfigSchema(defaults: {
     agentPreset: z.union(AGENT_PRESET_IDS).description('Optional agent preset'),
     workspaceRoot: z.string().pattern(/^\S(?:.*\S)?$/).description('Deprecated: use DSH session workspace').deprecated().hidden(),
     agyPath: z.string().default('').description('AGY executable path').hidden(),
-    timeoutMs: z.number().min(1).max(3_600_000).default(120_000).description('Per-request timeout ms').hidden(),
+    timeoutMs: z.number().min(1).max(3_600_000).default(120_000).description('Wall-clock ceiling per request ms').hidden(),
+    idleTimeoutMs: z.number().min(1).max(3_600_000).default(600_000).description('Inactivity budget per request ms; re-armed on every output line').hidden(),
     sessionMode: z.union(['resume', 'full'] as const).default('full').description('Session mode'),
     sessionStorePath: z.string().default('').description('Durable sessionId to conversationId map path; empty uses DSH_HOME/agy-provider/sessions.json'),
     minimumAgyVersion: z.string().pattern(/^\d+\.\d+\.\d+$/).default('1.1.15').description('Minimum AGY version').hidden(),
@@ -282,7 +290,8 @@ export function createConfigSchema(defaults: {
       agentPreset: { $description: '代理能力预设' },
       workspaceRoot: { $description: '已废弃：请使用 DSH 会话的项目目录，无需手动配置' },
       agyPath: { $description: 'AGY 可执行文件路径，空则自动发现' },
-      timeoutMs: { $description: '单次请求超时（毫秒）' },
+      timeoutMs: { $description: '单次请求的墙上时钟上限（毫秒）' },
+      idleTimeoutMs: { $description: '单次请求的无输出静默预算（毫秒）；每有一行输出即重新计时' },
       sessionMode: { $description: '会话模式：full=每轮完整历史, resume=复用 AGY 会话' },
       sessionStorePath: { $description: '会话映射（DSH 会话→AGY 对话）的落盘路径；留空用 DSH_HOME/agy-provider/sessions.json，让 resume 模式在宿主重启后仍能续话' },
       minimumAgyVersion: { $description: '最低允许的 AGY 版本' },
@@ -317,7 +326,8 @@ export function createConfigSchema(defaults: {
       agentPreset: { $description: 'Agent capability preset' },
       workspaceRoot: { $description: 'Deprecated: uses DSH session workspace, no manual path needed' },
       agyPath: { $description: 'AGY executable path, empty auto-discovers' },
-      timeoutMs: { $description: 'Per-request timeout (ms)' },
+      timeoutMs: { $description: 'Per-request wall-clock ceiling (ms)' },
+      idleTimeoutMs: { $description: 'Per-request inactivity budget (ms); re-armed on every output line' },
       sessionMode: { $description: 'Session mode: full or resume' },
       sessionStorePath: { $description: 'Path of the durable DSH session to AGY conversation map; empty uses DSH_HOME/agy-provider/sessions.json so resume keeps working after a host restart' },
       minimumAgyVersion: { $description: 'Minimum AGY version' },

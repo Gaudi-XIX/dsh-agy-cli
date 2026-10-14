@@ -6,7 +6,10 @@ import { redactText } from './redact.js'
 import { AgyStreamProtocolError, encodeAgyUserMessage } from './stream-protocol.js'
 import { buildWindowsNoConsoleLaunch } from './windows-launcher.js'
 
-export type ProcessTermination = 'completed' | 'non-zero' | 'signaled' | 'aborted' | 'timeout' | 'output-limit'
+export type ProcessTermination = 'completed' | 'non-zero' | 'signaled' | 'aborted' | 'timeout' | 'idle-timeout' | 'output-limit'
+/** Maps a termination to the code the retry classifier sees, so a silence kill
+ * and a wall-clock kill are distinguishable in telemetry without changing the
+ * DSH-facing code (`TIMEOUT` either way). */
 
 export const AGY_REASONING_EFFORTS = ['low', 'medium', 'high'] as const
 export type AgyReasoningEffort = typeof AGY_REASONING_EFFORTS[number]
@@ -154,7 +157,15 @@ export interface ProcessRequest {
   stdin?: string
   cwd?: string
   env?: NodeJS.ProcessEnv
+  /** Hard wall-clock ceiling for the whole run. Omitted means unbounded. */
   timeoutMs?: number
+  /**
+   * Inactivity budget: the run is killed when no stdout/stderr line arrives for
+   * this long. Re-armed on every delivered line, so a turn that keeps producing
+   * output can run past `timeoutMs` without being cut off. Omitted means only
+   * the wall-clock ceiling applies.
+   */
+  idleTimeoutMs?: number
   /** Maximum captured stdout bytes; omitted means unlimited. */
   maxStdoutBytes?: number
   /** Maximum captured stderr bytes; omitted means unlimited. */
@@ -173,6 +184,8 @@ export interface ProcessResult {
   stdoutLines: readonly string[]
   stderr: string
   durationMs: number
+  /** Epoch ms of the last stdout/stderr chunk; used to report an idle kill. */
+  lastOutputAtMs?: number
 }
 
 export interface AgyRequest extends Omit<ProcessRequest, 'executable' | 'args'> {
@@ -367,6 +380,7 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
     let outputHandlerDiagnostic: AgyProcessDiagnostic | undefined
     let inputError: unknown
     let settled = false
+    let lastOutputAtMs = startedAt
 
     const deliver = (line: string): void => {
       stdoutLines.push(line)
@@ -402,10 +416,28 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
     const timeout = request.timeoutMs !== undefined && request.timeoutMs > 0
       ? setTimeout(() => kill('timeout'), request.timeoutMs)
       : undefined
+    // Idle watchdog: re-armed on every stdout/stderr chunk, so long reasoning
+    // or a long tool step is not mistaken for a hung process. A turn that keeps
+    // producing output outlives `timeoutMs`; only real silence trips it.
+    const idleBudgetMs = request.idleTimeoutMs !== undefined && request.idleTimeoutMs > 0
+      ? request.idleTimeoutMs
+      : undefined
+    let idle: ReturnType<typeof setTimeout> | undefined
+    const armIdle = (): void => {
+      if (idleBudgetMs === undefined || settled) return
+      if (idle !== undefined) clearTimeout(idle)
+      idle = setTimeout(() => kill('idle-timeout'), idleBudgetMs)
+    }
+    armIdle()
+    // AGY's own headless default is an unbounded turn, and its `--print-timeout`
+    // is passed separately; a fixed wall clock would cut off a healthy turn, so
+    // it is opt-in via `timeoutMs` and never implied by the idle budget.
 
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
+      armIdle()
+      lastOutputAtMs = Date.now()
       stdoutBytes += byteLength(chunk)
       if (request.maxStdoutBytes !== undefined && stdoutBytes > request.maxStdoutBytes) {
         termination = 'output-limit'
@@ -419,6 +451,8 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
       if (termination !== 'output-limit') flushStdout(true)
     })
     child.stderr.on('data', (chunk: string) => {
+      armIdle()
+      lastOutputAtMs = Date.now()
       stderrBytes += byteLength(chunk)
       if (request.maxStderrBytes !== undefined && stderrBytes > request.maxStderrBytes) {
         termination = 'output-limit'
@@ -438,6 +472,7 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
       if (settled) return
       settled = true
       if (timeout !== undefined) clearTimeout(timeout)
+      if (idle !== undefined) clearTimeout(idle)
       request.signal?.removeEventListener('abort', abortListener)
       rejectResult(new AgyProcessError(
         `Unable to start AGY executable (${error.code ?? 'unknown'})${diagnosticLabel(processDiagnosticFor(error, 'spawn'))}`,
@@ -450,6 +485,7 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
       if (settled) return
       settled = true
       if (timeout !== undefined) clearTimeout(timeout)
+      if (idle !== undefined) clearTimeout(idle)
       request.signal?.removeEventListener('abort', abortListener)
       if (termination !== 'output-limit') flushStdout(true)
       if (outputHandlerError !== undefined) {
@@ -486,6 +522,7 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
         stdoutLines,
         stderr,
         durationMs: Date.now() - startedAt,
+        lastOutputAtMs,
       })
     })
     child.stdin.end(request.stdin)

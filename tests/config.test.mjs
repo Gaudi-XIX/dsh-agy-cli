@@ -178,6 +178,8 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     workspaceRoot: 'C:\\workspace',
     agyPath: '',
     timeoutMs: 120_000,
+    // Inactivity budget re-armed per output line; only real silence trips it.
+    idleTimeoutMs: 600_000,
     sessionMode: 'full',
     // Durable sessionId -> conversationId map; '' means <DSH_HOME>/agy-provider/sessions.json
     sessionStorePath: '',

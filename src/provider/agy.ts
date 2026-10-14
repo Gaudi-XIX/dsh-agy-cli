@@ -542,6 +542,13 @@ function abortError(): LlmError {
   return new LlmError('AGY request aborted by caller', 'ABORTED')
 }
 
+function idleTimeoutMsOf(result: ProcessResult): number | undefined {
+  // The process layer owns the budget; the adapter only knows the elapsed time
+  // between the last delivered line and the kill, which is what the message
+  // reports so the operator sees the threshold that actually fired.
+  const lastLineAt = numberValue(result.lastOutputAtMs)
+  return lastLineAt === undefined ? undefined : Math.max(0, Date.now() - lastLineAt)
+}
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
@@ -638,7 +645,13 @@ function asLlmError(error: unknown): LlmError {
 function processFailure(result: ProcessResult): LlmError | undefined {
   if (result.termination === 'aborted') return abortError()
   if (result.termination === 'timeout') {
-    return new LlmError('AGY request exceeded the configured timeout', 'TIMEOUT')
+    return new LlmError('AGY request exceeded the configured wall-clock timeout', 'TIMEOUT')
+  }
+  if (result.termination === 'idle-timeout') {
+    return new LlmError(
+      `AGY produced no output for ${idleTimeoutMsOf(result) ?? 'the configured'} ms`,
+      'TIMEOUT',
+    )
   }
   if (result.termination === 'output-limit') {
     return new LlmError('AGY output exceeded the configured capture limit', 'AGY_OUTPUT_LIMIT')
@@ -941,6 +954,7 @@ export class AgyAdapter extends LlmAdapter {
   private readonly dshContext: DshContextLookup | undefined
   private readonly agyPath: string | undefined
   private readonly timeoutMs: number
+  private readonly idleTimeoutMs: number
   private readonly run: AgyProcessRunner
   private readonly sessionMode: 'resume' | 'full'
   private readonly sessions: SessionRegistry
@@ -991,6 +1005,7 @@ export class AgyAdapter extends LlmAdapter {
     this.mcpBridgeEnabled = config.mcpBridge !== false
     this.agyPath = config.agyPath?.trim() === '' ? undefined : config.agyPath?.trim()
     this.timeoutMs = config.timeoutMs ?? 120_000
+    this.idleTimeoutMs = config.idleTimeoutMs ?? 600_000
     this.run = dependencies.runAgyProcess ?? runAgyProcess
     this.sessionMode = config.sessionMode === 'resume' ? 'resume' : 'full'
     this.sessions = dependencies.sessionRegistry ?? new SessionRegistry()
@@ -1277,6 +1292,7 @@ export class AgyAdapter extends LlmAdapter {
       sessionId: sessionKey,
       text: prompt,
       timeoutMs: this.timeoutMs,
+      idleTimeoutMs: this.idleTimeoutMs,
       maxOutputBytes: this.maxOutputBytes,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
@@ -1842,6 +1858,7 @@ export class AgyAdapter extends LlmAdapter {
       agent: imageRuntime?.agent ?? route.agent,
       model: route.model,
       timeoutMs: this.timeoutMs,
+      idleTimeoutMs: this.idleTimeoutMs,
       maxStdoutBytes: this.maxOutputBytes,
       maxStderrBytes: this.maxOutputBytes,
       maxInputFrameBytes: this.inputFrameLimitBytes,

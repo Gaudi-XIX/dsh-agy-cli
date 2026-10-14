@@ -63,6 +63,8 @@ export interface PersistentTransportRequest {
   readonly text: string
   readonly signal?: AbortSignal
   readonly timeoutMs?: number
+  /** Inactivity budget re-armed on every received frame; omitted uses timeoutMs. */
+  readonly idleTimeoutMs?: number
   readonly maxOutputBytes?: number
   readonly onEvent?: (payload: unknown) => void
 }
@@ -128,6 +130,9 @@ interface ActiveRequest {
   outputBytes: number
   firstEventAt: number | undefined
   timer: ReturnType<typeof setTimeout> | undefined
+  idleTimer: ReturnType<typeof setTimeout> | undefined
+  /** Inactivity budget of the request currently owning this slot. */
+  idleTimeoutMs: number | undefined
   abortListener: (() => void) | undefined
 }
 
@@ -367,6 +372,8 @@ class PersistentAgyWorker {
     }
     const timeoutMs = input.timeoutMs ?? this.options.defaultRequestTimeoutMs
     validateInteger('timeoutMs', timeoutMs, 1, 3_600_000)
+    const idleTimeoutMs = input.idleTimeoutMs ?? timeoutMs
+    validateInteger('idleTimeoutMs', idleTimeoutMs, 1, 3_600_000)
     const maxOutputBytes = Math.min(
       input.maxOutputBytes ?? this.options.maxOutputBytes,
       this.options.maxOutputBytes,
@@ -389,6 +396,8 @@ class PersistentAgyWorker {
         outputBytes: 0,
         firstEventAt: undefined,
         timer: undefined,
+        idleTimer: undefined,
+        idleTimeoutMs,
         abortListener: undefined,
       }
       this.active = active
@@ -396,9 +405,13 @@ class PersistentAgyWorker {
         new PersistentTransportError('Persistent AGY request aborted', 'ABORTED'),
       )
       input.signal?.addEventListener('abort', active.abortListener, { once: true })
-      active.timer = setTimeout(() => this.failActiveAndReset(
-        new PersistentTransportError('Persistent AGY request exceeded its timeout', 'TIMEOUT'),
+      // Two independent clocks: the wall clock is a hard ceiling, the idle clock
+      // is re-armed by every frame so a long thinking or tool pause is not a kill.
+      const wallClock = setTimeout(() => this.failActiveAndReset(
+        new PersistentTransportError('Persistent AGY request exceeded its wall-clock timeout', 'TIMEOUT'),
       ), timeoutMs)
+      active.timer = wallClock
+      this.touchActive(active)
       void this.sendRequest(active, input.text)
     })
   }
@@ -610,6 +623,8 @@ class PersistentAgyWorker {
       ))
       return
     }
+    // A line arrived: the worker is alive, so the inactivity clock restarts.
+    this.touchActive(active)
     // Verify conversation_id correlation when present
     const resultConv = (raw.result as Record<string, unknown> | undefined)?.conversation_id
       ?? (raw.step_update as Record<string, unknown> | undefined)?.conversation_id
@@ -731,8 +746,22 @@ class PersistentAgyWorker {
 
   private clearActive(active: ActiveRequest): void {
     if (active.timer !== undefined) clearTimeout(active.timer)
+    if (active.idleTimer !== undefined) clearTimeout(active.idleTimer)
     if (active.abortListener !== undefined) active.signal?.removeEventListener('abort', active.abortListener)
     active.abortListener = undefined
+  }
+
+  /** Re-arm the inactivity clock; every frame proves the worker is alive. */
+  private touchActive(active: ActiveRequest): void {
+    const idleTimeoutMs = active.idleTimeoutMs
+    if (idleTimeoutMs === undefined) return
+    if (active.idleTimer !== undefined) clearTimeout(active.idleTimer)
+    active.idleTimer = setTimeout(() => this.failActiveAndReset(
+      new PersistentTransportError(
+        `Persistent AGY request produced no output for ${idleTimeoutMs} ms`,
+        'TIMEOUT',
+      ),
+    ), idleTimeoutMs)
   }
 
   private failActiveAndReset(error: unknown): void {
