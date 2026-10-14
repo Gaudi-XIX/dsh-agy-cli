@@ -177,9 +177,10 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     agentPreset: 'workspace-write',
     workspaceRoot: 'C:\\workspace',
     agyPath: '',
-    timeoutMs: 120_000,
+    timeoutMs: 900_000,
     // Inactivity budget re-armed per output line; only real silence trips it.
-    idleTimeoutMs: 600_000,
+    // Must stay below timeoutMs: a wall clock that fires first makes it unreachable.
+    idleTimeoutMs: 300_000,
     sessionMode: 'full',
     // Durable sessionId -> conversationId map; '' means <DSH_HOME>/agy-provider/sessions.json
     sessionStorePath: '',

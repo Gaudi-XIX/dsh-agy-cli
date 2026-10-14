@@ -45,13 +45,19 @@ export interface Config {
   workspaceRoot?: string
   /** Explicit AGY executable path; empty means discover from environment/PATH. */
   agyPath?: string
-  /** Hard upper bound for one AGY child process. */
+  /**
+   * Backstop for one AGY child process: the ceiling on total wall time. Only a
+   * process whose output *never stops* can reach it, because the idle watchdog
+   * below decides every normal case. Omitted means no ceiling.
+   */
   timeoutMs?: number
   /**
    * Inactivity budget for one AGY child process: killed when no stdout/stderr
-   * line arrives for this long. Re-armed on every line, so a turn that keeps
-   * producing output is never cut off by `timeoutMs`. Omitted means only the
-   * wall-clock ceiling applies.
+   * line arrives for this long. Re-armed on every line, so a long reasoning
+   * step or a long tool chain is never mistaken for a hang — this is the
+   * instrument that actually fires. MUST stay below `timeoutMs`: both timers are
+   * armed inside the same process, so a wall clock that expires first makes
+   * this watchdog unreachable and every healthy long turn dies as `timeout`.
    */
   idleTimeoutMs?: number
   /** `full` sends DSH history; `resume` reuses an AGY conversation. */
@@ -238,8 +244,8 @@ export function createConfigSchema(defaults: {
     agentPreset: z.union(AGENT_PRESET_IDS).description('Optional agent preset'),
     workspaceRoot: z.string().pattern(/^\S(?:.*\S)?$/).description('Deprecated: use DSH session workspace').deprecated().hidden(),
     agyPath: z.string().default('').description('AGY executable path').hidden(),
-    timeoutMs: z.number().min(1).max(3_600_000).default(120_000).description('Wall-clock ceiling per request ms').hidden(),
-    idleTimeoutMs: z.number().min(1).max(3_600_000).default(600_000).description('Inactivity budget per request ms; re-armed on every output line').hidden(),
+    timeoutMs: z.number().min(1).max(3_600_000).default(900_000).description('Backstop wall clock per request ms; only an endless-output run can reach it').hidden(),
+    idleTimeoutMs: z.number().min(1).max(3_600_000).default(300_000).description('Inactivity budget per request ms; re-armed on every output line. Must stay below timeoutMs').hidden(),
     sessionMode: z.union(['resume', 'full'] as const).default('full').description('Session mode'),
     sessionStorePath: z.string().default('').description('Durable sessionId to conversationId map path; empty uses DSH_HOME/agy-provider/sessions.json'),
     minimumAgyVersion: z.string().pattern(/^\d+\.\d+\.\d+$/).default('1.1.15').description('Minimum AGY version').hidden(),
