@@ -20,7 +20,11 @@ import type {
   TokenUsage,
   ResolvedRetryPolicy,
 } from '@deepseek-ai/dsh-llm'
-import { ExperimentalAgyTransport, PersistentTransportError } from '../agy/persistent-transport.js'
+import {
+  ExperimentalAgyTransport,
+  PersistentTransportError,
+  type PersistentTransportResult,
+} from '../agy/persistent-transport.js'
 import {
   AgyProcessError,
   agyProcessDiagnosticOf,
@@ -155,6 +159,12 @@ export interface AgyAdapterDependencies {
   attachmentStore?: Pick<AttachmentStore, 'readImage'>
   /** Lazy resolver for runtimes that compose the optional store after this plugin. */
   resolveAttachmentStore?: () => Pick<AttachmentStore, 'readImage'> | undefined
+  /**
+   * Injectable seam for deterministic tests of the persistent path; production
+   * leaves it undefined and the transport is built from the resolved AGY
+   * executable.
+   */
+  persistentTransport?: PersistentTransportLike
   /** Optional Cordis reflection seam for the DSH-owned capability context. */
   dshContext?: DshContextLookup
   /**
@@ -163,6 +173,23 @@ export interface AgyAdapterDependencies {
    * start after this adapter is constructed.
    */
   resolveToolBridge?: () => DshToolBridgeHandle | undefined
+}
+
+/**
+ * The slice of the persistent transport the adapter needs. Declared
+ * structurally so tests can drive the streaming path without a real AGY
+ * worker process.
+ */
+export interface PersistentTransportLike {
+  request(input: {
+    readonly sessionId: string
+    readonly text: string
+    readonly signal?: AbortSignal
+    readonly timeoutMs?: number
+    readonly idleTimeoutMs?: number
+    readonly maxOutputBytes?: number
+    readonly onEvent?: (payload: unknown) => void
+  }): Promise<PersistentTransportResult>
 }
 
 /**
@@ -974,7 +1001,7 @@ export class AgyAdapter extends LlmAdapter {
   private readonly persistentIdleTtlMs: number
   private readonly persistentReadyTimeoutMs: number
   private readonly persistentFallback: PersistentFallbackMode
-  private readonly persistentTransport: ExperimentalAgyTransport | undefined
+  private readonly persistentTransport: PersistentTransportLike | undefined
   private readonly imageInput: 'off' | 'experimental'
   private readonly imageAgent: AgyAgentRuntime | undefined
   private readonly resolveAttachmentStore: () => AgyImageAttachmentStore | undefined
@@ -1004,8 +1031,8 @@ export class AgyAdapter extends LlmAdapter {
     this.resolveToolBridge = dependencies.resolveToolBridge
     this.mcpBridgeEnabled = config.mcpBridge !== false
     this.agyPath = config.agyPath?.trim() === '' ? undefined : config.agyPath?.trim()
-    this.timeoutMs = config.timeoutMs ?? 120_000
-    this.idleTimeoutMs = config.idleTimeoutMs ?? 600_000
+    this.timeoutMs = config.timeoutMs ?? 900_000
+    this.idleTimeoutMs = config.idleTimeoutMs ?? 300_000
     this.run = dependencies.runAgyProcess ?? runAgyProcess
     this.sessionMode = config.sessionMode === 'resume' ? 'resume' : 'full'
     this.sessions = dependencies.sessionRegistry ?? new SessionRegistry()
@@ -1084,7 +1111,7 @@ export class AgyAdapter extends LlmAdapter {
       })
     // Persistent transport is opt-in; one-shot remains default. It is created only when transport:persistent.
     // Session-affine: one AGY stream-json worker per DSH session, single active turn.
-    this.persistentTransport = this.transport !== 'persistent' ? undefined : new ExperimentalAgyTransport({
+    this.persistentTransport = this.transport !== 'persistent' ? undefined : (dependencies.persistentTransport ?? new ExperimentalAgyTransport({
       executable: resolveAgyExecutable(this.agyPath),
       args: [
         '-p', '',
@@ -1101,7 +1128,7 @@ export class AgyAdapter extends LlmAdapter {
       readyTimeoutMs: this.persistentReadyTimeoutMs,
       maxFrameBytes: this.inputFrameLimitBytes,
       maxWorkers: config.maxConcurrent ?? 4,
-    })
+    }))
   }
 
   private preparePrompt(
@@ -1241,17 +1268,20 @@ export class AgyAdapter extends LlmAdapter {
     dshContextSnapshot: DshContextSnapshot | undefined,
     toolSchemaCount: number,
     hasImage: boolean,
+    mcpToolsEnabled = false,
   ): boolean {
     if (this.transport !== 'persistent' || this.persistentTransport === undefined) return false
     if (sessionKey === undefined) return false
     if ((options.purpose as string) === 'compaction' || (options.purpose as string) === 'sessionTitle' || (options.purpose as string) === 'session-title') return false
-    if (this.sessionMode === 'resume') return false
     if (hasImage) return false
     // The AGY main-agent wrapper can emit send_message before a DSH-owned
     // tool turn reaches its final result. Keep these turns on one-shot so the
     // carrier can be captured and the tainted process can be terminated
     // deterministically; persistent remains available for text-only turns.
-    if (this.toolPolicy === 'dsh-owned' && toolSchemaCount > 0) return false
+    // That reasoning is specific to the prompt-embedded tool protocol: under
+    // the MCP bridge no carrier exists (the tool catalogue travels out of
+    // band), so there is nothing to capture and nothing to terminate early.
+    if (!mcpToolsEnabled && this.toolPolicy === 'dsh-owned' && toolSchemaCount > 0) return false
     if (toolSchemaCount > 0 && dshContextSnapshot?.state !== 'ready') return false
     return true
   }
@@ -1288,17 +1318,45 @@ export class AgyAdapter extends LlmAdapter {
     // Persistent worker is session-affine, single active turn, reuse AGY conversation
     telemetry.dispatch = 'persistent'
     const dispatchStartedAt = Date.now()
-    const result = await this.persistentTransport!.request({
+    // Stream-chunk shape: the host renders each delta as it arrives, so the
+    // persistent worker must be consumed with an event callback and an async
+    // queue, exactly like the one-shot path. Waiting for `request()` to resolve
+    // would buffer the whole turn and show nothing until it finished.
+    const queue = new AsyncQueue<AgyJsonEvent>()
+    let persistentRequest: Promise<PersistentTransportResult> | undefined
+    const requestPromise = this.persistentTransport!.request({
       sessionId: sessionKey,
       text: prompt,
       timeoutMs: this.timeoutMs,
       idleTimeoutMs: this.idleTimeoutMs,
       maxOutputBytes: this.maxOutputBytes,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
+      onEvent: payload => {
+        const r = payload as Record<string, unknown>
+        const ev = r.event as string | undefined
+        if (ev === 'step_update') {
+          const su = r.step_update as Record<string, unknown> | undefined
+          queue.push({
+            event: 'step_update',
+            ...(su === undefined ? {} : { step_update: su }),
+          } as AgyJsonEvent)
+        } else if (ev === 'result') {
+          const res = r.result as Record<string, unknown> | undefined
+          queue.push({
+            event: 'result',
+            ...(res === undefined ? {} : { result: res }),
+          } as AgyJsonEvent)
+        }
+      },
     })
-    telemetry.firstEventMs = result.firstEventMs
-    // Reuse one-shot event handling by feeding raw events through the same parser logic.
-    // Persistent transport returns already-parsed AGY JSON objects.
+    persistentRequest = requestPromise.then(result => {
+      telemetry.firstEventMs = result.firstEventMs
+      queue.end()
+      return result
+    }, error => {
+      queue.fail(error)
+      throw error
+    })
     let blockStarted = false
     let visibleText = ''
     let resultSeen = false
@@ -1308,108 +1366,85 @@ export class AgyAdapter extends LlmAdapter {
     let latestStepUsage: Record<string, unknown> | undefined
     let resultUsage: Record<string, unknown> | undefined
     let fallbackUsage: Record<string, unknown> | undefined
-    const queue: AgyJsonEvent[] = []
-    // Convert raw events to AgyJsonEvent via a lightweight parser
-    for (const raw of result.events) {
-      const r = raw as Record<string, unknown>
-      const ev = r.event as string | undefined
-      if (ev === 'step_update') {
-        const su = r.step_update as Record<string, unknown> | undefined
-        const event = {
-          event: 'step_update',
-          ...(su === undefined ? {} : { step_update: su }),
-        } as AgyJsonEvent
-        const usage = su?.usage as Record<string, unknown> | undefined
-        const convId = su?.conversation_id as string | undefined
-        if (convId !== undefined) {
-          telemetry.conversationId = convId
-          this.sessions.set(sessionKey, convId)
-        }
-        if (usage !== undefined) latestStepUsage = usage
-        telemetry.eventCount += 1
-        telemetry.eventCategoryCounts[eventCategoryOf(event)] += 1
-        recordToolEvent(telemetry, event)
-        const internalToolError = dshOwnedToolEventError(event, toolProtocol)
-        if (internalToolError !== undefined) throw internalToolError
-        queue.push(event)
-      } else if (ev === 'result') {
-        const res = r.result as Record<string, unknown> | undefined
-        const convId = res?.conversation_id as string | undefined
-        if (convId !== undefined) {
-          telemetry.conversationId = convId
-          this.sessions.set(sessionKey, convId)
-        }
-        finalResponse = typeof res?.response === 'string' ? res.response as string : undefined
-        finalStatus = typeof res?.status === 'string' ? res.status as string : undefined
-        finalErrorDetail = typeof res?.error === 'string' ? res.error as string : undefined
-        resultUsage = res?.usage as Record<string, unknown> | undefined
-        resultSeen = true
-        telemetry.finalStatus = finalStatus
-        const event = {
-          event: 'result',
-          ...(res === undefined ? {} : { result: res }),
-        } as AgyJsonEvent
-        queue.push(event)
-        telemetry.eventCount += 1
-        telemetry.eventCategoryCounts[eventCategoryOf(event)] += 1
-      } else if (ev === 'init') {
-        const convId = r.conversation_id as string | undefined
-        if (convId !== undefined) {
-          telemetry.conversationId = convId
-          this.sessions.set(sessionKey, convId)
-        }
-        const event = r as AgyJsonEvent
-        queue.push(event)
-        telemetry.eventCount += 1
-        telemetry.eventCategoryCounts[eventCategoryOf(event)] += 1
-      }
-    }
-    // Now yield using same logic as one-shot for toolProtocol handling
     let toolBlockIndex = 1
-    for (const event of queue) {
-      const internalToolError = dshOwnedToolEventError(event, toolProtocol)
-      if (internalToolError !== undefined) throw internalToolError
-      if (mcpToolsEnabled) {
-        const step = mcpToolStepOf(event)
-        if (step !== undefined) {
-          const state = stepStateOf(event)
-          if (state === 'DONE' || state === 'ERROR') {
-            telemetry.toolCallCount += 1
-            telemetry.bridgeOutcome = 'dsh-tool-call'
-            const callId = `agy-mcp-${telemetry.requestId}-${step.stepIndex}` as ToolCallId
-            const argumentsJson = JSON.stringify(step.arguments ?? {})
-            yield { type: 'block-start', index: toolBlockIndex, blockType: 'tool-call' }
-            yield {
-              type: 'tool-call-delta',
-              index: toolBlockIndex,
-              id: callId,
-              name: step.toolName,
-              argumentsDelta: argumentsJson,
-            }
-            yield {
-              type: 'block-end',
-              index: toolBlockIndex,
-              block: { type: 'tool-call', id: callId, name: step.toolName, arguments: argumentsJson } as ContentBlock,
-            }
-            toolBlockIndex += 1
+    try {
+      for await (const event of queue) {
+        const r = event as unknown as Record<string, unknown>
+        const ev = r.event as string | undefined
+        if (ev === 'step_update') {
+          const su = r.step_update as Record<string, unknown> | undefined
+          const usage = su?.usage as Record<string, unknown> | undefined
+          const convId = su?.conversation_id as string | undefined
+          if (convId !== undefined) {
+            telemetry.conversationId = convId
+            this.sessions.set(sessionKey, convId)
           }
-          continue
+          if (usage !== undefined) latestStepUsage = usage
+          telemetry.firstEventMs ??= Date.now() - dispatchStartedAt
+          telemetry.eventCount += 1
+          telemetry.eventCategoryCounts[eventCategoryOf(event)] += 1
+          recordToolEvent(telemetry, event)
+          const internalToolError = dshOwnedToolEventError(event, toolProtocol)
+          if (internalToolError !== undefined) throw internalToolError
+        } else if (ev === 'result') {
+          const res = r.result as Record<string, unknown> | undefined
+          const convId = res?.conversation_id as string | undefined
+          if (convId !== undefined) {
+            telemetry.conversationId = convId
+            this.sessions.set(sessionKey, convId)
+          }
+          finalResponse = typeof res?.response === 'string' ? res.response as string : undefined
+          finalStatus = typeof res?.status === 'string' ? res.status as string : undefined
+          finalErrorDetail = typeof res?.error === 'string' ? res.error as string : undefined
+          resultSeen = true
+          telemetry.finalStatus = finalStatus
+          telemetry.firstEventMs ??= Date.now() - dispatchStartedAt
+          telemetry.eventCount += 1
+          telemetry.eventCategoryCounts[eventCategoryOf(event)] += 1
+          resultUsage = res?.usage as Record<string, unknown> | undefined
+        }
+        if (ev === 'step_update' && mcpToolsEnabled) {
+          const step = mcpToolStepOf(event)
+          if (step !== undefined) {
+            const state = stepStateOf(event)
+            if (state === 'DONE' || state === 'ERROR') {
+              telemetry.toolCallCount += 1
+              telemetry.bridgeOutcome = 'dsh-tool-call'
+              const callId = `agy-mcp-${telemetry.requestId}-${step.stepIndex}` as ToolCallId
+              const argumentsJson = JSON.stringify(step.arguments ?? {})
+              yield { type: 'block-start', index: toolBlockIndex, blockType: 'tool-call' }
+              yield {
+                type: 'tool-call-delta',
+                index: toolBlockIndex,
+                id: callId,
+                name: step.toolName,
+                argumentsDelta: argumentsJson,
+              }
+              yield {
+                type: 'block-end',
+                index: toolBlockIndex,
+                block: { type: 'tool-call', id: callId, name: step.toolName, arguments: argumentsJson } as ContentBlock,
+              }
+              toolBlockIndex += 1
+            }
+            continue
+          }
+        }
+        const delta = toolProtocol === undefined ? textDeltaOf(event) : undefined
+        if (delta !== undefined && delta.length > 0) {
+          telemetry.firstTextMs ??= Date.now() - dispatchStartedAt
+          if (!blockStarted) {
+            blockStarted = true
+            yield { type: 'block-start', index: 0, blockType: 'text' }
+          }
+          visibleText += delta
+          yield { type: 'text-delta', index: 0, text: delta }
         }
       }
-      const delta = toolProtocol === undefined ? textDeltaOf(event) : undefined
-      if (delta !== undefined && delta.length > 0) {
-        if (!blockStarted) {
-          blockStarted = true
-          yield { type: 'block-start', index: 0, blockType: 'text' }
-        }
-        visibleText += delta
-        yield { type: 'text-delta', index: 0, text: delta }
-      }
-      if (event.event === 'result') {
-        if (toolProtocol !== undefined && resultSeen && queue.filter(e=>e.event==='result').length>1) {
-          throw new ToolProtocolError(TOOL_PROTOCOL_RESPONSE_INVALID_CODE, 'duplicate final response')
-        }
-      }
+      await persistentRequest
+    } finally {
+      queue.end()
+      persistentRequest?.catch(() => undefined)
     }
     const selectedUsage = latestStepUsage ?? fallbackUsage ?? resultUsage
     const usageSource: AgyUsageSource | undefined = latestStepUsage !== undefined
@@ -1676,6 +1711,7 @@ export class AgyAdapter extends LlmAdapter {
         dshContextSnapshot,
         toolSchemaCount,
         prepared.imageDirectory !== undefined,
+        useToolBridge,
       )) {
         let persistentRepairAttempts = 0
         let persistentProtocolRepair = false
