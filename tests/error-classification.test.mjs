@@ -35,6 +35,7 @@ test('classifyAgyFailure maps authentication, quota, model, and context details'
     ['request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF', 'TRANSPORT'],
     ['read tcp 127.0.0.1:4891->127.0.0.1:12450: wsarecv: An existing connection was forcibly closed by the remote host.', 'TRANSPORT'],
     ['AGY_ERROR: {"short_error":"request failed","retryable":true}', 'TRANSPORT'],
+    ['The stream was interrupted. Please continue the task you were working on.', 'TRANSPORT'],
   ]
   for (const [detail, expected] of cases) assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), expected)
 })

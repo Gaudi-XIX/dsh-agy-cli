@@ -32,7 +32,7 @@ export function classifyAgyFailure(detail: string, fallback: string): string {
   // AGY_ERROR trailer; honoring that keeps a transient blip from killing the
   // whole turn (observed: `wsarecv`/`EOF` against 127.0.0.1:12450 on exit 3).
   if (/"retryable"\s*:\s*true/i.test(value)) return 'TRANSPORT'
-  if (/\bEOF\b|wsarecv|forcibly\s+closed|connection\s+(?:reset|aborted|closed)|broken\s+pipe|EPIPE|ECONNRESET/i.test(value)) {
+  if (/\bEOF\b|wsarecv|forcibly\s+closed|connection\s+(?:reset|aborted|closed)|broken\s+pipe|EPIPE|ECONNRESET|stream\s+was\s+interrupted/i.test(value)) {
     return 'TRANSPORT'
   }
   if (/(?:model|deployment).{0,48}(?:not\s+found|unknown|invalid|unavailable|does\s+not\s+exist)|no\s+such\s+model/i.test(value)) {
