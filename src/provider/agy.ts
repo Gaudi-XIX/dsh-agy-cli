@@ -63,6 +63,7 @@ import {
   emptyAgyEventCategoryCounts,
   errorDetailOf,
   eventCategoryOf,
+  finalResultRawOf,
   isToolEvent,
   isDshCarrierRecipient,
   isPermissionEvent,
@@ -1440,6 +1441,7 @@ export class AgyAdapter extends LlmAdapter {
           finalErrorDetail = typeof res?.error === 'string' ? res.error as string : undefined
           resultSeen = true
           telemetry.finalStatus = finalStatus
+          telemetry.finalResultRaw ??= finalResultRawOf(event)
           telemetry.firstEventMs ??= Date.now() - dispatchStartedAt
           telemetry.eventCount += 1
           telemetry.eventCategoryCounts[eventCategoryOf(event)] += 1
@@ -1685,6 +1687,7 @@ export class AgyAdapter extends LlmAdapter {
       firstEventMs: undefined,
       firstTextMs: undefined,
       finalStatus: undefined,
+      finalResultRaw: undefined,
       conversationId: undefined,
       queueWaitMs: undefined,
       process: undefined,
@@ -2150,6 +2153,7 @@ export class AgyAdapter extends LlmAdapter {
             const resultError = typeof resultRecord?.error === 'string' ? (resultRecord.error as string) : undefined
             if (resultError !== undefined && resultError.trim().length > 0) finalErrorDetail = resultError
           }
+          if (telemetry.finalResultRaw === undefined) telemetry.finalResultRaw = finalResultRawOf(event)
         }
         const usage = usageOf(event)
         if (usage !== undefined && event.event === 'step_update') latestStepUsage = usage

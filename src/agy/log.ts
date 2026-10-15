@@ -225,6 +225,13 @@ export interface AgyLogRecord {
   /** Milliseconds from process start to the first streamed text delta. */
   firstTextMs?: number
   finalStatus?: string
+  /**
+   * Raw JSON of AGY's own `result` frame, bounded to the fields that explain a
+   * non-SUCCESS ending. `status: "ERROR"` alone carries no diagnosis, and AGY
+   * omits `error` on the long-context failures this adapter sees, so the whole
+   * frame is the only place its explanation can live.
+   */
+  finalResultRaw?: string
   sessionId?: string
   conversationId?: string
   durationMs?: number
@@ -327,6 +334,7 @@ export interface AgyTelemetry {
   firstEventMs: number | undefined
   firstTextMs: number | undefined
   finalStatus: string | undefined
+  finalResultRaw: string | undefined
   conversationId: string | undefined
   queueWaitMs: number | undefined
   process: ProcessResult | undefined
@@ -416,6 +424,7 @@ export function buildAgyLogRecord(
     ...(telemetry.firstEventMs === undefined ? {} : { firstEventMs: telemetry.firstEventMs }),
     ...(telemetry.firstTextMs === undefined ? {} : { firstTextMs: telemetry.firstTextMs }),
     ...(telemetry.finalStatus === undefined ? {} : { finalStatus: telemetry.finalStatus }),
+    ...(telemetry.finalResultRaw === undefined ? {} : { finalResultRaw: telemetry.finalResultRaw }),
     ...(telemetry.usage === undefined ? {} : { usage: telemetry.usage }),
     ...(telemetry.usageSource === undefined ? {} : { usageSource: telemetry.usageSource }),
     ...(telemetry.cumulativeUsage === undefined ? {} : { cumulativeUsage: telemetry.cumulativeUsage }),
@@ -708,6 +717,7 @@ export function sanitizeAgyLogRecord(record: AgyLogRecord): AgyLogRecord {
     ...(processDiagnostic === undefined ? {} : { processDiagnostic }),
     ...(record.errorCode === undefined ? {} : { errorCode: redactText(record.errorCode, 128) }),
     ...(record.finalStatus === undefined ? {} : { finalStatus: redactText(record.finalStatus, 128) }),
+    ...(record.finalResultRaw === undefined ? {} : { finalResultRaw: redactText(record.finalResultRaw, 1_024) }),
     ...(record.usageSource === 'step' || record.usageSource === 'result-fallback'
       ? { usageSource: record.usageSource }
       : {}),

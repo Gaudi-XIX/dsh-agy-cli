@@ -507,6 +507,29 @@ export function eventCategoryOf(event: AgyJsonEvent): AgyEventCategory {
   }
 }
 
+/**
+ * Bounded JSON of AGY's own `result` frame.
+ *
+ * `status: "ERROR"` is the only signal the adapter gets on the long-context
+ * failures this provider sees, and AGY omits `error` on those frames, so the
+ * `response` text and the remaining keys are the sole surviving diagnosis.
+ * Keys that carry bulk are truncated rather than dropped: a missing key and a
+ * truncated key look identical in telemetry and would be indistinguishable from
+ * "AGY said nothing".
+ */
+export function finalResultRawOf(event: AgyJsonEvent): string | undefined {
+  if (event.event !== 'result') return undefined
+  const result = isRecord(event.result) ? event.result : undefined
+  if (result === undefined) return '{}'
+  const bounded: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(result)) {
+    if (typeof value === 'string') bounded[key] = value.length > 512 ? `${value.slice(0, 512)}…(${value.length} chars)` : value
+    else if (isRecord(value)) bounded[key] = '<object>'
+    else bounded[key] = value
+  }
+  return JSON.stringify(bounded).slice(0, 1_024)
+}
+
 /** Extract bounded classification detail from AGY error events without exposing the payload. */
 export function errorDetailOf(event: AgyJsonEvent): string | undefined {
   if (event.event !== 'error' && event.event !== 'error_message') return undefined
