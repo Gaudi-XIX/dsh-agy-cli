@@ -1406,6 +1406,11 @@ export class AgyAdapter extends LlmAdapter {
     let finalResponse: string | undefined
     let finalStatus: string | undefined
     let finalErrorDetail: string | undefined
+    // AGY's own reason when the turn failed. Kept apart from `finalErrorDetail`
+    // because a failed turn can also carry a placeholder under `response`
+    // ("(no content)"), and delivering a placeholder as the answer is worse
+    // than delivering the partial text already streamed.
+    let lastResultError: string | undefined
     let latestStepUsage: Record<string, unknown> | undefined
     let resultUsage: Record<string, unknown> | undefined
     let fallbackUsage: Record<string, unknown> | undefined
@@ -1439,6 +1444,7 @@ export class AgyAdapter extends LlmAdapter {
           finalResponse = typeof res?.response === 'string' ? res.response as string : undefined
           finalStatus = typeof res?.status === 'string' ? res.status as string : undefined
           finalErrorDetail = typeof res?.error === 'string' ? res.error as string : undefined
+          lastResultError = finalErrorDetail
           resultSeen = true
           telemetry.finalStatus = finalStatus
           telemetry.finalResultRaw ??= finalResultRawOf(event)
@@ -1697,6 +1703,7 @@ export class AgyAdapter extends LlmAdapter {
       cacheHit: undefined,
       cacheTokenShare: undefined,
       conversationMismatch: undefined,
+      partialAnswerDelivered: undefined,
       stablePrefixBytes: undefined,
       stablePrefixHash: undefined,
       toolSchemaHash: undefined,
@@ -2002,6 +2009,11 @@ export class AgyAdapter extends LlmAdapter {
     let finalResponse: string | undefined
     let finalStatus: string | undefined
     let finalErrorDetail: string | undefined
+    // AGY's own reason when the turn failed. Kept apart from `finalErrorDetail`
+    // because a failed turn can also carry a placeholder under `response`
+    // ("(no content)"), and delivering a placeholder as the answer is worse
+    // than delivering the partial text already streamed.
+    let lastResultError: string | undefined
     let latestStepUsage: Record<string, unknown> | undefined
     let resultUsage: Record<string, unknown> | undefined
     let fallbackUsage: Record<string, unknown> | undefined
@@ -2153,6 +2165,7 @@ export class AgyAdapter extends LlmAdapter {
             const resultError = typeof resultRecord?.error === 'string' ? (resultRecord.error as string) : undefined
             if (resultError !== undefined && resultError.trim().length > 0) finalErrorDetail = resultError
           }
+          lastResultError = finalErrorDetail
           if (telemetry.finalResultRaw === undefined) telemetry.finalResultRaw = finalResultRawOf(event)
         }
         const usage = usageOf(event)
@@ -2190,7 +2203,19 @@ export class AgyAdapter extends LlmAdapter {
         ? new LlmError('AGY process did not return a result', 'AGY_PROCESS')
         : processFailure(result)
     if (failure !== undefined) throw failure
-    if (resultSeen && !isSuccessStatus(finalStatus)) {
+    // AGY reports `status: ERROR` on a turn it cut short, and it can carry a
+    // placeholder under `response` ("(no content)") instead of the answer. When
+    // the user already watched real text stream in, keep that text, park AGY's
+    // reason as a reasoning annotation, and finish normally: throwing here makes
+    // the host roll the stream back and replay the whole turn, and the replay
+    // reads the same broken context, so it fails identically every attempt.
+    // agy-link does exactly this (its `consumable` test at src/host/adapter.ts:
+    // 1508 and the result branch at src/host/mapper.ts:400-428); the difference
+    // is that a placeholder response is not deliverable content, so the streamed
+    // text decides whether anything survives.
+    const streamedPartialAnswer = resultSeen && !isSuccessStatus(finalStatus) && visibleText.trim().length > 0
+    if (streamedPartialAnswer) telemetry.partialAnswerDelivered = true
+    if (resultSeen && !isSuccessStatus(finalStatus) && !streamedPartialAnswer) {
       const detail = [finalStatus, finalErrorDetail].filter(value => value !== undefined).join(' ')
       const code = classifyAgyFailure(detail, 'AGY_STATUS')
       throw new LlmError(safeAgyFailureMessage(`AGY returned status ${finalStatus}`, detail), code)
@@ -2263,7 +2288,11 @@ export class AgyAdapter extends LlmAdapter {
       return { retryWithFullPrompt: false }
     }
 
-    if (finalResponse !== undefined) {
+    // A failed turn's `response` is a placeholder ("(no content)"); appending it
+    // would write that placeholder into the answer. The streamed text is the
+    // real partial answer, so leave it as it stands.
+    const appendFinalResponse = !streamedPartialAnswer && finalResponse !== undefined && finalResponse.trim().length > 0
+    if (appendFinalResponse && finalResponse !== undefined) {
       const suffix = visibleText.length === 0
         ? finalResponse
         : finalResponse.startsWith(visibleText) ? finalResponse.slice(visibleText.length) : ''
@@ -2289,6 +2318,13 @@ export class AgyAdapter extends LlmAdapter {
       // retryable and would re-run side effects that already happened.
     } else {
       throw new LlmError('AGY completed without a text response', EMPTY_RESPONSE_CODE)
+    }
+    if (streamedPartialAnswer) {
+      // AGY's own reason, kept in the transcript next to the text it produced.
+      const reason = (lastResultError ?? finalErrorDetail ?? 'AGY reported status ERROR').trim()
+      yield { type: 'block-start', index: 1, blockType: 'reasoning' }
+      yield { type: 'reasoning-delta', index: 1, text: `[agy finished with error] ${reason}\n` }
+      yield { type: 'block-end', index: 1, block: { type: 'reasoning', text: `[agy finished with error] ${reason}\n` } }
     }
     if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
     yield { type: 'finish', reason: { kind: 'stop' } }

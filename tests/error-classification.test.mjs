@@ -87,6 +87,62 @@ test('AgyAdapter maps status and stderr details without exposing raw classificat
   assert.equal(Object.hasOwn(logs.at(-1) ?? {}, 'stderr'), false)
 })
 
+test('AgyAdapter keeps the text a failed turn already streamed and parks the reason as a reasoning annotation', async () => {
+  // Real shape from the seven failed turns on 2026-10-15: AGY streamed hundreds
+  // of deltas, then closed with status ERROR, a placeholder `response`, and its
+  // own reason under `error`. Throwing here made the host roll the stream back
+  // and replay the turn five times against the same broken context.
+  const adapter = new AgyAdapter({}, {
+    runAgyProcess: async requestValue => {
+      requestValue.onStdoutLine?.(JSON.stringify({
+        event: 'step_update',
+        step_update: { step_type: 'agent_response', text_delta: 'first half of the answer' },
+      }))
+      requestValue.onStdoutLine?.(JSON.stringify({
+        event: 'step_update',
+        step_update: { step_type: 'agent_response', text_delta: ' and the rest' },
+      }))
+      requestValue.onStdoutLine?.(JSON.stringify({
+        event: 'result',
+        result: {
+          status: 'ERROR',
+          response: '(no content)',
+          error: 'API error (attempt 2): request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal/streamGenerateContent?alt=sse": EOF',
+        },
+      }))
+      return processResult('', 0)
+    },
+  })
+  const chunks = []
+  for await (const chunk of adapter.stream(request())) chunks.push(chunk)
+  const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
+  assert.equal(text, 'first half of the answer and the rest')
+  const reasoning = chunks.filter(chunk => chunk.type === 'reasoning-delta').map(chunk => chunk.text).join('')
+  assert.match(reasoning, /^\[agy finished with error\] API error \(attempt 2\)/)
+  assert.equal(chunks.at(-1)?.type, 'finish')
+  assert.equal(chunks.at(-1)?.reason.kind, 'stop')
+})
+
+test('AgyAdapter still throws when a failed turn delivered no text at all', async () => {
+  // A bare failure with nothing streamed: no partial answer to keep, so the
+  // host must see the error and decide whether to retry.
+  const adapter = new AgyAdapter({}, {
+    runAgyProcess: async requestValue => {
+      requestValue.onStdoutLine?.(JSON.stringify({
+        event: 'result',
+        result: { status: 'ERROR', response: '(no content)', error: 'Eligibility check failed: unexpected EOF' },
+      }))
+      return processResult('', 0)
+    },
+  })
+  await assert.rejects(
+    async () => {
+      for await (const _chunk of adapter.stream(request())) {}
+    },
+    error => error.code === 'TRANSPORT',
+  )
+})
+
 test('AgyAdapter classifies a result-carried AGY_ERROR trailer as a retryable transport flake', async () => {
   // Real shape from session-efbe73bb turn 9: AGY puts the proxy-cut reason
   // under result.error, self-labelled retryable. When the process exits 3

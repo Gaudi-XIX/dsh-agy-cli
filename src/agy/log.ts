@@ -252,6 +252,12 @@ export interface AgyLogRecord {
    * binding, so the binding was dropped and the turn resent from full history.
    */
   conversationMismatch?: boolean
+  /**
+   * AGY closed the turn with `status: ERROR` after text had already streamed.
+   * The partial text was delivered and the failure was kept as a reasoning
+   * annotation instead of being thrown away with the whole turn.
+   */
+  partialAnswerDelivered?: boolean
   stablePrefixBytes?: number
   stablePrefixHash?: string
   toolSchemaHash?: string
@@ -347,6 +353,8 @@ export interface AgyTelemetry {
   conversationReused: boolean | undefined
   /** A persistent worker could not continue the stored conversation; binding dropped, resent from full history. */
   conversationMismatch: boolean | undefined
+  /** A failed AGY turn still delivered the text it had already streamed. */
+  partialAnswerDelivered: boolean | undefined
   stablePrefixBytes: number | undefined
   stablePrefixHash: string | undefined
   toolSchemaHash: string | undefined
@@ -433,6 +441,7 @@ export function buildAgyLogRecord(
     ...(telemetry.requestMode === undefined ? {} : { requestMode: telemetry.requestMode }),
     ...(telemetry.conversationReused === undefined ? {} : { conversationReused: telemetry.conversationReused }),
     ...(telemetry.conversationMismatch === undefined ? {} : { conversationMismatch: telemetry.conversationMismatch }),
+    ...(telemetry.partialAnswerDelivered === undefined ? {} : { partialAnswerDelivered: telemetry.partialAnswerDelivered }),
     ...(telemetry.stablePrefixBytes === undefined ? {} : { stablePrefixBytes: telemetry.stablePrefixBytes }),
     ...(telemetry.stablePrefixHash === undefined ? {} : { stablePrefixHash: telemetry.stablePrefixHash }),
     ...(telemetry.toolSchemaHash === undefined ? {} : { toolSchemaHash: telemetry.toolSchemaHash }),
@@ -734,6 +743,7 @@ export function sanitizeAgyLogRecord(record: AgyLogRecord): AgyLogRecord {
       : {}),
     ...(record.conversationReused === undefined ? {} : { conversationReused: record.conversationReused === true }),
     ...(record.conversationMismatch === undefined ? {} : { conversationMismatch: record.conversationMismatch === true }),
+    ...(record.partialAnswerDelivered === undefined ? {} : { partialAnswerDelivered: record.partialAnswerDelivered === true }),
     ...(record.stablePrefixBytes === undefined
       ? {}
       : { stablePrefixBytes: safeNonNegativeNumber(record.stablePrefixBytes) }),
