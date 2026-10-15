@@ -60,6 +60,15 @@ export interface Config {
    * this watchdog unreachable and every healthy long turn dies as `timeout`.
    */
   idleTimeoutMs?: number
+  /**
+   * How the request pipe is retired after AGY's user frame is written. `hold`
+   * (default) keeps it open until AGY emits its closing `result` line, because
+   * an immediate EOF is read as "no next turn": AGY shuts its store manager
+   * down and cancels the turn it is still generating, which reaches the user as
+   * text that appears and is then rolled back. `close` restores the historical
+   * behaviour for callers that need the process to exit on EOF.
+   */
+  stdinMode?: 'hold' | 'close'
   /** `full` sends DSH history; `resume` reuses an AGY conversation. */
   sessionMode?: 'resume' | 'full'
   /**
@@ -246,6 +255,7 @@ export function createConfigSchema(defaults: {
     agyPath: z.string().default('').description('AGY executable path').hidden(),
     timeoutMs: z.number().min(1).max(3_600_000).default(900_000).description('Backstop wall clock per request ms; only an endless-output run can reach it').hidden(),
     idleTimeoutMs: z.number().min(1).max(3_600_000).default(300_000).description('Inactivity budget per request ms; re-armed on every output line. Must stay below timeoutMs').hidden(),
+    stdinMode: z.union(['hold', 'close'] as const).default('hold').description('Keep the request pipe open until AGY closes the turn (hold) or end it as soon as the frame is written (close)').hidden(),
     sessionMode: z.union(['resume', 'full'] as const).default('full').description('Session mode'),
     sessionStorePath: z.string().default('').description('Durable sessionId to conversationId map path; empty uses DSH_HOME/agy-provider/sessions.json'),
     minimumAgyVersion: z.string().pattern(/^\d+\.\d+\.\d+$/).default('1.1.15').description('Minimum AGY version').hidden(),
@@ -298,6 +308,7 @@ export function createConfigSchema(defaults: {
       agyPath: { $description: 'AGY 可执行文件路径，空则自动发现' },
       timeoutMs: { $description: '单次请求的墙上时钟上限（毫秒）' },
       idleTimeoutMs: { $description: '单次请求的无输出静默预算（毫秒）；每有一行输出即重新计时' },
+      stdinMode: { $description: '请求管道收尾方式：hold=等 AGY 自己结束本轮再关（默认，避免中途无输出被判死）, close=写完即关' },
       sessionMode: { $description: '会话模式：full=每轮完整历史, resume=复用 AGY 会话' },
       sessionStorePath: { $description: '会话映射（DSH 会话→AGY 对话）的落盘路径；留空用 DSH_HOME/agy-provider/sessions.json，让 resume 模式在宿主重启后仍能续话' },
       minimumAgyVersion: { $description: '最低允许的 AGY 版本' },
@@ -334,6 +345,7 @@ export function createConfigSchema(defaults: {
       agyPath: { $description: 'AGY executable path, empty auto-discovers' },
       timeoutMs: { $description: 'Per-request wall-clock ceiling (ms)' },
       idleTimeoutMs: { $description: 'Per-request inactivity budget (ms); re-armed on every output line' },
+      stdinMode: { $description: 'How the request pipe is retired: hold=wait for AGY to finish the turn (default), close=end right after the frame is written' },
       sessionMode: { $description: 'Session mode: full or resume' },
       sessionStorePath: { $description: 'Path of the durable DSH session to AGY conversation map; empty uses DSH_HOME/agy-provider/sessions.json so resume keeps working after a host restart' },
       minimumAgyVersion: { $description: 'Minimum AGY version' },

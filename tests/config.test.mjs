@@ -181,6 +181,9 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     // Inactivity budget re-armed per output line; only real silence trips it.
     // Must stay below timeoutMs: a wall clock that fires first makes it unreachable.
     idleTimeoutMs: 300_000,
+    // Keep the request pipe open until AGY's closing `result` line; an immediate
+    // EOF is read as "no next turn" and cancels the turn it is still generating.
+    stdinMode: 'hold',
     sessionMode: 'full',
     // Durable sessionId -> conversationId map; '' means <DSH_HOME>/agy-provider/sessions.json
     sessionStorePath: '',

@@ -7,6 +7,23 @@ import { AgyStreamProtocolError, encodeAgyUserMessage } from './stream-protocol.
 import { buildWindowsNoConsoleLaunch } from './windows-launcher.js'
 
 export type ProcessTermination = 'completed' | 'non-zero' | 'signaled' | 'aborted' | 'timeout' | 'idle-timeout' | 'output-limit'
+/**
+ * How `runProcess` retires the stdin pipe after writing the request frame.
+ *
+ * `'close'` ends stdin immediately (the historical behaviour). AGY's print mode
+ * reads that EOF as "there is no next turn", shuts its store manager down and
+ * cancels the turn still being generated — measured as
+ * `Print mode: stream input closed after 1 turn(s)` followed by
+ * `CORTEX_STEP_STATUS_CANCELED` on every step, which surfaces to the user as
+ * text that appears and is then rolled back.
+ *
+ * `'hold'` keeps the pipe open and closes it only when the run is over (a
+ * `result` line arrived, or the process exited). Nothing in AGY's stream-json
+ * contract requires a follow-up frame, so holding costs nothing but the
+ * lifetime of one pipe — and `idleTimeoutMs`/`timeoutMs` still kill a run that
+ * goes silent, so a turn can never hang forever on an unclosed pipe.
+ */
+export type AgyStdinMode = 'close' | 'hold'
 /** Maps a termination to the code the retry classifier sees, so a silence kill
  * and a wall-clock kill are distinguishable in telemetry without changing the
  * DSH-facing code (`TIMEOUT` either way). */
@@ -155,6 +172,11 @@ export interface ProcessRequest {
   args: readonly string[]
   /** Optional stdin payload written once before the stream is closed. */
   stdin?: string
+  /**
+   * Whether to end stdin right after writing the payload (default) or keep it
+   * open until the run finishes. See `AgyStdinMode`.
+   */
+  stdinMode?: AgyStdinMode
   cwd?: string
   env?: NodeJS.ProcessEnv
   /** Hard wall-clock ceiling for the whole run. Omitted means unbounded. */
@@ -205,6 +227,12 @@ export interface AgyRequest extends Omit<ProcessRequest, 'executable' | 'args'> 
   jsonSchemaPath?: string
   /** Maximum UTF-8 bytes allowed for one encoded stream-json user frame. */
   maxInputFrameBytes?: number
+  /**
+   * How long to keep the request pipe open. AGY's print mode treats an
+   * immediate EOF as "no next turn" and cancels the turn it is still
+   * generating, so the adapter holds the pipe by default; see `AgyStdinMode`.
+   */
+  stdinMode?: AgyStdinMode
 }
 
 export function defaultAgyCommand(): 'agy.exe' | 'agy' {
@@ -381,9 +409,14 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
     let inputError: unknown
     let settled = false
     let lastOutputAtMs = startedAt
+    let turnClosed = false
 
     const deliver = (line: string): void => {
       stdoutLines.push(line)
+      if (!turnClosed && resultSeen(line)) {
+        turnClosed = true
+        endStdin()
+      }
       if (request.onStdoutLine === undefined || outputHandlerError !== undefined) return
       try {
         request.onStdoutLine(line)
@@ -409,6 +442,26 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
     const kill = (reason: Exclude<ProcessTermination, 'completed' | 'non-zero' | 'signaled'>): void => {
       if (termination === undefined) termination = reason
       if (!child.killed) terminateProcessTree(child)
+    }
+
+    // `hold` keeps the request pipe open until the turn is over. Ending it
+    // early is read by AGY as "no next turn" and cancels the running one.
+    const stdinMode: AgyStdinMode = request.stdinMode ?? 'close'
+    let stdinClosed = false
+    const endStdin = (): void => {
+      if (stdinClosed || request.stdin === undefined) return
+      stdinClosed = true
+      child.stdin.end()
+    }
+    const resultSeen = (line: string): boolean => {
+      try {
+        const parsed: unknown = JSON.parse(line)
+        return typeof parsed === 'object'
+          && parsed !== null
+          && (parsed as { event?: unknown }).event === 'result'
+      } catch {
+        return false
+      }
     }
 
     const abortListener = (): void => kill('aborted')
@@ -449,6 +502,10 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
     })
     child.stdout.on('end', () => {
       if (termination !== 'output-limit') flushStdout(true)
+      // A final `result` line is the contract's "turn is over" signal; the
+      // process is expected to exit on its own, but a held pipe gives it a
+      // clean shutdown cue rather than an EOF it may read as a new turn.
+      if (stdinMode === 'hold') endStdin()
     })
     child.stderr.on('data', (chunk: string) => {
       armIdle()
@@ -484,6 +541,7 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
     child.once('close', (exitCode, signal) => {
       if (settled) return
       settled = true
+      endStdin()
       if (timeout !== undefined) clearTimeout(timeout)
       if (idle !== undefined) clearTimeout(idle)
       request.signal?.removeEventListener('abort', abortListener)
@@ -525,7 +583,13 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
         lastOutputAtMs,
       })
     })
-    child.stdin.end(request.stdin)
+    if (request.stdin !== undefined) {
+      child.stdin.write(request.stdin)
+      // `hold` leaves the pipe open until `deliver` sees AGY's closing `result`
+      // line (or the process exits, which closes it anyway). Ending it here is
+      // what made AGY cancel a turn it was still generating.
+      if (stdinMode === 'close') endStdin()
+    }
   })
 }
 

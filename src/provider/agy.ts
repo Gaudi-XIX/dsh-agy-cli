@@ -33,6 +33,7 @@ import {
   type AgyExecutionMode,
   type AgyReasoningEffort,
   type AgyRequest,
+  type AgyStdinMode,
   type ProcessResult,
 } from '../agy/process.js'
 import { getAgentPreset, type AgentPresetId } from '../agent-presets.js'
@@ -1009,6 +1010,7 @@ export class AgyAdapter extends LlmAdapter {
   private readonly agyPath: string | undefined
   private readonly timeoutMs: number
   private readonly idleTimeoutMs: number
+  private readonly stdinMode: AgyStdinMode
   private readonly run: AgyProcessRunner
   private readonly sessionMode: 'resume' | 'full'
   private readonly sessions: SessionRegistry
@@ -1060,6 +1062,7 @@ export class AgyAdapter extends LlmAdapter {
     this.agyPath = config.agyPath?.trim() === '' ? undefined : config.agyPath?.trim()
     this.timeoutMs = config.timeoutMs ?? 900_000
     this.idleTimeoutMs = config.idleTimeoutMs ?? 300_000
+    this.stdinMode = config.stdinMode ?? 'hold'
     this.run = dependencies.runAgyProcess ?? runAgyProcess
     this.sessionMode = config.sessionMode === 'resume' ? 'resume' : 'full'
     this.sessions = dependencies.sessionRegistry ?? new SessionRegistry()
@@ -1959,6 +1962,7 @@ export class AgyAdapter extends LlmAdapter {
       maxStdoutBytes: this.maxOutputBytes,
       maxStderrBytes: this.maxOutputBytes,
       maxInputFrameBytes: this.inputFrameLimitBytes,
+      stdinMode: this.stdinMode,
       signal: controller.signal,
       onStdoutLine: line => {
         for (const event of parser.push(`${line}\n`)) queue.push(event)
