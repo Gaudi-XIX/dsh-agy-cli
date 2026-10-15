@@ -255,6 +255,12 @@ dsh-agy-provider/
 - [CHANGELOG](CHANGELOG.md)
 - [Performance baseline](docs/performance-baseline.md)
 
+## Origin and derivation
+
+This repository is derived from **[Darkings/dsh-agy-provider](https://github.com/darkings/dsh-agy-provider)** (MIT). Upstream stopped at `59a5e5e` (2026-08-28); this repository continues from its 0.10.0 baseline to adapt to DSH Desktop 0.2.0-rc.2. In the git history, `59a5e5e` and every earlier commit were authored upstream; the adaptation commits after it were authored by this repository's maintainer.
+
+This is not the official upstream release and does not speak for upstream. See [CHANGELOG](CHANGELOG.md) for the differences.
+
 ## License
 
 MIT

@@ -255,6 +255,12 @@ dsh-agy-provider/
 - [CHANGELOG](CHANGELOG.md)
 - [性能基线](docs/performance-baseline.md)
 
+## 来源与派生
+
+本仓库派生自 **[Darkings/dsh-agy-provider](https://github.com/darkings/dsh-agy-provider)**（MIT）。上游在 `59a5e5e`（2026-08-28）之后停更，本仓在其 0.10.0 基线上继续适配 DSH Desktop 0.2.0-rc.2：git 历史里 `59a5e5e` 及之前的提交均为上游原作者所作，其后的适配提交由本仓维护者提交。
+
+本仓不是上游官方版本，也不代表上游立场；与上游的差异见 [CHANGELOG](CHANGELOG.md)。
+
 ## License
 
 MIT
