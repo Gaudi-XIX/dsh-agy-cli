@@ -182,3 +182,18 @@ test("persistent-transport real: a worker that ignores the seed conversation fai
     await waitForWorkers(v, 0);
   } finally { await v.dispose(); }
 });
+
+test("persistent-transport real: a non-SUCCESS result carries AGY's own error text", async () => {
+  const v = transport();
+  try {
+    // The worker's result frame is the only place AGY's failure text appears.
+    // The adapter classifies that text (see asLlmError), so it must survive
+    // intact here: a proxy-cut stream has to stay recognisable as TRANSPORT.
+    const error = await v.request({ sessionId: "error-session", text: "mode:error-eof" })
+      .then(() => undefined, e => e);
+    assert.ok(error instanceof PersistentTransportError);
+    assert.equal(error.code, "WORKER_ERROR");
+    assert.match(error.message, /\bEOF\b/);
+    assert.match(error.message, /streamGenerateContent/);
+  } finally { await v.dispose(); }
+});

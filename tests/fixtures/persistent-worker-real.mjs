@@ -79,6 +79,11 @@ input.on("line", line => {
     process.stdout.write("not-json\n");
     return;
   }
+  if (text.includes("mode:error-eof")) {
+    emit({ event: "step_update", step_update: { conversation_id: conversationId, step_index: turn*2, state: "DONE", step_type: "agent_response", text_delta: "partial answer before EOF", usage: { input_tokens: 100, output_tokens: 10 } } });
+    emit({ event: "result", result: { conversation_id: conversationId, status: "ERROR", error: "API error (attempt 3): request failed: Post \"https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse\": EOF", duration_seconds: 1, num_turns: turn } });
+    return;
+  }
   if (text.includes("mode:argv")) {
     // Echo the launch argv so a test can assert the route (--agent/--model/
     // --effort/--conversation) actually reached the spawned process.

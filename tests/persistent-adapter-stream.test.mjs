@@ -427,3 +427,46 @@ test('a persisted conversation that cannot be continued falls back to full histo
   )
   assert.equal(chunks.find(chunk => chunk.type === 'finish').reason.kind, 'stop')
 })
+
+test('a persistent worker error frame is classified so the host can retry it', async () => {
+  const { PersistentTransportError } = await import('../lib/agy/persistent-transport.js')
+  const { transport } = pendingTransport([])
+  transport.request = () => Promise.reject(new PersistentTransportError(
+    'Persistent AGY worker returned error result: API error (attempt 3): request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": EOF',
+    'WORKER_ERROR',
+  ))
+  const adapter = adapterFor(transport)
+
+  let failure
+  try {
+    await collect(adapter.stream(baseRequest()))
+  } catch (error) {
+    failure = error
+  }
+
+  // AGY's own text is a proxy-cut stream, so it must surface as TRANSPORT — the
+  // code the host retries. A raw AGY_WORKER_ERROR is absent from
+  // AGY_RETRYABLE_CODES, so without classification the identical flake that
+  // one-shot already survives would kill the turn outright.
+  assert.notEqual(failure, undefined, 'the worker error reaches the caller')
+  assert.equal(failure.code, 'TRANSPORT')
+})
+
+test('a persistent worker auth failure is not made retryable by classification', async () => {
+  const { PersistentTransportError } = await import('../lib/agy/persistent-transport.js')
+  const { transport } = pendingTransport([])
+  transport.request = () => Promise.reject(new PersistentTransportError(
+    'Persistent AGY worker returned error result: unauthorized: token expired',
+    'WORKER_ERROR',
+  ))
+  const adapter = adapterFor(transport)
+
+  let failure
+  try {
+    await collect(adapter.stream(baseRequest()))
+  } catch (error) {
+    failure = error
+  }
+
+  assert.equal(failure.code, 'AUTH', 'loud failures stay loud instead of being retried five times')
+})

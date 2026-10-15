@@ -656,11 +656,24 @@ function asLlmError(error: unknown): LlmError {
     return new LlmError(error.message, error.code, { cause: error })
   }
   if (error instanceof PersistentTransportError) {
-    return new LlmError(
-      error.message,
-      error.code === 'TIMEOUT' ? 'TIMEOUT' : `AGY_${error.code}`,
-      { cause: error },
-    )
+    if (error.code === 'TIMEOUT') {
+      return new LlmError(error.message, 'TIMEOUT', { cause: error })
+    }
+    if (error.code === 'WORKER_ERROR') {
+      // AGY's own failure text, carried in the result frame. The one-shot path
+      // classifies the same text (see classifyAgyFailure on AGY_STATUS) so a
+      // proxy-cut stream becomes TRANSPORT and the host retries it; without
+      // that step the identical flake surfaces as an unknown code the host
+      // refuses to retry. Classification keeps the loud failures loud: an AUTH,
+      // quota or context-window error inside this frame still maps to its own
+      // non-retryable code instead of being retried five times.
+      return new LlmError(
+        error.message,
+        classifyAgyFailure(error.message, 'AGY_WORKER_ERROR'),
+        { cause: error },
+      )
+    }
+    return new LlmError(error.message, `AGY_${error.code}`, { cause: error })
   }
   if (error instanceof AgyProcessError) {
     return new LlmError(
