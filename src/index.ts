@@ -86,6 +86,7 @@ import {
   type DshToolRuntimeLike,
   type DshWebServerLike,
 } from './mcp/bridge.js'
+import { setupWebRoutes } from './web/router.js'
 import {
   findMissingAgentTemplates,
   type MissingAgentTemplate,
@@ -187,6 +188,11 @@ export function apply(ctx: Context, config: ConfigType): void {
         ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }),
       }))
     })
+  } catch {}
+
+  // Mount web HTTP routes for GUI control panel & status polling (/plugins/agy-link/*)
+  try {
+    setupWebRoutes(ctx, activeConfig, modelDiscovery)
   } catch {}
 
   // Settings are resolved before the enabled check, so disabled profiles can
