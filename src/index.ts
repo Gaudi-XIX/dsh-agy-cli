@@ -6,6 +6,7 @@
  * BundleConfig is available when a caller explicitly wants bundle defaults.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { appendFileSync } from 'node:fs'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { AgyAdapter } from './provider/agy.js'
 import {
@@ -17,7 +18,7 @@ import {
 import type { ModelConfig, ToolPolicy } from './provider/config.js'
 import { MockAdapter } from './provider/mock.js'
 import { AgyModelDiscovery } from './agy/models.js'
-import { appendAgyDiagnosticRecord } from './agy/log.js'
+import { appendAgyDiagnosticRecord, AGY_DIAGNOSTIC_LOG_PATH } from './agy/log.js'
 import { configuredModels } from './provider/config.js'
 import { SessionRegistry } from './session/store.js'
 import { FileSessionStore, resolveSessionStorePath } from './session/file-store.js'
@@ -257,10 +258,27 @@ export function apply(ctx: Context, config: ConfigType): void {
         const bridge = await startDshMcpBridge({
           webServer: ctx.get('webServer') as DshWebServerLike,
           tools: ctx.get('tools') as DshToolRuntimeLike,
-          sessionController: ctx.get('sessionController') as DshSessionControllerLike | undefined,
+          // Late-bound on purpose: this plugin loads before the Session
+          // controller bundle finishes mounting, and a value captured here
+          // stays undefined for the life of the host.
+          sessionControllerLookup: () => ctx.get('sessionController') as DshSessionControllerLike | undefined,
           ...((activeConfig.mcpToolAllowlist ?? []).length > 0 ? { toolAllowlist: activeConfig.mcpToolAllowlist } : {}),
           serverVersion: '0.0.0',
-          logger: message => logger.info(message),
+          logger: message => {
+            logger.info(message)
+            // The host logger has no file sink, so a bridge that silently loses
+            // the session agent leaves no evidence. Mirror into the diagnostic
+            // log the rest of this provider already writes.
+            try {
+              appendFileSync(
+                AGY_DIAGNOSTIC_LOG_PATH,
+                `${JSON.stringify({ event: 'bridge.log', at: Date.now(), message })}\n`,
+                'utf8',
+              )
+            } catch {
+              // Diagnostics must never break the bridge.
+            }
+          },
         })
         if (cancelled) {
           await bridge.dispose()

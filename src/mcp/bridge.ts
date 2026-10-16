@@ -57,6 +57,16 @@ export interface DshMcpBridgeOptions {
   readonly webServer: DshWebServerLike
   readonly tools: DshToolRuntimeLike
   readonly sessionController?: DshSessionControllerLike | undefined
+  /**
+   * Late-bound `sessionController` lookup.
+   *
+   * The bridge starts while this plugin loads, and the Session controller is
+   * mounted by a different bundle: reading the service once at start can pin
+   * `undefined` for the whole host lifetime, which silently degrades every
+   * scoped query to the global tool view (the file and shell tools live on the
+   * agent plane). Resolving per turn removes the load-order dependency.
+   */
+  readonly sessionControllerLookup?: (() => DshSessionControllerLike | undefined) | undefined
   /** Optional allowlist of DSH tool names exposed to AGY. */
   readonly toolAllowlist?: readonly string[] | undefined
   readonly serverVersion: string
@@ -158,7 +168,14 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
       serverName: AGY_MCP_SERVER_NAME,
       serverVersion: options.serverVersion,
       instructions: INSTRUCTIONS,
-      listTools: async (sessionHandle) => projectVisibleTools(options, await agentOf(options, sessionHandle)),
+      listTools: async (sessionHandle) => {
+        const agent = await agentOf(options, sessionHandle)
+        const tools = projectVisibleTools(options, agent)
+        options.logger?.(
+          `dsh mcp bridge: listTools session="${sessionHandle}" agent=${agent === undefined ? 'none' : 'resolved'} tools=${tools.length}`,
+        )
+        return tools
+      },
       callTool: (sessionHandle, name, args) => executeDshTool(options, sessionHandle, name, args),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     })
@@ -227,8 +244,12 @@ async function agentOf(
   options: DshMcpBridgeOptions,
   sessionHandle: string,
 ): Promise<unknown> {
-  const controller = options.sessionController
-  if (controller === undefined || sessionHandle.length === 0) return undefined
+  const controller = options.sessionControllerLookup?.() ?? options.sessionController
+  if (controller === undefined) {
+    options.logger?.('dsh mcp bridge: the host sessionController service is unavailable')
+    return undefined
+  }
+  if (sessionHandle.length === 0) return undefined
   const resolved = await controller.resolveAgent(sessionHandle).catch((error: unknown) => {
     options.logger?.(`dsh mcp bridge: resolveAgent("${sessionHandle}") threw ${String(error)}`)
     return undefined

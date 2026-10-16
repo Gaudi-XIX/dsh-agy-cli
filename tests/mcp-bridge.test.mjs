@@ -219,6 +219,49 @@ test('the bridge asks the registry as the session agent, not as the global layer
   }
 })
 
+test('the bridge resolves the session controller late, so a later mount is not lost', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agy-mcp-late-'))
+  try {
+    const webServer = fakeWebServer()
+    let mounted = false
+    const agent = { id: 'agent-late' }
+    const bridge = await startDshMcpBridge({
+      webServer,
+      tools: {
+        schemas: scope => scope === undefined
+          ? [{ name: 'click', description: 'c', parameters: { type: 'object' } }]
+          : [
+            { name: 'click', description: 'c', parameters: { type: 'object' } },
+            { name: 'read', description: 'r', parameters: { type: 'object' } },
+          ],
+        async execute() {
+          return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
+        },
+      },
+      // This plugin loads before the Session controller bundle finishes
+      // mounting, so the service is absent at start and only the lookup can see
+      // it. Pinning the value here used to freeze the global view for good.
+      sessionControllerLookup: () => (mounted ? { async resolveAgent() { return agent } } : undefined),
+      serverVersion: '1.0.0',
+      agyConfigRoot: root,
+    })
+    bridge.setSession('session-late')
+
+    const path = new URL(bridge.url).pathname
+    const list = async id => JSON.parse((await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0', id, method: 'tools/list', params: {},
+    }))).body).result.tools.map(tool => tool.name)
+
+    assert.deepEqual(await list(21), ['click'], 'no controller means the global view')
+
+    mounted = true
+    assert.ok((await list(22)).includes('read'), 'a controller mounted later still scopes the view')
+    await bridge.dispose()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('the bridge rejects a call that violates the advertised schema before the host runs it', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agy-mcp-args-'))
   try {
