@@ -170,7 +170,7 @@ test('bridge mode streams narration deltas instead of swallowing them', async ()
   assert.equal(deltas.join(''), 'Reading the file now. Done.')
 })
 
-test('bridge mode turns each MCP step into a real DSH tool call', async () => {
+test('bridge mode records each MCP step as a reasoning line, not a replayable tool call', async () => {
   const { handle } = liveBridge()
   const adapter = new AgyAdapter(
     { enabled: true, toolPolicy: 'dsh-owned', model: 'gemini-3.8-flash' },
@@ -188,18 +188,22 @@ test('bridge mode turns each MCP step into a real DSH tool call', async () => {
     tools: [{ name: 'read', description: 'r', parameters: { type: 'object', properties: {} } }],
   })) chunks.push(chunk)
 
+  // The host executes every `tool-call` block in a committed assistant message
+  // and starts another step (`@deepseek-ai/dsh-agent-loop`). The bridge has
+  // already run the tool, so advertising it would replay the side effect,
+  // re-ask approval, and make AGY answer the same work a second time.
   const calls = chunks.filter(chunk => chunk.type === 'block-end' && chunk.block?.type === 'tool-call')
-  assert.equal(calls.length, 1, 'exactly one tool call is emitted for the completed step')
-  assert.equal(calls[0].block.name, 'read', 'the real tool name is unwrapped from ToolName')
-  // The content-block contract types `arguments` as a JSON string, and the
-  // session format validator compares the advertised block against the later
-  // tool/call event by reference — an object here is rejected at restore time.
-  assert.equal(typeof calls[0].block.arguments, 'string', 'arguments must be a JSON string')
-  assert.deepEqual(JSON.parse(calls[0].block.arguments), { path: 'README.md' })
-  assert.match(String(calls[0].block.id), /^agy-mcp-/)
+  assert.equal(calls.length, 0, 'no tool-call block may reach the host')
+  assert.equal(chunks.some(chunk => chunk.type === 'tool-call-delta'), false)
 
-  // The host already executed the call through the bridge, so the emitted
-  // block is informational and the turn finishes as an ordinary stop.
+  const reasoning = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'reasoning')
+  assert.ok(reasoning, 'the bridged step is recorded as a reasoning annotation')
+  assert.match(reasoning.block.text, /\[dsh read\] ran \{"path":"README\.md"\}/)
+
+  const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
+  assert.equal(text, 'Reading the file now. Done.')
+
+  // The bridge ran the call, so the turn finishes as an ordinary stop.
   const finish = chunks.find(chunk => chunk.type === 'finish')
   assert.deepEqual(finish.reason, { kind: 'stop' })
 })
@@ -330,12 +334,16 @@ test('bridge mode reports a turn that only made tool calls instead of failing em
   })) chunks.push(chunk)
 
   const calls = chunks.filter(chunk => chunk.type === 'block-end' && chunk.block?.type === 'tool-call')
-  assert.equal(calls.length, 1)
-  // AGY narrated nothing this turn, so the tool-call block is the whole record.
-  // The turn must still close instead of throwing EMPTY_RESPONSE: the tool calls
-  // already ran, and retrying would repeat them. It must NOT emit an empty text
-  // block either — that lands in the transcript as a blank assistant message,
-  // and the host refuses to `session/follow` a session holding one.
+  assert.equal(calls.length, 0, 'no tool-call block may reach the host')
+  // AGY narrated nothing this turn, so the reasoning line about the bridged step
+  // is the whole record. The turn must still close instead of throwing
+  // EMPTY_RESPONSE: the tool calls already ran, and retrying would repeat them.
+  // It must NOT emit an empty text block either — that lands in the transcript as
+  // a blank assistant message, and the host refuses to `session/follow` a session
+  // holding one.
+  const reasoning = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'reasoning')
+  assert.ok(reasoning, 'a tool-only turn is recorded as a reasoning annotation')
+  assert.match(reasoning.block.text, /\[dsh read\] ran /)
   const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
   assert.equal(text, '')
   const textBlock = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'text')

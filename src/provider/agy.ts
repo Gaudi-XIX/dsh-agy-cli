@@ -412,6 +412,32 @@ function mcpToolStepOf(event: AgyJsonEvent): AgyMcpToolStep | undefined {
   return { stepIndex, toolName, arguments: args.Arguments ?? {} }
 }
 
+/**
+ * One bridged MCP step rendered as a transcript line.
+ *
+ * Deliberately NOT a DSH tool-call block. The host commits the assistant
+ * message, then executes every `tool-call` block it contains and starts another
+ * step (`@deepseek-ai/dsh-agent-loop` — `message.content.filter(block =>
+ * block.type === "tool-call")` … `executeToolCalls(...)`). The bridge has
+ * already run the tool, so advertising it as a call executes it a second time,
+ * re-asks for approval, and makes AGY answer the same work again — the
+ * "content arrived, vanished, then arrived several times over" report. A
+ * reasoning line keeps the step visible in the transcript without handing the
+ * host a call to replay.
+ */
+const MCP_STEP_ARG_LIMIT = 400
+
+function mcpStepLogLine(step: AgyMcpToolStep, state: string): string {
+  let args: string
+  try {
+    args = JSON.stringify(step.arguments ?? {})
+  } catch {
+    args = '{…}'
+  }
+  if (args.length > MCP_STEP_ARG_LIMIT) args = `${args.slice(0, MCP_STEP_ARG_LIMIT)}…`
+  return `[dsh ${step.toolName}] ${state === 'ERROR' ? 'failed' : 'ran'} ${args}\n`
+}
+
 function stepStateOf(event: AgyJsonEvent): string | undefined {
   if (event.event !== 'step_update') return undefined
   const step = (event as { step_update?: Record<string, unknown> }).step_update
@@ -1414,7 +1440,10 @@ export class AgyAdapter extends LlmAdapter {
     let latestStepUsage: Record<string, unknown> | undefined
     let resultUsage: Record<string, unknown> | undefined
     let fallbackUsage: Record<string, unknown> | undefined
-    let toolBlockIndex = 1
+    // One consolidated reasoning block records the bridged tool steps, so the
+    // transcript shows what AGY did without the host replaying any of it.
+    let mcpStepsOpen = false
+    let mcpStepsText = ''
     try {
       for await (const event of queue) {
         const r = event as unknown as Record<string, unknown>
@@ -1459,23 +1488,14 @@ export class AgyAdapter extends LlmAdapter {
             const state = stepStateOf(event)
             if (state === 'DONE' || state === 'ERROR') {
               telemetry.toolCallCount += 1
-              telemetry.bridgeOutcome = 'dsh-tool-call'
-              const callId = `agy-mcp-${telemetry.requestId}-${step.stepIndex}` as ToolCallId
-              const argumentsJson = JSON.stringify(step.arguments ?? {})
-              yield { type: 'block-start', index: toolBlockIndex, blockType: 'tool-call' }
-              yield {
-                type: 'tool-call-delta',
-                index: toolBlockIndex,
-                id: callId,
-                name: step.toolName,
-                argumentsDelta: argumentsJson,
+              telemetry.bridgeOutcome = 'mcp-tools'
+              if (!mcpStepsOpen) {
+                mcpStepsOpen = true
+                yield { type: 'block-start', index: 1, blockType: 'reasoning' }
               }
-              yield {
-                type: 'block-end',
-                index: toolBlockIndex,
-                block: { type: 'tool-call', id: callId, name: step.toolName, arguments: argumentsJson } as ContentBlock,
-              }
-              toolBlockIndex += 1
+              const line = mcpStepLogLine(step, state)
+              mcpStepsText += line
+              yield { type: 'reasoning-delta', index: 1, text: line }
             }
             continue
           }
@@ -1570,6 +1590,9 @@ export class AgyAdapter extends LlmAdapter {
     }
     if (blockStarted) {
       yield { type: 'block-end', index: 0, block: { type: 'text', text: visibleText } }
+    }
+    if (mcpStepsOpen) {
+      yield { type: 'block-end', index: 1, block: { type: 'reasoning', text: mcpStepsText } }
     }
     if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
     yield { type: 'finish', reason: { kind: 'stop' } }
@@ -2001,10 +2024,12 @@ export class AgyAdapter extends LlmAdapter {
     })
 
     let blockStarted = false
-    // Text uses block 0; each bridged tool call takes the next index so
-    // interleaved narration and calls keep stable identities.
-    let toolBlockIndex = 1
     let visibleText = ''
+    // One consolidated reasoning block (index 1) records the bridged tool steps
+    // and, when the turn was cut short, AGY's own reason for it. The block opens
+    // lazily so a turn with neither keeps its plain text-only shape.
+    let mcpStepsOpen = false
+    let mcpStepsText = ''
     let resultSeen = false
     let finalResponse: string | undefined
     let finalStatus: string | undefined
@@ -2091,42 +2116,26 @@ export class AgyAdapter extends LlmAdapter {
 
         if (mcpToolsEnabled) {
           // Bridge mode keeps both channels live: AGY narrates through ordinary
-          // text deltas, and every DSH tool call arrives as an MCP step. Emitting
-          // each call as a real DSH tool call is what makes intermediate steps
-          // visible in the transcript and lets the host apply its own approval
-          // policy to every execution.
+          // text deltas and every DSH tool call arrives as an MCP step. The step
+          // is recorded as a reasoning line, NOT as a DSH tool-call block. The
+          // bridge has already run the tool; advertising it again makes the host
+          // execute the block it just committed (`dsh-agent-loop` filters the
+          // committed message for `tool-call` blocks and runs `executeToolCalls`
+          // on them) — that replayed side effects, re-asked approval, and made
+          // AGY answer the same work a second time.
           const step = mcpToolStepOf(event)
           if (step !== undefined) {
             const state = stepStateOf(event)
             if (state === 'DONE' || state === 'ERROR') {
               telemetry.toolCallCount += 1
-              telemetry.bridgeOutcome = 'dsh-tool-call'
-              const callId = `agy-mcp-${telemetry.requestId}-${step.stepIndex}` as ToolCallId
-              // `arguments` is a JSON string in the content-block contract, not an
-              // object. The session format validator compares the advertised block
-              // against the later tool/call event by reference, so an object (two
-              // distinct instances after the round-trip) is rejected as "does not
-              // match one advertised tool call" while the identical string passes.
-              const argumentsJson = JSON.stringify(step.arguments ?? {})
-              yield { type: 'block-start', index: toolBlockIndex, blockType: 'tool-call' }
-              yield {
-                type: 'tool-call-delta',
-                index: toolBlockIndex,
-                id: callId,
-                name: step.toolName,
-                argumentsDelta: argumentsJson,
+              telemetry.bridgeOutcome = 'mcp-tools'
+              if (!mcpStepsOpen) {
+                mcpStepsOpen = true
+                yield { type: 'block-start', index: 1, blockType: 'reasoning' }
               }
-              yield {
-                type: 'block-end',
-                index: toolBlockIndex,
-                block: {
-                  type: 'tool-call',
-                  id: callId,
-                  name: step.toolName,
-                  arguments: argumentsJson,
-                } as ContentBlock,
-              }
-              toolBlockIndex += 1
+              const line = mcpStepLogLine(step, state)
+              mcpStepsText += line
+              yield { type: 'reasoning-delta', index: 1, text: line }
             }
             // The MCP plumbing step carries no model text, but other step
             // shapes (agent_response) do, so fall through to the text channel
@@ -2308,24 +2317,30 @@ export class AgyAdapter extends LlmAdapter {
 
     if (blockStarted) {
       yield { type: 'block-end', index: 0, block: { type: 'text', text: visibleText } }
-    } else if (telemetry.toolCallCount > 0) {
-      // Every tool call ran and the turn closed without narration. Emit nothing
-      // for the text channel: a tool-only step ends on its tool-call block, and
-      // an empty text block is not harmless — it lands in the transcript as a
-      // blank assistant message, and a session holding one is refused by the
-      // host's `session/follow` (pocket then retries it forever). The turn is
-      // still a success; EMPTY_RESPONSE would be worse, since the code is
-      // retryable and would re-run side effects that already happened.
-    } else {
+    }
+    // AGY's own reason for a cut-short turn belongs in the same reasoning block
+    // as the bridged tool steps, so the transcript gets one annotation, not two.
+    if (streamedPartialAnswer) {
+      const reason = (lastResultError ?? finalErrorDetail ?? 'AGY reported status ERROR').trim()
+      const line = `[agy finished with error] ${reason}\n`
+      if (!mcpStepsOpen) {
+        mcpStepsOpen = true
+        yield { type: 'block-start', index: 1, blockType: 'reasoning' }
+      }
+      mcpStepsText += line
+      yield { type: 'reasoning-delta', index: 1, text: line }
+    }
+    if (mcpStepsOpen) {
+      yield { type: 'block-end', index: 1, block: { type: 'reasoning', text: mcpStepsText } }
+    } else if (!blockStarted && telemetry.toolCallCount === 0) {
       throw new LlmError('AGY completed without a text response', EMPTY_RESPONSE_CODE)
     }
-    if (streamedPartialAnswer) {
-      // AGY's own reason, kept in the transcript next to the text it produced.
-      const reason = (lastResultError ?? finalErrorDetail ?? 'AGY reported status ERROR').trim()
-      yield { type: 'block-start', index: 1, blockType: 'reasoning' }
-      yield { type: 'reasoning-delta', index: 1, text: `[agy finished with error] ${reason}\n` }
-      yield { type: 'block-end', index: 1, block: { type: 'reasoning', text: `[agy finished with error] ${reason}\n` } }
-    }
+    // A tool-only turn with no narration and no recorded step still succeeds:
+    // an empty text block is not harmless — it lands in the transcript as a
+    // blank assistant message, and a session holding one is refused by the
+    // host's `session/follow` (pocket then retries it forever). Throwing
+    // EMPTY_RESPONSE would be worse, since the code is retryable and would
+    // re-run side effects that already happened.
     if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
     yield { type: 'finish', reason: { kind: 'stop' } }
     return { retryWithFullPrompt: false }

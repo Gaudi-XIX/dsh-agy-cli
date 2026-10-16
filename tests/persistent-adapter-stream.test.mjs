@@ -232,17 +232,16 @@ test('persistent dispatch streams text deltas before the turn resolves', async (
   )
 })
 
-test('persistent dispatch turns a bridged MCP step into a real DSH tool call', async () => {
+test('persistent dispatch records a bridged MCP step as a reasoning line', async () => {
   const { transport } = pendingTransport([NARRATION_A, MCP_DONE, RESULT])
   const adapter = adapterFor(transport)
   const chunks = await collect(adapter.stream(baseRequest()))
 
-  const calls = chunks.filter(chunk => chunk.type === 'block-end' && chunk.block?.type === 'tool-call')
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].block.name, 'read', 'the real tool name is unwrapped from ToolName')
-  assert.equal(typeof calls[0].block.arguments, 'string', 'arguments must be a JSON string')
-  assert.deepEqual(JSON.parse(calls[0].block.arguments), { path: 'README.md' })
-  assert.match(String(calls[0].block.id), /^agy-mcp-/)
+  assert.equal(chunks.filter(chunk => chunk.type === 'block-end' && chunk.block?.type === 'tool-call').length, 0, 'no tool-call block may reach the host')
+  const reasoning = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'reasoning')
+  assert.ok(reasoning, 'the bridged step is recorded as a reasoning annotation')
+  assert.equal(reasoning.block.type, 'reasoning')
+  assert.match(reasoning.block.text, /\[dsh read\] ran \{"path":"README\.md"\}/)
   assert.equal(chunks.find(chunk => chunk.type === 'finish').reason.kind, 'stop')
 })
 
