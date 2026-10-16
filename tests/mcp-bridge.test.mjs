@@ -9,7 +9,7 @@ import {
   MCP_PROTOCOL_VERSION,
   negotiateProtocolVersion,
 } from '../lib/mcp/protocol.js'
-import { projectDshTools } from '../lib/mcp/tool-projection.js'
+import { projectDshTools, validateToolArguments } from '../lib/mcp/tool-projection.js'
 import { mountMcpEndpoint } from '../lib/mcp/endpoint.js'
 import {
   AGY_MCP_SERVER_NAME,
@@ -170,6 +170,133 @@ test('tool projection degrades an unusable schema to an open object instead of d
     properties: {},
     additionalProperties: false,
   })
+})
+
+test('the bridge asks the registry as the session agent, not as the global layer', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agy-mcp-scope-'))
+  try {
+    const webServer = fakeWebServer()
+    const agent = { id: 'agent-scoped' }
+    const bridge = await startDshMcpBridge({
+      webServer,
+      tools: {
+        // The global view (no scope) is the short UI/memory-only list. The file
+        // and shell tools are an ancestor contribution of the agent plane, so a
+        // scope-less call would silently hand AGY a bridge with no `read`.
+        schemas: scope => scope === undefined
+          ? [{ name: 'click', description: 'c', parameters: { type: 'object' } }]
+          : [
+            { name: 'click', description: 'c', parameters: { type: 'object' } },
+            { name: 'read', description: 'r', parameters: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } },
+          ],
+        async execute() {
+          return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
+        },
+      },
+      sessionController: { async resolveAgent() { return { agent } } },
+      serverVersion: '1.0.0',
+      agyConfigRoot: root,
+    })
+    bridge.setSession('session-scope')
+    const path = new URL(bridge.url).pathname
+    const { body } = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0', id: 11, method: 'tools/list', params: {},
+    }))
+    const names = JSON.parse(body).result.tools.map(tool => tool.name)
+    assert.ok(names.includes('read'), 'the scoped agent plane reaches AGY')
+
+    const call = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'read', arguments: { file_path: 'a.txt' } },
+    }))
+    assert.equal(JSON.parse(call.body).result.isError, false)
+    assert.equal(JSON.parse(call.body).error, undefined)
+    await bridge.dispose()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('the bridge rejects a call that violates the advertised schema before the host runs it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agy-mcp-args-'))
+  try {
+    const webServer = fakeWebServer()
+    const executions = []
+    const bridge = await startDshMcpBridge({
+      webServer,
+      tools: {
+        schemas: () => [
+          { name: 'memory_search', description: 'm', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] } },
+        ],
+        async execute(exec) {
+          executions.push(exec.name)
+          return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
+        },
+      },
+      sessionController: { async resolveAgent() { return { agent: { id: 'a' } } } },
+      serverVersion: '1.0.0',
+      agyConfigRoot: root,
+    })
+    bridge.setSession('session-args')
+    const path = new URL(bridge.url).pathname
+    const call = async (id, args) => JSON.parse((await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'memory_search', arguments: args },
+    }))).body).result
+
+    // AGY sent `{}` for a required string and a number for a string field.
+    const empty = await call(21, {})
+    assert.equal(empty.isError, true)
+    assert.match(empty.content[0].text, /invalid arguments: missing required property "query"/)
+    const wrongType = await call(22, { query: 123 })
+    assert.equal(wrongType.isError, true)
+    assert.match(wrongType.content[0].text, /"query" must be a string, got number/)
+    assert.deepEqual(executions, [], 'neither call reached the host pipeline')
+
+    // A type the schema does not describe is left to DSH, not guessed here.
+    const unknownKey = await call(23, { query: 'ok', somethingElse: 7 })
+    assert.equal(unknownKey.isError, false)
+    assert.deepEqual(executions, ['memory_search'])
+
+    const ghost = JSON.parse((await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0', id: 24, method: 'tools/call', params: { name: 'write', arguments: { file_path: 'x' } },
+    }))).body).result
+    assert.equal(ghost.isError, true)
+    assert.match(ghost.content[0].text, /unknown tool "write"/)
+    assert.deepEqual(executions, ['memory_search'], 'a tool AGY was never shown does not run')
+
+    await bridge.dispose()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('validateToolArguments checks only what the schema declares', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      path: { type: 'string' },
+      depth: { type: 'integer' },
+      files: { type: 'array' },
+      flags: { type: 'object' },
+      on: { type: 'boolean' },
+      any: {},
+    },
+    required: ['path'],
+  }
+  assert.deepEqual(validateToolArguments(schema, { path: 'a' }), [])
+  assert.deepEqual(validateToolArguments(schema, { path: 1 }), ['"path" must be a string, got number'])
+  assert.deepEqual(validateToolArguments(schema, { path: 'a', depth: 1.5 }), ['"depth" must be an integer, got number'])
+  assert.deepEqual(validateToolArguments(schema, { path: 'a', files: 'x', on: 'yes' }), [
+    '"files" must be an array, got string',
+    '"on" must be a boolean, got string',
+  ])
+  assert.deepEqual(validateToolArguments(schema, { path: 'a', files: [], flags: {}, any: null }), [])
+  assert.deepEqual(validateToolArguments(schema, {}), ['missing required property "path"'])
+  assert.deepEqual(validateToolArguments(schema, undefined), ['arguments must be an object, got undefined'])
+  assert.deepEqual(validateToolArguments(schema, ['a']), ['arguments must be an object, got array'])
+  assert.deepEqual(validateToolArguments(schema, { path: 'a', undeclared: 1 }), [])
+  // Nothing declared to check against means nothing to reject here.
+  assert.deepEqual(validateToolArguments({ type: 'object' }, { anything: 1 }), [])
+  assert.deepEqual(validateToolArguments(undefined, { anything: 1 }), [])
 })
 
 test('the mounted endpoint rejects a missing token and a non-loopback peer', async () => {

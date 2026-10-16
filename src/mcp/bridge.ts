@@ -25,6 +25,7 @@ import {
 } from './agy-registration.js'
 import {
   projectDshTools,
+  validateToolArguments,
   type DshToolRegistryLike,
 } from './tool-projection.js'
 import type { McpCallResult, McpTextContent, McpToolDescriptor } from './protocol.js'
@@ -157,9 +158,7 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
       serverName: AGY_MCP_SERVER_NAME,
       serverVersion: options.serverVersion,
       instructions: INSTRUCTIONS,
-      listTools: async () => projectDshTools(options.tools, {
-        ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
-      }).tools,
+      listTools: async (sessionHandle) => projectVisibleTools(options, await agentOf(options, sessionHandle)),
       callTool: (sessionHandle, name, args) => executeDshTool(options, sessionHandle, name, args),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     })
@@ -176,12 +175,11 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
       {
         url: endpoint.url,
         token: endpoint.token,
-        // The allow rules AGY needs are per tool. `writeAllowRules` only
-        // replaces this bridge's own `mcp(dsh/*)` rules, so a later re-read can
-        // widen the set without disturbing anything the user added.
-        toolNames: projectDshTools(options.tools, {
-          ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
-        }).tools.map(tool => tool.name),
+        // No tool list travels here on purpose: the allow rule this bridge
+        // needs is the server-wide wildcard `mcp(dsh/*)`, so a DSH tool that
+        // appears later is covered the moment it shows up in `tools/list`
+        // without rewriting the AGY settings file. The per-turn projection in
+        // `listTools` is the scoped one that matters.
       },
       {
         ...(options.agyConfigRoot === undefined ? {} : { configRoot: options.agyConfigRoot }),
@@ -211,20 +209,50 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
   }
 }
 
+async function agentOf(
+  options: DshMcpBridgeOptions,
+  sessionHandle: string,
+): Promise<unknown> {
+  // The AGY session handle is the DSH session id by convention (see the
+  // stream() path). Two things need that session's live Agent: the approval
+  // service denies any execution with no agent to route through, and the tool
+  // registry answers a scoped query with the agent-plane tools (file/shell)
+  // that the global view does not contain.
+  if (options.sessionController === undefined || sessionHandle.length === 0) return undefined
+  const resolved = await options.sessionController.resolveAgent(sessionHandle).catch(() => undefined)
+  if (resolved !== undefined && typeof resolved === 'object' && 'agent' in resolved) {
+    return (resolved as { agent: unknown }).agent
+  }
+  return undefined
+}
+
 async function executeDshTool(
   options: DshMcpBridgeOptions,
   sessionHandle: string,
   name: string,
   args: Record<string, unknown>,
 ): Promise<McpCallResult> {
-  // The AGY session handle is the DSH session id by convention (see the
-  // stream() path); resolve it to the live Agent so the approval service has
-  // someone to ask. No resolvable agent means fail closed, never silently open.
-  let agent: unknown
-  if (options.sessionController !== undefined && sessionHandle.length > 0) {
-    const resolved = await options.sessionController.resolveAgent(sessionHandle).catch(() => undefined)
-    if (resolved !== undefined && typeof resolved === 'object' && 'agent' in resolved) {
-      agent = (resolved as { agent: unknown }).agent
+  // No resolvable agent means fail closed, never silently open: the call still
+  // goes through `tools.execute()` so the host guard chain sees it, but the host
+  // itself decides what an unscoped call may do.
+  const agent = await agentOf(options, sessionHandle)
+  const projected = projectVisibleTools(options, agent)
+  const descriptor = projected.find(entry => entry.name === name)
+  if (descriptor === undefined) {
+    // Only assert "unknown tool" when the projection is the one AGY was shown.
+    // With no resolvable agent the scoped list degenerates to the global view,
+    // so a legitimate file tool can be missing from it; that call still has to
+    // reach the host, which denies it on its own terms instead of us inventing a
+    // rejection for a tool we merely failed to see.
+    if (agent !== undefined) {
+      return { content: [{ type: 'text', text: `unknown tool "${name}"` }], isError: true }
+    }
+  } else {
+    const problems = validateToolArguments(descriptor.inputSchema, args)
+    if (problems.length > 0) {
+      // Wording mirrors the host's own rejection so AGY sees one consistent
+      // failure shape whether the bridge or DSH catches the call.
+      return { content: [{ type: 'text', text: `invalid arguments: ${problems.join('; ')}` }], isError: true }
     }
   }
   const controller = new AbortController()
@@ -236,6 +264,21 @@ async function executeDshTool(
     signal: controller.signal,
   })
   return resultToCallResult(result)
+}
+
+/**
+ * The same projection `tools/list` advertises, used to pre-check a call.
+ * A registry failure yields an empty list, which reads as "unknown tool" —
+ * the correct fail-closed direction for a bridge that cannot see what it runs.
+ */
+function projectVisibleTools(
+  options: DshMcpBridgeOptions,
+  agent: unknown,
+): readonly McpToolDescriptor[] {
+  return projectDshTools(options.tools, {
+    ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
+    scope: agent,
+  }).tools
 }
 
 export { AGY_MCP_SERVER_NAME, agyConfigRoot, agySettingsRoot }

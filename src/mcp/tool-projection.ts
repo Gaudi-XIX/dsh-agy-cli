@@ -29,6 +29,15 @@ export interface ToolProjectionOptions {
   readonly allowlist?: readonly string[]
   /** Upper bound on projected tools; guards a pathological registry. */
   readonly maxTools?: number
+  /**
+   * The viewing scope, i.e. the live agent of the DSH session the bridge serves.
+   * This is load-bearing: `ctx.tools.schemas()` with no scope answers with the
+   * GLOBAL view, and `read`/`write`/`grep`/`pwsh` are no longer in the global
+   * layer — the official presets moved them onto the agent plane, so they reach
+   * a scope only as ancestor contributions. A scope-less projection therefore
+   * hands AGY the UI/memory tools and silently drops every file and shell tool.
+   */
+  readonly scope?: unknown
 }
 
 export interface ToolProjectionResult {
@@ -71,6 +80,64 @@ function readSchemaName(value: unknown): string | undefined {
  * is snapshotted per request rather than pushed; a profile change simply takes
  * effect on the next turn.
  */
+/**
+ * Check a call's arguments against the projected schema, mechanically.
+ *
+ * AGY does not honour `required` and sometimes sends the wrong primitive
+ * (`{"query":123}` for a string field, `{}` for a call that needs one). Left
+ * unchecked, every such call still walks the host guard chain and the approval
+ * service before the schema layer rejects it — so the bridge answers first, with
+ * the same wording the host uses. Anything this function cannot decide
+ * (unknown property, no declared type) is left to DSH: a bridge that guesses
+ * would be a second, weaker validator pretending to be the real one.
+ */
+export function validateToolArguments(schema: unknown, args: unknown): string[] {
+  if (!isRecord(schema) || schema.type !== 'object') return []
+  const problems: string[] = []
+  const given = isRecord(args) ? args : undefined
+  if (given === undefined) {
+    return [`arguments must be an object, got ${Array.isArray(args) ? 'array' : typeof args}`]
+  }
+  const required = Array.isArray(schema.required) ? schema.required : []
+  for (const key of required) {
+    if (typeof key !== 'string') continue
+    if (given[key] === undefined) problems.push(`missing required property "${key}"`)
+  }
+  const properties = isRecord(schema.properties) ? schema.properties : undefined
+  if (properties !== undefined) {
+    for (const [key, value] of Object.entries(given)) {
+      const declared = properties[key]
+      if (!isRecord(declared) || value === undefined || value === null) continue
+      const expected = declared.type
+      if (typeof expected !== 'string') continue
+      if (!matchesJsonType(value, expected)) {
+        problems.push(`"${key}" must be ${expectedDescriptionOf(expected)}, got ${typeof value}`)
+      }
+    }
+  }
+  return problems
+}
+
+function matchesJsonType(value: unknown, expected: string): boolean {
+  switch (expected) {
+    case 'string': return typeof value === 'string'
+    case 'number': return typeof value === 'number'
+    case 'integer': return typeof value === 'number' && Number.isInteger(value)
+    case 'boolean': return typeof value === 'boolean'
+    case 'array': return Array.isArray(value)
+    case 'object': return isRecord(value)
+    default: return true
+  }
+}
+
+function expectedDescriptionOf(expected: string): string {
+  switch (expected) {
+    case 'integer': return 'an integer'
+    case 'array': return 'an array'
+    default: return `a ${expected}`
+  }
+}
+
 export function projectDshTools(
   registry: DshToolRegistryLike | undefined,
   options: ToolProjectionOptions = {},
@@ -82,7 +149,7 @@ export function projectDshTools(
   }
   let raw: readonly unknown[]
   try {
-    raw = registry.schemas() ?? []
+    raw = registry.schemas(options.scope) ?? []
   } catch {
     return { tools: [], excluded }
   }

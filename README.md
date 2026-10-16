@@ -64,6 +64,9 @@ Provider 使用 spawn(executable, args) 启动 AGY，不经过 shell 拼接命�
 | 图片 staging bridge | 0.9.0 experimental，桌面闭环已验证 | imageInput: experimental（bundle） |
 | image modality | 受限公开 | experimental 时 text+image，off 时 text-only |
 | persistent stream transport | 0.8.0 已实现 opt-in | 默认 `one-shot`，显式 `transport: persistent` 才复用 worker |
+| MCP 工具通道 | 已实现 | `mcpBridge: true`（默认），工具目录经 loopback MCP 下发，不占提示词预算 |
+| 会话绑定持久化 | 已实现 | `sessionMode: resume` 下写入 `<DSH_HOME>/agy-provider/sessions.json`，宿主重启后仍走增量 |
+| 部分答案交付 | 0.10.0 起 | AGY 被掐断但已流出文字时保留该文字并把原因附为 reasoning 注记 |
 
 ## 安装与使用
 
