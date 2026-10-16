@@ -1301,6 +1301,10 @@ export class AgyAdapter extends LlmAdapter {
     // Log deprecation if suffix used (telemetry handled by caller via model id)
     const configured = this.currentModels.find(entry => entry.id.toLowerCase() === baseId.toLowerCase()) ?? this.currentModels.find(entry => entry.id === model)
     void suffixEffort // suffix implies effort, handled in stream route; resolve keeps base id for UI consistency
+    // Declare the same default the stream route applies (gemini-* -> 'high', see effectiveEffort).
+    // Without this declaration the host cannot materialize a default effort and the UI falls back to
+    // efforts[0]='low', so the picker shows 'low' while the runtime runs 'high' — the "changed but jumps back" symptom.
+    const defaultEffort: ReasoningEffortId | undefined = baseId.toLowerCase().startsWith('gemini-') ? 'high' as ReasoningEffortId : undefined
     const inputModalities = this.imageInput === 'experimental'
       ? ['text', 'image'] as const
       : ['text'] as const
@@ -1314,6 +1318,7 @@ export class AgyAdapter extends LlmAdapter {
         : { context: { contextWindow: configured.contextWindow } }),
       reasoning: {
         efforts: AGY_REASONING_METADATA,
+        ...(defaultEffort === undefined ? {} : { defaultEffort }),
       },
     })
   }

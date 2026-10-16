@@ -194,7 +194,14 @@ test('AgyAdapter exposes and forwards the supported reasoning efforts', async ()
   const resolved = await adapter.resolveModel('agy-test', 'gemini-test')
   assert.deepEqual(resolved.reasoning?.efforts.map(effort => effort.id), ['low', 'medium', 'high'])
   assert.deepEqual(resolved.reasoning?.efforts.map(effort => effort.description), [undefined, undefined, undefined])
-  assert.equal(resolved.reasoning?.defaultEffort, undefined)
+  // gemini-* declares the same default the stream route applies, so the host materializes
+  // 'high' and the UI stops falling back to efforts[0]='low'.
+  assert.equal(resolved.reasoning?.defaultEffort, 'high')
+
+  const claudeResolved = await adapter.resolveModel('agy-test', 'claude-sonnet-test')
+  assert.deepEqual(claudeResolved.reasoning?.efforts.map(effort => effort.id), ['low', 'medium', 'high'])
+  // claude-* never receives --effort, so it must not advertise a default either.
+  assert.equal(claudeResolved.reasoning?.defaultEffort, undefined)
 
   for await (const _chunk of adapter.stream({ ...request, reasoningEffort: 'high' })) {}
   assert.equal(captured[0]?.reasoningEffort, 'high')
