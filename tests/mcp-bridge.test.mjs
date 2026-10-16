@@ -193,7 +193,10 @@ test('the bridge asks the registry as the session agent, not as the global layer
           return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
         },
       },
-      sessionController: { async resolveAgent() { return { agent } } },
+      // The real controller unwraps and returns the Agent itself (it throws the
+      // rejection instead of handing back a wrapper), so the bare object is what
+      // production sees and what the bridge has to accept.
+      sessionController: { async resolveAgent() { return agent } },
       serverVersion: '1.0.0',
       agyConfigRoot: root,
     })

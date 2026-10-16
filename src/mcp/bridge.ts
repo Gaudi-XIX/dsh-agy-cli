@@ -50,7 +50,7 @@ export interface DshToolExecutionResultLike {
 
 /** The host service that resolves a session id to its live Agent. */
 export interface DshSessionControllerLike {
-  resolveAgent(sessionId: unknown): Promise<{ readonly agent?: unknown } | { readonly error?: unknown }>
+  resolveAgent(sessionId: unknown): Promise<unknown>
 }
 
 export interface DshMcpBridgeOptions {
@@ -209,21 +209,51 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
   }
 }
 
+/**
+ * Resolve the live Agent for the session this bridge currently serves.
+ *
+ * The adapter re-points the endpoint at the DSH session before every AGY turn
+ * (see the `setSession` call in the provider), and that handle survives across
+ * turns, so a direct lookup is enough. Getting the Agent matters twice over: the
+ * approval service denies any execution with no agent to route through, and the
+ * tool registry answers a *scoped* query with the agent-plane tools (file and
+ * shell) that its global view does not contain.
+ *
+ * A failure to resolve is reported through the bridge logger instead of being
+ * swallowed: "the session has no agent" and "the lookup threw" look identical
+ * from the outside, and that ambiguity is what made this bug cost a restart.
+ */
 async function agentOf(
   options: DshMcpBridgeOptions,
   sessionHandle: string,
 ): Promise<unknown> {
-  // The AGY session handle is the DSH session id by convention (see the
-  // stream() path). Two things need that session's live Agent: the approval
-  // service denies any execution with no agent to route through, and the tool
-  // registry answers a scoped query with the agent-plane tools (file/shell)
-  // that the global view does not contain.
-  if (options.sessionController === undefined || sessionHandle.length === 0) return undefined
-  const resolved = await options.sessionController.resolveAgent(sessionHandle).catch(() => undefined)
-  if (resolved !== undefined && typeof resolved === 'object' && 'agent' in resolved) {
-    return (resolved as { agent: unknown }).agent
+  const controller = options.sessionController
+  if (controller === undefined || sessionHandle.length === 0) return undefined
+  const resolved = await controller.resolveAgent(sessionHandle).catch((error: unknown) => {
+    options.logger?.(`dsh mcp bridge: resolveAgent("${sessionHandle}") threw ${String(error)}`)
+    return undefined
+  })
+  const agent = agentIn(resolved)
+  if (agent === undefined) {
+    options.logger?.(`dsh mcp bridge: no agent resolved for session "${sessionHandle}"`)
   }
-  return undefined
+  return agent
+}
+
+function agentIn(resolved: unknown): unknown {
+  if (resolved === undefined || resolved === null) return undefined
+  // The host's controller already unwraps: `sessionController.resolveAgent()`
+  // returns the Agent itself (it throws `ApiSessionAgentResult.error` instead of
+  // handing back a wrapper). Older and mocked shapes carry `{ agent }`, so accept
+  // both — but never mistake a thrown-error wrapper for a live agent.
+  if (typeof resolved === 'object') {
+    const record = resolved as { agent?: unknown; error?: unknown }
+    if ('agent' in record) return record.agent
+    // A rejection wrapper is not an agent; the host normally throws instead of
+    // returning one, but an older build may hand it back as a value.
+    if ('error' in record) return undefined
+  }
+  return resolved
 }
 
 async function executeDshTool(
