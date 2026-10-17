@@ -126,21 +126,48 @@ Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue
 [Console]::Out.Write([WinCredHost]::Read($target))
 `
 
-function readAccessTokenFromKeyring(): string | null {
-  if (process.platform !== 'win32') return null
+interface KeyringIdentity {
+  accessToken: string | null
+  email?: string | undefined
+  name?: string | undefined
+}
+
+function readIdentityFromKeyring(): KeyringIdentity {
+  if (process.platform !== 'win32') return { accessToken: null }
   try {
     const b64 = execFileSync(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `& { ${WIN_CRED_SCRIPT} }`, 'gemini:antigravity'],
       { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] },
     ).trim()
-    if (!b64) return null
+    if (!b64) return { accessToken: null }
     const jsonStr = Buffer.from(b64, 'base64').toString('utf8')
     const parsed = JSON.parse(jsonStr)
-    return parsed?.token?.access_token ?? null
+    const accessToken = parsed?.token?.access_token ?? null
+
+    let email: string | undefined
+    let name: string | undefined
+    const idToken = parsed?.id_token || parsed?.token?.id_token
+    if (typeof idToken === 'string') {
+      try {
+        const parts = idToken.split('.')
+        const p1 = parts[1]
+        if (p1) {
+          const payload = JSON.parse(Buffer.from(p1, 'base64').toString('utf8'))
+          email = typeof payload?.email === 'string' ? payload.email : undefined
+          name = typeof payload?.name === 'string' ? payload.name : undefined
+        }
+      } catch {}
+    }
+
+    return { accessToken, email, name }
   } catch {
-    return null
+    return { accessToken: null }
   }
+}
+
+function readAccessTokenFromKeyring(): string | null {
+  return readIdentityFromKeyring().accessToken
 }
 
 function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, proxyUrl = 'http://127.0.0.1:12450'): Promise<any> {
@@ -218,6 +245,7 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
 
 let cachedQuotas: Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>> = {}
 let lastQuotaFetchTime = 0
+let dynamicCatalogModels: Array<{ id: string; name: string }> = []
 
 async function refreshQuotas(force = false): Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> {
   const now = Date.now()
@@ -231,15 +259,20 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
   try {
     const raw = await fetchHttpsThroughHttpProxy('https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels', token)
     if (raw && typeof raw === 'object' && raw.models) {
-      const models = raw.models as Record<string, { quotaInfo?: QuotaModelEntry }>
+      const models = raw.models as Record<string, { displayName?: string; quotaInfo?: QuotaModelEntry }>
       const googleModels: FamilyQuotaModelEntry[] = []
       const anthropicModels: FamilyQuotaModelEntry[] = []
       const openaiModels: FamilyQuotaModelEntry[] = []
+      const discoveredList: Array<{ id: string; name: string }> = []
 
       for (const [id, m] of Object.entries(models)) {
         const info = m?.quotaInfo
+        const displayName = (m as any)?.displayName || id
+        discoveredList.push({ id, name: displayName })
+
         const entry: FamilyQuotaModelEntry = {
           modelId: id,
+          displayName,
           remainingFraction: typeof info?.remainingFraction === 'number' ? info.remainingFraction : 1,
           ...(info?.resetTime ? { resetTime: info.resetTime } : {}),
         }
@@ -249,13 +282,17 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
         else googleModels.push(entry)
       }
 
+      if (discoveredList.length > 0) {
+        dynamicCatalogModels = discoveredList
+      }
+
       const calcFamily = (list: FamilyQuotaModelEntry[]): FamilyQuotaInfo => {
         const remaining = list.length > 0 ? Math.min(...list.map((x) => x.remainingFraction ?? 1)) : 1
         const resetEntry = list.find((x) => x.resetTime)
         return {
           remainingFraction: remaining,
           ...(resetEntry?.resetTime ? { resetTime: resetEntry.resetTime } : {}),
-          weeklyFraction: 1,
+          weeklyFraction: remaining,
           updatedAt: now,
           models: list,
         }
@@ -317,13 +354,18 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       const overrides = readOverrides()
       const quotas = await refreshQuotas(false)
 
-      let discovered = DEFAULT_CATALOG_MODELS
+      let discovered = dynamicCatalogModels.length > 0 ? [...dynamicCatalogModels] : [...DEFAULT_CATALOG_MODELS]
       if (modelDiscovery) {
         try {
           const configured = configuredModels(activeConfig)
           const disc = await modelDiscovery.discover(configured)
           if (disc?.models && disc.models.length > 0) {
-            discovered = disc.models.map((m) => ({ id: m.id, name: m.name ?? m.id }))
+            const set = new Set(discovered.map((m) => m.id))
+            for (const dm of disc.models) {
+              if (!set.has(dm.id)) {
+                discovered.push({ id: dm.id, name: dm.name ?? dm.id })
+              }
+            }
           }
         } catch {}
       }
@@ -335,6 +377,11 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
 
       const defaultModel = overrides.defaultModel ?? activeConfig.model ?? 'gemini-3.8-flash'
       const defaultEffort = overrides.defaultEffort ?? 'high'
+
+      const identity = readIdentityFromKeyring()
+      const accountAlias = identity.email
+        ? `${identity.name ? `${identity.name} ` : ''}(${identity.email})`
+        : '本机主账号 (gemini:antigravity)'
 
       sendJson(res, 200, {
         plugin: 'dsh-agy-provider',
@@ -359,8 +406,9 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
           accounts: [
             {
               id: 'primary',
-              alias: '本机主账号 (gemini:antigravity)',
-              defaultAlias: true,
+              alias: accountAlias,
+              email: identity.email,
+              defaultAlias: false,
               dir: '',
               systemHome: true,
               enabled: true,
@@ -417,6 +465,11 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     // 3. POST /plugins/agy-link/pool/refresh-quota
     reg('/plugins/agy-link/pool/refresh-quota', async (req, res) => {
       const quotas = await refreshQuotas(true)
+      const identity = readIdentityFromKeyring()
+      const accountAlias = identity.email
+        ? `${identity.name ? `${identity.name} ` : ''}(${identity.email})`
+        : '本机主账号 (gemini:antigravity)'
+
       sendJson(res, 200, {
         ok: true,
         pool: {
@@ -429,8 +482,9 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
           accounts: [
             {
               id: 'primary',
-              alias: '本机主账号 (gemini:antigravity)',
-              defaultAlias: true,
+              alias: accountAlias,
+              email: identity.email,
+              defaultAlias: false,
               dir: '',
               systemHome: true,
               enabled: true,
