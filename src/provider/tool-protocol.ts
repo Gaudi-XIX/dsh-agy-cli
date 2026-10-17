@@ -5,10 +5,14 @@ import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 export const TOOL_PROTOCOL_LIMITS = Object.freeze({
   // The byte budgets below are the real guards: a desktop profile with many
   // bundles installed hands one adapter the union of every plugin's tools (56 on
-  // a stock DSH 0.2.0-rc.2 profile), which 32 rejected outright. 64 clears that
-  // headroom with room to spare while the prompt/schema byte ceilings still stop
-  // an oversized set on their own terms.
-  maxTools: 64,
+  // a stock DSH 0.2.0-rc.2 profile), which 32 rejected outright. The count is a
+  // backstop only — it was 64 when a stock profile carried 56-59 tools, but this
+  // machine's 18-bundle profile projects 73, so 64 silently dropped the four
+  // `schedule_*` tools with nothing in the log. Raised to 256 with the byte
+  // ceilings (64 KiB schema / 96 KiB contract) left as the effective limit; the
+  // projection now also logs every name it drops, so a future overflow is
+  // visible instead of silent.
+  maxTools: 256,
   maxToolNameLength: 128,
   maxDescriptionLength: 4_096,
   maxSchemaDepth: 10,

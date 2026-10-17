@@ -172,6 +172,30 @@ test('tool projection degrades an unusable schema to an open object instead of d
   })
 })
 
+test('tool projection honours an explicit maxTools cap and names what it dropped', () => {
+  // Regression: the default cap was 64 while this machine's 18-bundle profile
+  // projects 73 tools, so four `schedule_*` tools vanished with nothing logged.
+  const names = ['read', 'grep', 'write', 'glob', 'edit', 'pwsh']
+  const projection = projectDshTools({
+    schemas: () => names.map(name => ({ name, description: name, parameters: { type: 'object' } })),
+  }, { maxTools: 3 })
+  // The cap is applied in registry order, BEFORE the final alphabetical sort:
+  // the first three names the registry hands over are the three that survive,
+  // so which tools a future overflow costs is decided by registry order rather
+  // than by importance. The sorted output is what AGY actually sees.
+  assert.deepEqual(projection.tools.map(tool => tool.name), ['grep', 'read', 'write'])
+  assert.deepEqual([...projection.excluded].sort(), ['edit', 'glob', 'pwsh'])
+})
+
+test('tool projection leaves the default cap far above this machine\'s tool count', () => {
+  const names = Array.from({ length: 73 }, (_, index) => `tool-${String(index).padStart(3, '0')}`)
+  const projection = projectDshTools({
+    schemas: () => names.map(name => ({ name, description: name, parameters: { type: 'object' } })),
+  })
+  assert.equal(projection.tools.length, 73)
+  assert.deepEqual(projection.excluded, [])
+})
+
 test('the bridge asks the registry as the session agent, not as the global layer', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agy-mcp-scope-'))
   try {

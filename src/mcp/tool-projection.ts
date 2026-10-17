@@ -42,7 +42,13 @@ export interface ToolProjectionOptions {
 
 export interface ToolProjectionResult {
   readonly tools: readonly McpToolDescriptor[]
-  /** Names dropped by the allowlist, the built-in exclusions, or the cap. */
+  /**
+   * Names dropped by the allowlist, the built-in exclusions, or the cap. The
+   * caller cannot tell those three apart from this list alone, which is why the
+   * bridge filters the built-ins out before it reports what the model is
+   * missing: a cap overflow has to be visible in the log, and for two rounds it
+   * was not.
+   */
   readonly excluded: readonly string[]
 }
 
@@ -50,8 +56,11 @@ export interface ToolProjectionResult {
  * Tools that must never be projected to AGY. These are either DSH-internal
  * controls that would let AGY steer its own host, or tools whose execution
  * requires a DSH agent identity that an MCP-originated call does not carry.
+ *
+ * Exported so the bridge can tell "dropped on purpose" apart from "dropped by
+ * the cap" when it reports what the model is missing.
  */
-const NEVER_PROJECTED_TOOLS: ReadonlySet<string> = new Set([
+export const NEVER_PROJECTED_TOOLS: ReadonlySet<string> = new Set([
   'compress',
   'decompress',
   'search_context',

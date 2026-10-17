@@ -26,7 +26,9 @@ import {
 import {
   projectDshTools,
   validateToolArguments,
+  NEVER_PROJECTED_TOOLS,
   type DshToolRegistryLike,
+  type ToolProjectionResult,
 } from './tool-projection.js'
 import type { McpCallResult, McpTextContent, McpToolDescriptor } from './protocol.js'
 
@@ -170,11 +172,12 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
       instructions: INSTRUCTIONS,
       listTools: async (sessionHandle) => {
         const agent = await agentOf(options, sessionHandle)
-        const tools = projectVisibleTools(options, agent)
+        const projection = projectVisibleTools(options, agent)
+        const dropped = projection.excluded.filter(name => !NEVER_PROJECTED_TOOLS.has(name))
         options.logger?.(
-          `dsh mcp bridge: listTools session="${sessionHandle}" agent=${agent === undefined ? 'none' : 'resolved'} tools=${tools.length}`,
+          `dsh mcp bridge: listTools session="${sessionHandle}" agent=${agent === undefined ? 'none' : 'resolved'} tools=${projection.tools.length}${dropped.length === 0 ? '' : ` dropped=${dropped.join(',')}`}`,
         )
-        return tools
+        return projection.tools
       },
       callTool: (sessionHandle, name, args) => executeDshTool(options, sessionHandle, name, args),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -251,7 +254,10 @@ async function agentOf(
   }
   if (sessionHandle.length === 0) return undefined
   const resolved = await controller.resolveAgent(sessionHandle).catch((error: unknown) => {
-    options.logger?.(`dsh mcp bridge: resolveAgent("${sessionHandle}") threw ${String(error)}`)
+    const rejection = subagentRejectionIn(error)
+    options.logger?.(rejection === undefined
+      ? `dsh mcp bridge: resolveAgent("${sessionHandle}") threw ${String(error)}`
+      : `dsh mcp bridge: session "${sessionHandle}" is owned by subagent routing (${rejection}); the host refuses an agent handle for a child session by design, so this turn sees the global tool view`)
     return undefined
   })
   const agent = agentIn(resolved)
@@ -259,6 +265,32 @@ async function agentOf(
     options.logger?.(`dsh mcp bridge: no agent resolved for session "${sessionHandle}"`)
   }
   return agent
+}
+
+/**
+ * Read the host's subagent-ownership rejection out of a thrown value.
+ *
+ * `sessionController.resolveAgent()` answers `RemoteError('session/agent-busy')`
+ * with `reason: 'use subagent delivery for this child session'` for any session
+ * whose header carries `origin: 'subagent'` — the host deliberately refuses to
+ * hand out an agent handle for a child session. That is a designed boundary, not
+ * a bridge defect, so the log says so instead of leaving a bare
+ * "no agent resolved" line that reads like a bug every time a subagent runs.
+ */
+function subagentRejectionIn(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  const record = error as { code?: unknown; message?: unknown; details?: { reason?: unknown } | unknown }
+  const details = typeof record.details === 'object' && record.details !== null
+    ? (record.details as { reason?: unknown })
+    : undefined
+  const reason = typeof details?.reason === 'string' ? details.reason : undefined
+  if (reason !== undefined && /subagent delivery/i.test(reason)) return reason
+  const code = typeof record.code === 'string' ? record.code : undefined
+  const message = typeof record.message === 'string' ? record.message : undefined
+  if (code === 'session/agent-busy' || (message !== undefined && /subagent routing/i.test(message))) {
+    return message ?? code ?? 'session/agent-busy'
+  }
+  return undefined
 }
 
 function agentIn(resolved: unknown): unknown {
@@ -287,7 +319,7 @@ async function executeDshTool(
   // goes through `tools.execute()` so the host guard chain sees it, but the host
   // itself decides what an unscoped call may do.
   const agent = await agentOf(options, sessionHandle)
-  const projected = projectVisibleTools(options, agent)
+  const projected = projectVisibleTools(options, agent).tools
   const descriptor = projected.find(entry => entry.name === name)
   if (descriptor === undefined) {
     // Only assert "unknown tool" when the projection is the one AGY was shown.
@@ -325,11 +357,11 @@ async function executeDshTool(
 function projectVisibleTools(
   options: DshMcpBridgeOptions,
   agent: unknown,
-): readonly McpToolDescriptor[] {
+): ToolProjectionResult {
   return projectDshTools(options.tools, {
     ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
     scope: agent,
-  }).tools
+  })
 }
 
 export { AGY_MCP_SERVER_NAME, agyConfigRoot, agySettingsRoot }
