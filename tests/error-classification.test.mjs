@@ -36,8 +36,34 @@ test('classifyAgyFailure maps authentication, quota, model, and context details'
     ['read tcp 127.0.0.1:4891->127.0.0.1:12450: wsarecv: An existing connection was forcibly closed by the remote host.', 'TRANSPORT'],
     ['AGY_ERROR: {"short_error":"request failed","retryable":true}', 'TRANSPORT'],
     ['The stream was interrupted. Please continue the task you were working on.', 'TRANSPORT'],
+    ['Individual quota reached. Resets in 0s.', 'RATE_LIMIT'],
+    ['quota exceeded for this billing period', 'QUOTA'],
+    ['Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 96h12m27s. AGY_ERROR: {short_error: RESOURCE_EXHAUSTED (code 429), status: RESOURCE_EXHAUSTED, error_code: 429, code_kind: http, retryable: true}', 'RATE_LIMIT'],
   ]
   for (const [detail, expected] of cases) assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), expected)
+})
+
+test('classifyAgyFailure separates a drained bucket from a billing failure', () => {
+  // The distinction is what makes the bounded retry correct: a drained 5h/weekly
+  // bucket sits on a boundary value where ~1 in 5 attempts succeeds
+  // (probe_retry_efficacy.mjs: 5/5 rounds recovered, 2-3 attempts each), while a
+  // billing failure never clears on its own and must fail closed.
+  const drained = [
+    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 96h12m27s.',
+    'quota reached for gemini-3.8-flash-high',
+    'RESOURCE_EXHAUSTED (code 429): quota exhausted, resets in 5h',
+  ]
+  for (const detail of drained) {
+    assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'RATE_LIMIT', detail)
+  }
+  const billing = [
+    'quota exceeded for this billing period',
+    'insufficient credit balance on the account',
+    'billing budget limit reached',
+  ]
+  for (const detail of billing) {
+    assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'QUOTA', detail)
+  }
 })
 
 test('AgyAdapter maps an AGY error event to a stable auth code', async () => {

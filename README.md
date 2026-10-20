@@ -179,6 +179,16 @@ npm run smoke:dsh:self-contained
 
 需要真实 AGY 的实验不会自动运行。0.9.0 多模态闭环已在用户授权额度下完成；后续仍不应在无明确授权时重复消耗真实模型额度。
 
+### 额度池与 429 归因（调研存档）
+
+AGY 侧存在 daily / prod / sandbox 多个 Cloud Code 端点，且 `retrieveUserQuotaSummary` 与 `fetchAvailableModels` 上报口径不一致。2026-10-20 的横向抄写结论（端点分层、429 四分类、家庭冷却、三源额度读取）见 [peer 额度/429 抄写报告](docs/peer-quota-429-survey-20261020.md)；daily/prod 两端点的账号归属、官方定位与「两本账」多源实证见 [prod/daily 端点调研报告](docs/prod-endpoint-research-20261020.md)；prod 生成可用性与 429 重试有效性实测见 [prod 生成可行性实测](docs/prod-generation-feasibility-20261020.md)；sessionMode 的真实额度实验见 [V2-M5 实验报告](docs/quota-experiment-report.md)。
+
+**当前结论（2026-10-20）**：consumer 账号（Free/Pro/Ultra）的真实额度账本只在 **daily**；prod 的 Gemini 额度对 consumer 是**不记账的合成视图**（`remainingFraction` 恒 1、`resetTime` 恒 = now+窗口），且生成请求 100% 429——已用官方 `CLOUD_CODE_URL` 开关实测切到 prod，8 次重试全灭。面板读 prod 是显示恒满的直接原因。
+
+**修复已落地（2026-10-20，工作树未提交）**：① 配额读数改打 daily 并带完整 CLI 身份头（`antigravity/cli/1.4.2 … auth_method=consumer` + `X-Goog-Api-Client`）——Google 按客户端身份裁剪返回，简陋 UA 下 daily 的 `retrieveUserQuotaSummary` 不返回 Gemini 组；② 缺省不再当满额：桶 `disabled:true` 跳过、缺 `remainingFraction` 的窗口/模型记为未知（`fiveHourUnknown`/`weeklyUnknown`/`undefined`）而非 1；③ 429 分类三段化——"Individual quota reached…" 这类**已耗尽**判 `RATE_LIMIT` 进有限重试（实测边界抖动时 5/5 轮可救回），billing 类仍 `QUOTA_EXCEEDED` fail-closed，`reset in 0s` 按限速处理。测试 289 pass / 0 fail、`tsc --noEmit` exit 0。**注意 `dist/client.js` 仍是 10-18 旧产物，改 src 需重启宿主才生效。**
+
+Gemini 4 Argon 的可用性（版本/灰度/付费渠道三假设判定）见 [Argon 可用性调研](docs/argon-availability-research-20261020.md)。
+
 ## 未来规划
 
 未来版本会继续以“可验证、可回退、额度可控”为前提，重点包括：

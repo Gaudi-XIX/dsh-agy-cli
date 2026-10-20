@@ -20,22 +20,84 @@ interface QuotaModelEntry {
 interface FamilyQuotaModelEntry {
   modelId: string
   displayName?: string
-  remainingFraction?: number
-  resetTime?: string
+  remainingFraction?: number | undefined
+  resetTime?: string | undefined
 }
 
 interface FamilyQuotaInfo {
-  remainingFraction?: number
+  remainingFraction?: number | undefined
+  resetTime?: string | undefined
+  weeklyFraction?: number | undefined
+  weeklyResetTime?: string | undefined
+  description?: string | undefined
+  updatedAt?: number | undefined
+  models?: FamilyQuotaModelEntry[] | undefined
+  /** True when upstream reported no fraction for a window: unknown, not zero. */
+  fiveHourUnknown?: boolean | undefined
+  weeklyUnknown?: boolean | undefined
+}
+
+interface QuotaSummaryBucket {
+  bucketId?: string
+  displayName?: string
+  window?: string
   resetTime?: string
-  weeklyFraction?: number
-  weeklyResetTime?: string
+  remainingFraction?: number
   description?: string
-  updatedAt?: number
-  models?: FamilyQuotaModelEntry[]
+  disabled?: boolean
+}
+
+interface QuotaSummaryGroup {
+  displayName?: string
+  description?: string
+  buckets?: QuotaSummaryBucket[]
+}
+
+interface QuotaSummaryResponse {
+  groups?: QuotaSummaryGroup[]
+  description?: string
 }
 
 const RUNTIME_OVERRIDES_PATH = join(homedir(), '.dsh', 'agy-link', 'runtime-overrides.json')
 const CORDIS_PATCH_PATH = join(homedir(), '.dsh', 'profiles', 'desktop', 'cordis.patch.yml')
+
+/**
+ * Endpoint hosts for the Cloud Code Assist API. The split is not two accounts
+ * and not two subscriptions — it is the same consumer OAuth identity read
+ * through two hosts, and only `daily` carries real consumption:
+ *
+ * - `daily-cloudcode-pa.googleapis.com` — the host agy.exe hardcodes for every
+ *   `streamGenerateContent` call (verified in every cli-*.log), so it is the
+ *   only host whose quota numbers describe what we actually spend. Verified in
+ *   `docs/prod-generation-feasibility-20261020.md` §1-3.
+ * - `cloudcode-pa.googleapis.com` ("prod") — answers 200 for quota RPCs but
+ *   reports `remainingFraction: 1` forever with a resetTime that drifts to
+ *   "now + window" on every call (06:05→10-26T22:24Z, 06:40→10-26T22:39Z,
+ *   09:58→10-27T01:58Z). Generation against it returns 429 `Resource has been
+ *   exhausted` 24/24 in our probes and 0/4 in the A/B alternation, so it is an
+ *   empty ledger, not spare capacity. It is kept only as a catalog fallback:
+ *   its `fetchAvailableModels` lists 25 models vs daily's 19.
+ *
+ * Reading prod for display is what made the panel show a fake 100% while the
+ * account was actually at 1% and returning 429.
+ */
+const QUOTA_ENDPOINT_DAILY = 'https://daily-cloudcode-pa.googleapis.com'
+const QUOTA_ENDPOINT_PROD = 'https://cloudcode-pa.googleapis.com'
+const CLOUD_CODE_API_VERSION = '1.4.2'
+
+/**
+ * Identity headers. Google returns *different quota payloads* for the same
+ * endpoint depending on which client asks: with the terse UA below, daily's
+ * `retrieveUserQuotaSummary` omits the Gemini group entirely and returns only
+ * the third-party group; with the full CLI identity it returns both groups
+ * (probe_ua_identity.mjs: rf=0.008422057, reset 2026-10-23T22:00:21Z). Sending
+ * the terse UA is why the panel once read "Gemini 100%" from a host that had no
+ * Gemini numbers to give.
+ */
+const AGY_IDENTITY_HEADERS: Record<string, string> = {
+  'User-Agent': `antigravity/cli/${CLOUD_CODE_API_VERSION} (aidev_client; os_type=windows; arch=amd64; auth_method=consumer)`,
+  'X-Goog-Api-Client': 'antigravity/cli/1.4.2 aidev_client windows/amd64 consumer',
+}
 
 function readOverrides(): { hiddenModels: string[]; defaultEffort?: string; defaultModel?: string } {
   try {
@@ -184,6 +246,10 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
         timeout: 10000,
       })
 
+      connectReq.on('timeout', () => {
+        connectReq.destroy(new Error('Proxy CONNECT timed out after 10000ms'))
+      })
+
       connectReq.on('connect', (res, socket) => {
         if (res.statusCode !== 200) {
           socket.destroy()
@@ -206,7 +272,7 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
                 headers: {
                   Authorization: `Bearer ${accessToken}`,
                   'Content-Type': 'application/json',
-                  'User-Agent': 'antigravity/1.3.2 (windows; amd64)',
+                  ...AGY_IDENTITY_HEADERS,
                   'Content-Length': Buffer.byteLength(body),
                 },
                 createConnection: () => tlsSocket,
@@ -226,6 +292,9 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
               },
             )
 
+            httpsReq.on('timeout', () => {
+              httpsReq.destroy(new Error('HTTPS pa.googleapis.com timed out after 10000ms'))
+            })
             httpsReq.on('error', (err) => reject(err))
             httpsReq.write(body)
             httpsReq.end()
@@ -257,54 +326,128 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
   if (!token) return cachedQuotas
 
   try {
-    const raw = await fetchHttpsThroughHttpProxy('https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels', token)
-    if (raw && typeof raw === 'object' && raw.models) {
-      const models = raw.models as Record<string, { displayName?: string; quotaInfo?: QuotaModelEntry }>
-      const googleModels: FamilyQuotaModelEntry[] = []
-      const anthropicModels: FamilyQuotaModelEntry[] = []
-      const openaiModels: FamilyQuotaModelEntry[] = []
-      const discoveredList: Array<{ id: string; name: string }> = []
+    // Read the host that actually serves our generation traffic. prod is only a
+    // catalog fallback: its quota numbers are an empty ledger (see the comment
+    // on QUOTA_ENDPOINT_DAILY), so falling back to it would reintroduce the
+    // fake-100% panel.
+    const [summaryRaw, modelsRaw] = await Promise.all([
+      fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:retrieveUserQuotaSummary`, token).catch(() => null) as Promise<QuotaSummaryResponse | null>,
+      fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:fetchAvailableModels`, token).catch(() => null) as Promise<{ models?: Record<string, { displayName?: string; quotaInfo?: QuotaModelEntry }> } | null>,
+    ])
 
-      for (const [id, m] of Object.entries(models)) {
+    const familyQuotas: Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>> = {
+      google: { updatedAt: now, models: [] },
+      anthropic: { updatedAt: now, models: [] },
+      openai: { updatedAt: now, models: [] },
+    }
+
+    if (summaryRaw && Array.isArray(summaryRaw.groups)) {
+      for (const group of summaryRaw.groups) {
+        const dName = (group.displayName || '').toLowerCase()
+        const desc = (group.description || '').toLowerCase()
+        const isGoogle = dName.includes('gemini') || desc.includes('gemini')
+        const is3P = dName.includes('claude') || dName.includes('gpt') || desc.includes('claude') || desc.includes('gpt')
+        const targetFamilies: Array<'google' | 'anthropic' | 'openai'> = isGoogle
+          ? ['google']
+          : is3P
+          ? ['anthropic', 'openai']
+          : []
+
+        let fiveHourFrac: number | undefined
+        let fiveHourReset: string | undefined
+        let weeklyFrac: number | undefined
+        let weeklyReset: string | undefined
+
+        for (const b of group.buckets || []) {
+          // A disabled window is "does not currently apply" (Google's own wording
+          // in the bucket description, e.g. "You have hit your weekly limit, the
+          // 5-hour limit does not currently apply"). It is not a reading: skip it
+          // so the 5-hour row stays unknown instead of inheriting a stale value.
+          if (b.disabled === true) continue
+          const w = (b.window || b.bucketId || '').toLowerCase()
+          const frac = typeof b.remainingFraction === 'number' && Number.isFinite(b.remainingFraction)
+            ? Math.min(1, Math.max(0, b.remainingFraction))
+            : undefined
+          if (w.includes('5h') || w.includes('five_hour') || w.includes('5-hour')) {
+            fiveHourFrac = frac
+            fiveHourReset = b.resetTime
+          } else if (w.includes('weekly') || w.includes('week')) {
+            weeklyFrac = frac
+            weeklyReset = b.resetTime
+          }
+        }
+
+        for (const fam of targetFamilies) {
+          // No fraction for a window means upstream did not report it — record
+          // that as unknown. Filling in 1 (the old behaviour) is what made a
+          // drained account render as "100% remaining".
+          familyQuotas[fam]!.remainingFraction = fiveHourFrac
+          familyQuotas[fam]!.resetTime = fiveHourReset
+          familyQuotas[fam]!.fiveHourUnknown = fiveHourFrac === undefined
+          familyQuotas[fam]!.weeklyFraction = weeklyFrac
+          familyQuotas[fam]!.weeklyResetTime = weeklyReset
+          familyQuotas[fam]!.weeklyUnknown = weeklyFrac === undefined
+          familyQuotas[fam]!.description = group.description
+        }
+      }
+    }
+
+    if (modelsRaw && typeof modelsRaw === 'object' && modelsRaw.models) {
+      const discoveredList: Array<{ id: string; name: string }> = []
+      for (const [id, m] of Object.entries(modelsRaw.models)) {
         const info = m?.quotaInfo
-        const displayName = (m as any)?.displayName || id
+        const displayName = m?.displayName || id
         discoveredList.push({ id, name: displayName })
 
         const entry: FamilyQuotaModelEntry = {
           modelId: id,
           displayName,
-          remainingFraction: typeof info?.remainingFraction === 'number' ? info.remainingFraction : 1,
+          remainingFraction: typeof info?.remainingFraction === 'number' && Number.isFinite(info.remainingFraction)
+            ? Math.min(1, Math.max(0, info.remainingFraction))
+            : undefined,
           ...(info?.resetTime ? { resetTime: info.resetTime } : {}),
         }
         const lower = id.toLowerCase()
-        if (lower.includes('claude')) anthropicModels.push(entry)
-        else if (lower.includes('gpt')) openaiModels.push(entry)
-        else googleModels.push(entry)
+        const targetFam: 'google' | 'anthropic' | 'openai' = lower.includes('claude')
+          ? 'anthropic'
+          : lower.includes('gpt')
+          ? 'openai'
+          : 'google'
+        familyQuotas[targetFam]!.models!.push(entry)
       }
-
       if (discoveredList.length > 0) {
         dynamicCatalogModels = discoveredList
       }
+    }
 
-      const calcFamily = (list: FamilyQuotaModelEntry[]): FamilyQuotaInfo => {
-        const remaining = list.length > 0 ? Math.min(...list.map((x) => x.remainingFraction ?? 1)) : 1
+    if (!summaryRaw?.groups && modelsRaw?.models) {
+      for (const fam of ['google', 'anthropic', 'openai'] as const) {
+        const list = familyQuotas[fam]?.models || []
+        // Only models that actually reported a fraction take part in the
+        // aggregate. A model whose `quotaInfo` has no `remainingFraction` is a
+        // model upstream declined to meter — treating it as 1 (the old
+        // behaviour) silently turns "not reported" into "full".
+        const metered = list.filter((x) => typeof x.remainingFraction === 'number')
+        const remaining = metered.length > 0 ? Math.min(...metered.map((x) => x.remainingFraction as number)) : undefined
         const resetEntry = list.find((x) => x.resetTime)
-        return {
+        const isWeekly = resetEntry?.resetTime
+          ? (new Date(resetEntry.resetTime).getTime() - now) >= 24 * 3600 * 1000
+          : false
+        familyQuotas[fam] = {
+          ...familyQuotas[fam],
           remainingFraction: remaining,
-          ...(resetEntry?.resetTime ? { resetTime: resetEntry.resetTime } : {}),
+          ...(!isWeekly && resetEntry?.resetTime ? { resetTime: resetEntry.resetTime } : {}),
+          fiveHourUnknown: remaining === undefined,
           weeklyFraction: remaining,
+          ...(isWeekly && resetEntry?.resetTime ? { weeklyResetTime: resetEntry.resetTime } : {}),
           updatedAt: now,
           models: list,
         }
       }
-
-      cachedQuotas = {
-        google: calcFamily(googleModels),
-        anthropic: calcFamily(anthropicModels),
-        openai: calcFamily(openaiModels),
-      }
-      lastQuotaFetchTime = now
     }
+
+    cachedQuotas = familyQuotas
+    lastQuotaFetchTime = now
   } catch {}
 
   return cachedQuotas
@@ -386,7 +529,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       sendJson(res, 200, {
         plugin: 'dsh-agy-provider',
         bin: activeConfig.agyPath || 'F:\\AgentData\\antigravity\\cli\\agy.exe',
-        version: '1.3.2',
+        version: CLOUD_CODE_API_VERSION,
         enabled: activeConfig.enabled ?? true,
         permissionMode: 'dsh-owned',
         workspaceRoot: '',
