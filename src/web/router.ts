@@ -314,6 +314,11 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
 
 let cachedQuotas: Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>> = {}
 let lastQuotaFetchTime = 0
+// Why this exists: the panel needs to tell "credentials expired" apart from
+// "no quota data yet". Google answers 401 UNAUTHENTICATED when the OAuth token
+// in the Windows keyring has lapsed (agy.exe refreshes it on its next run).
+// A silent catch used to turn that into an empty quota card with no hint.
+let lastQuotaError: 'unauthorized' | 'network' | null = null
 
 async function refreshQuotas(force = false): Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> {
   const now = Date.now()
@@ -322,7 +327,10 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
   }
 
   const token = readAccessTokenFromKeyring()
-  if (!token) return cachedQuotas
+  if (!token) {
+    lastQuotaError = 'unauthorized'
+    return cachedQuotas
+  }
 
   try {
     // Read the host that actually serves our generation traffic. prod is only a
@@ -333,6 +341,20 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
       fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:retrieveUserQuotaSummary`, token).catch(() => null) as Promise<QuotaSummaryResponse | null>,
       fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:fetchAvailableModels`, token).catch(() => null) as Promise<{ models?: Record<string, { displayName?: string; quotaInfo?: QuotaModelEntry }> } | null>,
     ])
+
+    // "Unauthenticated" is the only failure worth surfacing in the UI: it means
+    // the OAuth token in the keyring lapsed and a fresh agy.exe run (or a
+    // message through the provider) will refresh it. Network/upstream failures
+    // are transient and self-heal on the next poll.
+    const summaryErr = (summaryRaw as { error?: { code?: number } } | null)?.error?.code
+    const modelsErr = (modelsRaw as { error?: { code?: number } } | null)?.error?.code
+    if (summaryErr === 401 || modelsErr === 401) {
+      lastQuotaError = 'unauthorized'
+    } else if (summaryRaw === null && modelsRaw === null) {
+      lastQuotaError = 'network'
+    } else {
+      lastQuotaError = null
+    }
 
     const familyQuotas: Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>> = {
       google: { updatedAt: now, models: [] },
@@ -549,9 +571,12 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         defaultModel,
         defaultEffort,
         auth: {
-          phase: 'signed_in',
-          message: 'Windows Credential Manager (gemini:antigravity) 就绪',
+          phase: lastQuotaError === 'unauthorized' ? 'expired' : 'signed_in',
+          message: lastQuotaError === 'unauthorized'
+            ? '登录已过期：发一条 AGY 消息即可自动刷新凭据'
+            : 'Windows Credential Manager (gemini:antigravity) 就绪',
         },
+        quotaError: lastQuotaError,
         pool: {
           version: 1,
           mode: 'sequential',

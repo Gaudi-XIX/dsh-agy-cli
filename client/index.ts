@@ -75,6 +75,7 @@ interface StatusPayload {
 		expiresAt?: number;
 		message?: string;
 	};
+	quotaError?: 'unauthorized' | 'network' | null;
 	pool?: AccountPoolData;
 	poolAuth?: {
 		phase: 'idle' | 'waiting' | 'exchanging' | 'done' | 'failed';
@@ -893,14 +894,8 @@ export function apply(ctx: ClientContext): void {
 	const AgySettingsSection = (props?: any): unknown => {
 		const t = useAgyTranslation();
 		const { status, refresh } = useAgyStatus();
-		const [aliasInput, setAliasInput] = useState('');
-		const [proxyInputs, setProxyInputs] = useState<Record<string, string>>({});
-		const [editingProxyId, setEditingProxyId] = useState<string | null>(null);
-		const [addingAccount, setAddingAccount] = useState(false);
-		const [authCodeInput, setAuthCodeInput] = useState('');
-		const [loadingAction, setLoadingAction] = useState<string | null>(null);
+const [loadingAction, setLoadingAction] = useState<string | null>(null);
 		const [toast, setToast] = useState<ToastNotice | null>(null);
-		const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>({});
 
 		// Cooldown expiry and quota countdowns are Date.now()-derived while the
 		// payload itself does NOT change when they lapse — without a wall-clock
@@ -910,28 +905,6 @@ export function apply(ctx: ClientContext): void {
 			const timer = setInterval(() => setTimeTick((n) => n + 1), 30_000);
 			return () => clearInterval(timer);
 		}, []);
-
-		const flowStartedRef = useRef(false);
-		const safeMessage = (code?: string): string => {
-			const key = `auth.code.${code ?? ''}` as AgyLocaleKey;
-			return code && key in en ? t(key) : t('api.genericError');
-		};
-		useEffect(() => {
-			if (!addingAccount || !flowStartedRef.current) return;
-			const pa = status?.poolAuth;
-			if (!pa) return;
-			if (pa.phase === 'done') {
-				flowStartedRef.current = false;
-				setAddingAccount(false);
-				setAuthCodeInput('');
-				setAliasInput('');
-				showToast(safeMessage(pa.code), 'success');
-			} else if (pa.phase === 'failed') {
-				flowStartedRef.current = false;
-				showToast(safeMessage(pa.code), 'error');
-			}
-			// eslint-disable-next-line react-hooks/exhaustive-deps
-		}, [addingAccount, status?.poolAuth?.phase, status?.poolAuth?.code]);
 
 		const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 		useEffect(() => () => {
@@ -951,50 +924,6 @@ export function apply(ctx: ClientContext): void {
 
 		const actionFailed = (): void => {
 			showToast(t('api.genericError'), 'error');
-		};
-
-		const handleBeginAddAccount = async (): Promise<void> => {
-			setLoadingAction('pool:beginAdd');
-			const alias = aliasInput.trim();
-			const res = await postJson('/plugins/agy-link/pool/begin-add', alias ? { alias } : {});
-			setLoadingAction(null);
-			if (res && res.ok) {
-				flowStartedRef.current = true;
-				await refresh();
-				if (res.browserOpened) {
-					showToast(t('auth.browserOpened'), 'info');
-				} else {
-					showToast(t('auth.browserManual'), 'warn');
-				}
-			} else {
-				showToast(res?.code ? safeMessage(res.code) : t('auth.startFailed'), 'error');
-			}
-		};
-
-		const handleCompleteAddAccount = async (): Promise<void> => {
-			if (!authCodeInput.trim()) return;
-			setLoadingAction('pool:completeAdd');
-			const res = await postJson('/plugins/agy-link/pool/complete-add', { code: authCodeInput.trim() });
-			setLoadingAction(null);
-			if (res && res.ok) {
-				flowStartedRef.current = false;
-				setAuthCodeInput('');
-				setAliasInput('');
-				setAddingAccount(false);
-				await refresh();
-				showToast(safeMessage(res.code), 'success');
-			} else {
-				showToast(safeMessage(res?.code), 'error');
-			}
-		};
-
-		const handleCancelAddAccount = async (): Promise<void> => {
-			flowStartedRef.current = false;
-			await postJson('/plugins/agy-link/pool/cancel-add', {});
-			setAuthCodeInput('');
-			setAliasInput('');
-			setAddingAccount(false);
-			await refresh();
 		};
 
 		const setCfg = async (key: string, value: unknown): Promise<void> => {
@@ -1017,6 +946,7 @@ export function apply(ctx: ClientContext): void {
 			const next = new Set(hiddenPendingRef.current ?? status?.hiddenModels ?? []);
 			if (hide) next.add(id); else next.delete(id);
 			hiddenPendingRef.current = next;
+
 			try {
 				await setCfg('hiddenModels', Array.from(next));
 			} finally {
@@ -1024,35 +954,9 @@ export function apply(ctx: ClientContext): void {
 			}
 		};
 
-		const setPrimary = async (id: string): Promise<void> => {
-			setLoadingAction(`primary:${id}`);
-			const res = await postJson('/plugins/agy-link/pool/primary', { id });
-			if (res === null || res?.ok === false) {
-				setLoadingAction(null);
-				actionFailed();
-				return;
-			}
-			await refresh();
-			setLoadingAction(null);
-			showToast(t('account.setPrimary'), 'success');
-		};
-
-		const removeAccount = async (id: string, alias: string): Promise<void> => {
-			setLoadingAction(`remove:${id}`);
-			const res = await postJson('/plugins/agy-link/pool/remove', { id });
-			if (res === null || res?.ok === false) {
-				setLoadingAction(null);
-				actionFailed();
-				return;
-			}
-			await refresh();
-			setLoadingAction(null);
-			showToast(t('account.removed', { alias }), 'info');
-		};
-
-		const refreshQuota = async (id?: string): Promise<void> => {
-			setLoadingAction(id ? `refresh:${id}` : 'refresh:all');
-			const res = await postJson('/plugins/agy-link/pool/refresh-quota', { id });
+		const refreshQuota = async (): Promise<void> => {
+			setLoadingAction('refresh:all');
+			const res = await postJson('/plugins/agy-link/pool/refresh-quota', {});
 			if (res === null || res?.ok === false) {
 				setLoadingAction(null);
 				actionFailed();
@@ -1062,57 +966,15 @@ export function apply(ctx: ClientContext): void {
 			setLoadingAction(null);
 			showToast(t('quota.refreshed'), 'success');
 		};
-
-		const saveProxy = async (id: string): Promise<void> => {
-			setLoadingAction(`proxy:${id}`);
-			const proxyUrl = proxyInputs[id];
-			const res = await postJson('/plugins/agy-link/pool/proxy', { id, proxyUrl });
-			if (res === null || res?.ok === false) {
-				setLoadingAction(null);
-				actionFailed();
-				return;
-			}
-			setEditingProxyId(null);
-			await refresh();
-			setLoadingAction(null);
-			showToast(t('proxy.saved'), 'success');
-		};
-
-		const setMode = async (mode: string): Promise<void> => {
-			setLoadingAction(`mode:${mode}`);
-			const res = await postJson('/plugins/agy-link/pool/mode', { mode });
-			if (res === null || res?.ok === false) {
-				setLoadingAction(null);
-				actionFailed();
-				return;
-			}
-			await refresh();
-			setLoadingAction(null);
-		};
-
-		const clearCooldown = async (id?: string): Promise<void> => {
-			setLoadingAction(id ? `clearCooldown:${id}` : 'clearCooldown:all');
-			const res = await postJson('/plugins/agy-link/pool/clear-cooldown', { id });
-			if (res === null || res?.ok === false) {
-				setLoadingAction(null);
-				actionFailed();
-				return;
-			}
-			await refresh();
-			setLoadingAction(null);
-			showToast(t('account.clearCooldown'), 'success');
-		};
-
-		const toggleExpand = (accId: string) => {
-			setExpandedModels((prev) => ({ ...prev, [accId]: !prev[accId] }));
-		};
-
 		const authPhase = status?.auth?.phase ?? 'unknown';
 		const pool = status?.pool;
 		const catalogModels = status?.catalogModels ?? [];
 		const hiddenModelSet = new Set(status?.hiddenModels ?? []);
 		const accounts = pool?.accounts ?? [];
-		const isAuthed = authPhase === 'ok' || accounts.length > 0;
+		// `accounts.length > 0` only proves the keyring entry exists, not that the
+		// OAuth token behind it still works — the quota RPCs know that, so an
+		// expired token must override an otherwise "ready" badge.
+		const isAuthed = authPhase !== 'expired' && (authPhase === 'ok' || accounts.length > 0);
 		const isBusy = loadingAction !== null;
 
 		const renderSpinner = () => h('span', { className: 'agy-spinner' });
@@ -1237,282 +1099,87 @@ export function apply(ctx: ClientContext): void {
 			);
 		};
 
-		// Authoritative active account: trust pool.activeAccountId computed by
-		// the scheduler, falling back to lastActiveAccountId, activeAccountIds.google, or primaryAccountId.
-		const activeAccountId = pool?.activeAccountId ?? pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
-		const renderedAccountCards = accounts.map((acc: ManagedAccount) => {
-			const isPrimary = acc.id === pool?.primaryAccountId;
-			const hasCooldown = Object.entries(acc.cooldowns).some(([, cd]) => cd && cd.cooldownUntil > Date.now());
-			const isAuthRequired = acc.authRequired;
-			const isInUse = acc.enabled && !isAuthRequired && activeAccountId !== undefined && activeAccountId === acc.id;
-			const dotColor = !acc.enabled ? '#64748b' : isAuthRequired ? '#ef4444' : hasCooldown ? '#f59e0b' : '#10b981';
-			const isEditingProxy = editingProxyId === acc.id;
-			const isExpanded = expandedModels[acc.id] ?? false;
+		// Single account, no pool. The status endpoint always returns exactly one
+		// account (the keyring identity), so there is no active/primary notion,
+		// no per-account proxy override, and nothing to add or remove. The whole
+		// multi-account UI (add flow, 设为主用, 代理, 删除, 号池调度, 清除冷却) was
+		// wired to /plugins/agy-link/pool/* routes this plugin never registered —
+		// every one of those buttons could only ever fail with a generic error.
+		// Shapes + restore procedure: docs/archived-panel-ui-20261020.md.
+		const account = accounts[0];
+		// The keyring OAuth token is refreshed by agy.exe itself; a 401 from the
+		// quota RPCs therefore means "credentials lapsed", not "broken panel".
+		// Say so instead of rendering an unexplained empty card.
+		const quotaExpired = status?.quotaError === 'unauthorized';
+		const expiredBanner = quotaExpired
+			? h('div', {
+				style: {
+					background: 'var(--agy-warn-bg)',
+					border: '1px solid var(--agy-warn-border)',
+					borderRadius: '7px',
+					padding: '8px 10px',
+					color: 'var(--agy-warn-text)',
+					fontSize: '12px',
+					fontWeight: 600,
+					marginBottom: '10px',
+					display: 'flex',
+					alignItems: 'center',
+					gap: '6px',
+				},
+			},
+				uiIcon('alert', 13, 'var(--agy-warn-text)'),
+				h('span', null, t('quota.expiredHint')),
+			)
+			: null;
 
-			const cardStyle = isPrimary ? { ...S.cardPrimary } : { ...S.card };
-			// Built-in aliases are canonical server data; translate display only.
-			const legacyDefault = acc.defaultAlias === undefined && acc.systemHome && acc.alias === '主账号 (系统登录)';
-			const displayAlias = acc.defaultAlias || legacyDefault
-				? acc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accounts.indexOf(acc) + 1 })
-				: acc.alias;
-
-			// Only the Gemini family is metered for this account: the third-party
-			// weekly bucket reads 0 and Google removes those models from
-			// promotional plans on 2026-11-02, so a Claude / GPT-OSS quota card
-			// would only ever show an exhausted family. Archived shapes and the
-			// restore procedure: docs/archived-model-catalog-20261020.md.
-			const googleModels = acc.quotas.google?.models ?? [];
-			const allChildModels: { family: string; model: ModelQuotaInfo }[] = googleModels.map((m) => ({ family: 'Google', model: m }));
-
-			return h('div', { key: acc.id, className: 'agy-card-hover', style: cardStyle },
+		const googleModels = account?.quotas.google?.models ?? [];
+		const quotaCard = account
+			? h('div', { className: 'agy-card-hover', style: S.card },
 				h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
 					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
 						h('span', {
 							className: 'agy-pulse-dot',
-							style: { background: dotColor, boxShadow: `0 0 8px ${dotColor}aa` },
+							style: { background: '#10b981', boxShadow: '0 0 8px #10b981aa' },
 						}),
-						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' } }, displayAlias),
-						isAuthRequired ? h('span', {
-							style: {
-								...S.badgeTag,
-								background: 'var(--agy-badge-email-bg)',
-								color: '#ef4444',
-								borderColor: '#fca5a5',
-								gap: '4px',
-								fontWeight: 700,
-							},
-						}, uiIcon('alert', 11, '#ef4444'), t('status.authRequired')) : null,
-						acc.email ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-email-bg)', color: 'var(--agy-badge-email-text)', borderColor: 'var(--agy-badge-email-border)', gap: '5px' } },
-							uiIcon('mail', 11, 'var(--agy-badge-email-text)'),
-							acc.email,
-						) : null,
-						isPrimary ? h('span', { style: { ...S.badgePrimary, gap: '4px' } },
-							uiIcon('star', 10, 'var(--agy-badge-primary-text)'),
-							t('status.primary'),
-						) : null,
-						isInUse ? h('span', {
-							style: {
-								...S.badgeTag,
-								background: 'rgba(16, 185, 129, 0.12)',
-								color: '#10b981',
-								borderColor: 'rgba(16, 185, 129, 0.45)',
-								gap: '4px',
-								fontWeight: 700,
-							},
-							title: t('status.inUse'),
-						}, uiIcon('zap', 11, '#10b981'), t('status.inUse')) : null,
-						acc.proxyUrl ? h('span', { style: { ...S.badgeTag, background: 'var(--agy-badge-proxy-bg)', color: 'var(--agy-badge-proxy-text)', borderColor: 'var(--agy-badge-proxy-border)', gap: '5px' } },
-							uiIcon('globe', 11, 'var(--agy-badge-proxy-text)'),
-							t('status.proxy'),
-						) : null,
+						// One identity line: the alias the server builds already carries
+						// name + email, so the old separate email badge was a repeat.
+						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' } }, account.alias || t('quota.accountUnknown')),
 					),
 					h('div', { style: { display: 'flex', gap: '5px', alignItems: 'center' } },
-						allChildModels.length > 0 ? h('button', {
-							type: 'button',
-							className: 'agy-btn',
-							style: isExpanded ? { ...S.btnSmPrimary, gap: '3px' } : { ...S.btnSm, gap: '3px' },
-							onClick: () => toggleExpand(acc.id),
-						}, isExpanded ? [uiIcon('chevronUp', 11), ` ${t('account.collapse')}`] : [uiIcon('chevronDown', 11), ` ${t('account.details')}`]) : null,
 						h('button', {
 							type: 'button',
 							className: 'agy-btn',
 							style: { ...S.btnSm, gap: '4px' },
-							title: t('account.syncTitle'),
+							title: t('header.refreshQuota'),
 							disabled: isBusy,
-							onClick: () => void refreshQuota(acc.id),
-						}, loadingAction === `refresh:${acc.id}` ? [renderSpinner(), t('account.syncing')] : [uiIcon('refresh', 11), ` ${t('account.sync')}`]),
-						!isPrimary ? h('button', {
-							type: 'button',
-							className: 'agy-btn',
-							style: { ...S.btnSm, gap: '4px' },
-							disabled: isBusy,
-							onClick: () => void setPrimary(acc.id),
-						}, loadingAction === `primary:${acc.id}` ? [renderSpinner(), t('account.settingPrimary')] : [uiIcon('star', 11), ` ${t('account.setPrimary')}`]) : null,
-						h('button', {
-							type: 'button',
-							className: 'agy-btn',
-							style: isEditingProxy ? { ...S.btnSmPrimary, gap: '4px' } : { ...S.btnSm, gap: '4px' },
-							disabled: isBusy,
-							onClick: () => setEditingProxyId(isEditingProxy ? null : acc.id),
-						}, [uiIcon('globe', 11), ` ${t('proxy.button')}`]),
-						accounts.length > 1 ? h('button', {
-							type: 'button',
-							className: 'agy-btn',
-							style: { ...S.btnDanger, padding: '3px 7px' },
-							title: t('account.removeTitle'),
-							'aria-label': t('account.removeTitle'),
-							disabled: isBusy,
-							onClick: () => void removeAccount(acc.id, displayAlias),
-						}, loadingAction === `remove:${acc.id}` ? renderSpinner() : uiIcon('trash', 12, 'var(--agy-danger-text)')) : null,
+							onClick: () => void refreshQuota(),
+						}, loadingAction === 'refresh:all' ? [renderSpinner(), t('header.refreshing')] : [uiIcon('refresh', 11), ` ${t('header.refreshQuota')}`]),
 					),
 				),
 				h('div', { style: S.quotaBox },
-					renderQuotaBar('Gemini', 'google', acc),
-					isExpanded && allChildModels.length > 0 ? h('div', {
-						style: {
-							marginTop: '8px',
-							paddingTop: '8px',
-							borderTop: '1px solid var(--agy-border-box)',
-						},
+					renderQuotaBar('Gemini', 'google', account),
+					googleModels.length > 0 ? h('div', {
+						style: { marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--agy-border-box)' },
 					},
 						h('div', { style: { color: 'var(--agy-text-secondary)', marginBottom: '6px', fontWeight: 600, fontSize: '11px' } }, t('account.models')),
-						allChildModels.map(({ family, model }) => {
-							const frac = model.remainingFraction ?? 1;
-							const pct = Math.round(frac * 100);
+						googleModels.map((model) => {
+							const hasFrac = typeof model.remainingFraction === 'number' && Number.isFinite(model.remainingFraction);
+							const pct = hasFrac ? Math.max(0, Math.min(100, Math.round((model.remainingFraction as number) * 100))) : -1;
 							const w = formatQuotaWindow(t, model.resetTime);
-							const pColor = pct <= 20 ? 'var(--agy-quota-low-text)' : pct <= 50 ? 'var(--agy-quota-med-text)' : 'var(--agy-quota-high-text)';
+							const pColor = pct < 0 ? 'var(--agy-quota-none-text)' : pct <= 20 ? 'var(--agy-quota-low-text)' : pct <= 50 ? 'var(--agy-quota-med-text)' : 'var(--agy-quota-high-text)';
 							return h('div', { key: model.modelId, className: 'agy-submodel-row' },
-								h('span', { style: { fontWeight: 500, color: 'var(--agy-text-primary)' } }, `[${family}] ${model.displayName || model.modelId}`),
+								h('span', { style: { fontWeight: 500, color: 'var(--agy-text-primary)' } }, model.displayName || model.modelId),
 								h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-									h('span', { style: { color: pColor, fontWeight: 700 } }, `${pct}%`),
+									h('span', { style: { color: pColor, fontWeight: 700 } }, pct < 0 ? '—' : `${pct}%`),
 									w.resetText ? h('span', { style: { color: 'var(--agy-text-tertiary)', fontSize: '10.5px' } }, `↻ ${w.resetText}`) : null,
 								),
 							);
 						}),
 					) : null,
 				),
-				hasCooldown ? h('div', {
-					style: {
-						background: 'var(--agy-warn-bg)',
-						border: '1px solid var(--agy-warn-border)',
-						borderRadius: '7px',
-						padding: '6px 10px',
-						color: 'var(--agy-warn-text)',
-						fontSize: '11.5px',
-						fontWeight: 600,
-						marginTop: '8px',
-						display: 'flex',
-						alignItems: 'center',
-						justifyContent: 'space-between',
-					},
-				},
-					h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-						uiIcon('alert', 13, 'var(--agy-warn-text)'),
-						h('span', null, t('account.cooldown')),
-					),
-					h('button', {
-						type: 'button',
-						className: 'agy-btn',
-						style: { ...S.btnSm, color: 'var(--agy-warn-btn-text)', borderColor: 'var(--agy-warn-btn-border)', background: 'var(--agy-warn-btn-bg)', gap: '4px' },
-						disabled: isBusy,
-						onClick: () => void clearCooldown(acc.id),
-					}, loadingAction === `clearCooldown:${acc.id}` ? [renderSpinner(), ''] : [uiIcon('zap', 11, 'var(--agy-warn-btn-text)'), ` ${t('account.clearCooldown')}`]),
-				) : null,
-				isEditingProxy ? h('div', {
-					style: {
-						marginTop: '8px',
-						padding: '10px 12px',
-						background: 'var(--agy-bg-subbox)',
-						borderRadius: '7px',
-						border: '1px solid var(--agy-border-subbox)',
-					},
-				},
-					h('div', { style: { display: 'flex', gap: '8px' } },
-						h('input', {
-							style: S.input,
-							value: proxyInputs[acc.id] !== undefined ? proxyInputs[acc.id] : (acc.proxyUrl ?? ''),
-							placeholder: t('proxy.placeholder'),
-							'aria-label': t('aria.proxyInput'),
-							onChange: (e: { target: { value: string } }) => setProxyInputs({ ...proxyInputs, [acc.id]: e.target.value }),
-						}),
-						h('button', {
-							type: 'button',
-							className: 'agy-btn',
-							style: S.btnPrimary,
-							disabled: isBusy,
-							onClick: () => void saveProxy(acc.id),
-						}, loadingAction === `proxy:${acc.id}` ? [renderSpinner(), t('proxy.save')] : t('proxy.save')),
-						h('button', {
-							type: 'button',
-							className: 'agy-btn',
-							style: S.btn,
-							onClick: () => setEditingProxyId(null),
-						}, t('cancel')),
-					),
-				) : null,
-			);
-		});
-
-		const poolAuth = status?.poolAuth;
-		const flowPhase = poolAuth?.phase ?? 'idle';
-		const flowActive = flowPhase === 'waiting' || flowPhase === 'exchanging';
-
-		const addAccountSection = addingAccount
-			? h('div', { style: S.authModal, role: 'group', 'aria-label': t('account.add') },
-				h('div', { style: { fontWeight: 700, fontSize: '13.5px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--agy-text-primary)' } },
-					uiIcon('plus', 13, 'var(--agy-btn-primary-bg)'),
-					t('account.add'),
-				),
-				!flowActive
-					? h('div', null,
-						h('div', { style: { display: 'flex', gap: '8px' } },
-							h('input', {
-								style: S.input,
-								value: aliasInput,
-								placeholder: t('account.aliasPlaceholder'),
-								'aria-label': t('aria.aliasInput'),
-								onChange: (e: { target: { value: string } }) => setAliasInput(e.target.value),
-							}),
-							h('button', {
-								type: 'button',
-								className: 'agy-btn',
-								style: { ...S.btnPrimary, gap: '4px' },
-								disabled: isBusy,
-								onClick: () => void handleBeginAddAccount(),
-							}, loadingAction === 'pool:beginAdd' ? [renderSpinner(), t('auth.openingBrowser')] : [uiIcon('externalLink', 12, '#ffffff'), ` ${t('auth.openBrowser')}`]),
-							h('button', {
-								type: 'button',
-								className: 'agy-btn',
-								style: S.btn,
-								onClick: () => handleCancelAddAccount(),
-							}, t('cancel')),
-						),
-						flowPhase === 'failed' ? h('div', {
-							style: { ...S.muted, color: 'var(--agy-danger-text)', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 },
-						}, uiIcon('alert', 12, 'var(--agy-danger-text)'), safeMessage(poolAuth?.code)) : null,
-					)
-					: h('div', null,
-						h('div', { style: { display: 'flex', alignItems: 'center', color: 'var(--agy-text-secondary)', marginBottom: '8px', lineHeight: 1.5, fontSize: '12px' } },
-							renderSpinner(),
-							flowPhase === 'exchanging'
-								? t('auth.exchanging')
-								: t('auth.waiting'),
-						),
-						poolAuth?.url ? h('div', { style: { marginBottom: '8px' } },
-							h('a', {
-								href: poolAuth.url,
-								target: '_blank',
-								style: { color: 'var(--dsw-alias-state-business-primary, #2563eb)', textDecoration: 'underline', fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' },
-							}, uiIcon('externalLink', 12, 'currentColor'), t('auth.openManual')),
-						) : null,
-						h('div', { style: { color: 'var(--agy-text-tertiary)', marginBottom: '6px', fontSize: '11px', fontWeight: 500 } },
-							t('auth.pasteHint'),
-						),
-						h('div', { style: { display: 'flex', gap: '8px' } },
-							h('input', {
-								style: S.input,
-								value: authCodeInput,
-								placeholder: t('auth.codePlaceholder'),
-								'aria-label': t('aria.authCodeInput'),
-								onChange: (e: { target: { value: string } }) => setAuthCodeInput(e.target.value),
-							}),
-							h('button', {
-								type: 'button',
-								className: 'agy-btn',
-								style: { ...S.btnPrimary, gap: '4px' },
-								disabled: isBusy || !authCodeInput.trim(),
-								onClick: () => void handleCompleteAddAccount(),
-							}, loadingAction === 'pool:completeAdd' ? [renderSpinner(), t('auth.activating')] : [uiIcon('check', 12, '#ffffff'), ` ${t('auth.activate')}`]),
-							h('button', {
-								type: 'button',
-								className: 'agy-btn',
-								style: S.btn,
-								onClick: () => handleCancelAddAccount(),
-							}, t('cancel')),
-						),
-					),
 			)
 			: null;
+
 
 		if (status === null) {
 			return h('div', { style: { ...S.container, minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
@@ -1524,18 +1191,12 @@ export function apply(ctx: ClientContext): void {
 		return h('div', { style: S.container },
 			h('style', null, GLOBAL_CSS),
 			h('div', { style: S.headerCard },
-				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-					agyIcon(16),
-					h('span', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--agy-text-primary)' } }, 'Antigravity'),
-					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? t('status.ready') : t('status.needsAuth')),
-				),
+				// No icon + "Antigravity" here: the host settings nav already
+				// labels this section, and the modal dialog prints its own
+				// console title. Rendering it a third time inside the panel was
+				// the duplicate product name the account card did not need.
 				h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
-					!addingAccount ? h('button', {
-						type: 'button',
-						className: 'agy-btn',
-						style: { ...S.btnPrimary, gap: '4px' },
-						onClick: () => setAddingAccount(true),
-					}, [uiIcon('plus', 12, '#ffffff'), ` ${t('account.add')}`]) : null,
+					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? t('status.ready') : t('status.needsAuth')),
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
@@ -1546,30 +1207,18 @@ export function apply(ctx: ClientContext): void {
 				),
 			),
 			renderToastBanner(),
-			addAccountSection,
-			renderedAccountCards,
+			expiredBanner,
+			quotaCard,
 			h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--agy-border-divider)' } },
 				h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('permission.label')),
-						h('div', { style: S.segGroup },
-							h('button', {
-								type: 'button',
-								style: status?.permissionMode === 'plan' ? S.segBtnActive : S.segBtn,
-								onClick: () => void setCfg('permissionMode', 'plan'),
-							}, t('permission.plan')),
-							h('button', {
-								type: 'button',
-								style: status?.permissionMode === 'accept-edits' ? S.segBtnActive : S.segBtn,
-								onClick: () => void setCfg('permissionMode', 'accept-edits'),
-							}, t('permission.acceptEdits')),
-							h('button', {
-								type: 'button',
-								style: status?.permissionMode === 'skip' ? { ...S.segBtnActive, color: 'var(--agy-seg-danger-text)', background: 'var(--agy-seg-danger-bg)', border: '1px solid var(--agy-seg-danger-border)' } : S.segBtn,
-								onClick: () => void setCfg('permissionMode', 'skip'),
-							}, t('permission.skip')),
-						),
-					),
+					// No 权限模式 row here. It used to offer plan / accept-edits / skip,
+					// but the server answers `permissionMode: 'dsh-owned'` as a constant
+					// and POST /config has no branch for that key — so no button ever
+					// rendered as active and clicking did nothing at all. Permissions
+					// belong to the DSH session (docs/dsh-provider-contract.md: the
+					// provider never passes --dangerously-skip-permissions), which is
+					// why wiring it was not an option either. Shape + restore notes:
+					// docs/archived-panel-ui-20261020.md.
 					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
 						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('effort.label')),
 						h('div', { style: S.segGroup },
@@ -1593,21 +1242,6 @@ export function apply(ctx: ClientContext): void {
 								style: status?.defaultEffort === 'high' ? S.segBtnActive : S.segBtn,
 								onClick: () => void setCfg('defaultEffort', 'high'),
 							}, t('effort.high')),
-						),
-					),
-					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('pool.label')),
-						h('div', { style: S.segGroup },
-							h('button', {
-								type: 'button',
-								style: pool?.mode === 'sequential' || !pool?.mode ? S.segBtnActive : S.segBtn,
-								onClick: () => void setMode('sequential'),
-							}, t('pool.sequential')),
-							h('button', {
-								type: 'button',
-								style: pool?.mode === 'round-robin' ? S.segBtnActive : S.segBtn,
-								onClick: () => void setMode('round-robin'),
-							}, t('pool.roundRobin')),
 						),
 					),
 					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
@@ -1720,26 +1354,21 @@ export function apply(ctx: ClientContext): void {
 
 		const pool = status?.pool;
 		const accounts = pool?.accounts ?? [];
-		const rawActiveId = pool?.activeAccountId ?? pool?.lastActiveAccountId ?? pool?.activeAccountIds?.google ?? pool?.primaryAccountId;
-		const activeAcc = accounts.find((a) => a.id === rawActiveId && a.enabled && !a.authRequired)
-			?? accounts.find((a) => a.enabled && !a.authRequired)
-			?? accounts[0];
-		const activeHasCooldown = activeAcc ? Object.entries(activeAcc.cooldowns ?? {}).some(([, cd]) => cd && cd.cooldownUntil > Date.now()) : false;
-		const allInCooldown = accounts.length > 0 && accounts.every((a) => !a.enabled || a.authRequired || Object.entries(a.cooldowns ?? {}).some(([, cd]) => cd && cd.cooldownUntil > Date.now()));
-		const isAuthed = status?.auth?.phase === 'ok' || accounts.length > 0;
-		const color = status === null ? '#64748b' : status.dormantReason ? '#f59e0b' : allInCooldown ? '#f59e0b' : activeHasCooldown ? '#f59e0b' : isAuthed ? '#10b981' : '#f59e0b';
-
-		const legacyDefault = activeAcc && activeAcc.defaultAlias === undefined && activeAcc.systemHome && activeAcc.alias === '主账号 (系统登录)';
-		const displayAlias = activeAcc ? (activeAcc.defaultAlias || legacyDefault
-			? activeAcc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accounts.indexOf(activeAcc) + 1 })
-			: activeAcc.alias) : '';
-		// Only an ELIGIBLE account may be announced as "in use": the fallback
-		// chain can land on a disabled/quarantined slot, and the badge then
-		// claimed a dead account was serving traffic next to an amber dot.
-		const activeEligible = activeAcc !== undefined && activeAcc.enabled && !activeAcc.authRequired;
-		const activeDetail = activeAcc !== undefined && activeEligible ? ` · ${t('status.inUse')}: ${displayAlias}${activeAcc.email ? ` (${activeAcc.email})` : ''}` : '';
-		const badgeTitle = `${t('header.badgeTitle', { count: accounts.length })}${activeDetail}`;
-		const buttonLabel = displayAlias ? `AGY · ${displayAlias}` : `AGY (${accounts.length})`;
+		const account = accounts[0];
+		const authPhase = status?.auth?.phase ?? 'unknown';
+		// A keyring entry proves an identity exists, not that its token still
+		// passes Google's auth — the quota RPCs report that as `quotaError`.
+		const isAuthed = authPhase !== 'expired' && (authPhase === 'ok' || accounts.length > 0);
+		const color = status === null ? '#64748b'
+			: status.dormantReason || authPhase === 'expired' ? '#f59e0b'
+			: isAuthed ? '#10b981'
+			: '#f59e0b';
+		// One account, so there is no "which account is serving" question left to
+		// answer: the badge just names the identity. No email suffix — the alias
+		// the server builds already carries it, and repeating it made the address
+		// show twice between this badge and the panel card.
+		const badgeTitle = isAuthed ? t('header.badgeTitleSingle') : t('status.needsAuth');
+		const buttonLabel = account?.alias ? `AGY · ${account.alias}` : 'AGY';
 
 		const badge = h('button',
 			{

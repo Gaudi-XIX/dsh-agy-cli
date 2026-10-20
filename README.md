@@ -189,6 +189,10 @@ AGY 侧存在 daily / prod / sandbox 多个 Cloud Code 端点，且 `retrieveUse
 
 Gemini 4 Argon 的可用性（版本/灰度/付费渠道三假设判定）见 [Argon 可用性调研](docs/argon-availability-research-20261020.md)。
 
+### 面板精简（单账号）
+
+面板现只渲染「额度卡 + 思考强度 + 模型显示」三块。多账号卡、号池调度、代理按钮、权限模式分段控件全部拆除，依据是三条硬事实而非审美：客户端 `postJson` 打的 10 个路径里 **8 个没有服务端实现**（点击只弹「操作未完成」）；`status.pool` 是当场拼出的单账号合成对象，「主用/当前使用/已自动切换账号」在单账号后端上没有可表达的状态；身份只取 Windows 凭据管理器一条。被拆 UI 的形状、权限模式为何不能「接上消费者」（provider 契约禁止传 `--dangerously-skip-permissions`）、以及恢复步骤见 [归档：面板多账号 UI 与死控件](docs/archived-panel-ui-20261020.md)。凭据过期时会显式提示（`status.quotaError === 'unauthorized'` → 横幅），不再静默渲染空卡，判据见 `tests/quota-panel-expired-token.test.mjs`。
+
 ## 未来规划
 
 未来版本会继续以“可验证、可回退、额度可控”为前提，重点包括：
