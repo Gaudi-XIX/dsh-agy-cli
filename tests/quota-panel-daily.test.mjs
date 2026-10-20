@@ -83,7 +83,12 @@ function payloadFor(options) {
   return {
     models: {
       'gemini-3.8-flash-high': { displayName: 'Gemini 3.8 Flash (High)', quotaInfo: { remainingFraction: 0.008289657533168793, resetTime: '2026-10-23T22:00:21Z' } },
-      'claude-sonnet-4-6': { displayName: 'Claude Sonnet 4.6', quotaInfo: { resetTime: '2026-10-23T19:08:49Z' } },
+      // Carries a resetTime but no fraction: the shape that used to be filled
+      // in as "100% remaining". Same id as the live model so it survives the
+      // catalog filter, which keeps only the ids the panel actually lists.
+      'gemini-3.8-flash': { displayName: 'Gemini 3.8 Flash', quotaInfo: { resetTime: '2026-10-23T19:08:49Z' } },
+      // Not in the shown catalog: the panel drops it, so it must not appear.
+      'claude-sonnet-4-6': { displayName: 'Claude Sonnet 4.6', quotaInfo: { remainingFraction: 0.5, resetTime: '2026-10-23T19:08:49Z' } },
     },
   }
 }
@@ -238,11 +243,17 @@ test('a model with no reported fraction is unknown, not full', async () => {
       status.handler(fakeRequest('GET', '/plugins/agy-link/status'), resp.res)
     })
 
-    // claude-sonnet-4-6 carries only a resetTime, so its per-model fraction is unknown.
-    const claude = resp.json.pool.accounts[0].quotas.anthropic.models.find((m) => m.modelId === 'claude-sonnet-4-6')
-    assert.ok(claude)
-    assert.equal(claude.remainingFraction, undefined)
-    assert.equal(claude.resetTime, '2026-10-23T19:08:49Z')
+    // gemini-3.8-flash carries only a resetTime, so its per-model fraction is
+    // unknown rather than a filled-in 1.
+    const flash = resp.json.pool.accounts[0].quotas.google.models.find((m) => m.modelId === 'gemini-3.8-flash')
+    assert.ok(flash)
+    assert.equal(flash.remainingFraction, undefined)
+    assert.equal(flash.resetTime, '2026-10-23T19:08:49Z')
+
+    // The panel lists one model, so models outside that catalog are dropped
+    // instead of being shipped to the client on every status poll.
+    const ids = resp.json.pool.accounts[0].quotas.anthropic.models.map((m) => m.modelId)
+    assert.deepEqual(ids, [])
 
     dispose()
   } finally {

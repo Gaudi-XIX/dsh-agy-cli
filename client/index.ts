@@ -1256,14 +1256,13 @@ export function apply(ctx: ClientContext): void {
 				? acc.systemHome ? t('account.defaultAlias') : t('account.aliasDefault', { number: accounts.indexOf(acc) + 1 })
 				: acc.alias;
 
+			// Only the Gemini family is metered for this account: the third-party
+			// weekly bucket reads 0 and Google removes those models from
+			// promotional plans on 2026-11-02, so a Claude / GPT-OSS quota card
+			// would only ever show an exhausted family. Archived shapes and the
+			// restore procedure: docs/archived-model-catalog-20261020.md.
 			const googleModels = acc.quotas.google?.models ?? [];
-			const anthropicModels = acc.quotas.anthropic?.models ?? [];
-			const openaiModels = acc.quotas.openai?.models ?? [];
-			const allChildModels: { family: string; model: ModelQuotaInfo }[] = [
-				...googleModels.map((m) => ({ family: 'Google', model: m })),
-				...anthropicModels.map((m) => ({ family: 'Anthropic', model: m })),
-				...openaiModels.map((m) => ({ family: 'OpenAI', model: m })),
-			];
+			const allChildModels: { family: string; model: ModelQuotaInfo }[] = googleModels.map((m) => ({ family: 'Google', model: m }));
 
 			return h('div', { key: acc.id, className: 'agy-card-hover', style: cardStyle },
 				h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
@@ -1349,8 +1348,6 @@ export function apply(ctx: ClientContext): void {
 				),
 				h('div', { style: S.quotaBox },
 					renderQuotaBar('Gemini', 'google', acc),
-					renderQuotaBar('Claude', 'anthropic', acc),
-					renderQuotaBar('GPT-OSS', 'openai', acc),
 					isExpanded && allChildModels.length > 0 ? h('div', {
 						style: {
 							marginTop: '8px',

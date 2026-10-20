@@ -314,7 +314,6 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
 
 let cachedQuotas: Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>> = {}
 let lastQuotaFetchTime = 0
-let dynamicCatalogModels: Array<{ id: string; name: string }> = []
 
 async function refreshQuotas(force = false): Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> {
   const now = Date.now()
@@ -393,11 +392,15 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
     }
 
     if (modelsRaw && typeof modelsRaw === 'object' && modelsRaw.models) {
-      const discoveredList: Array<{ id: string; name: string }> = []
+      // The upstream catalog response names ~19 models. The panel only ever
+      // shows DEFAULT_CATALOG_MODELS, so keep the per-model quota detail for
+      // those ids and drop the rest instead of shipping every upstream entry
+      // over the wire on each status poll.
+      const catalogIds = new Set(DEFAULT_CATALOG_MODELS.map((m) => m.id))
       for (const [id, m] of Object.entries(modelsRaw.models)) {
+        if (!catalogIds.has(id)) continue
         const info = m?.quotaInfo
         const displayName = m?.displayName || id
-        discoveredList.push({ id, name: displayName })
 
         const entry: FamilyQuotaModelEntry = {
           modelId: id,
@@ -415,13 +418,10 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
           : 'google'
         familyQuotas[targetFam]!.models!.push(entry)
       }
-      if (discoveredList.length > 0) {
-        dynamicCatalogModels = discoveredList
-      }
     }
 
     if (!summaryRaw?.groups && modelsRaw?.models) {
-      for (const fam of ['google', 'anthropic', 'openai'] as const) {
+      for (const fam of DISPLAY_FAMILIES) {
         const list = familyQuotas[fam]?.models || []
         // Only models that actually reported a fraction take part in the
         // aggregate. A model whose `quotaInfo` has no `remainingFraction` is a
@@ -453,12 +453,25 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
   return cachedQuotas
 }
 
+/**
+ * The catalog the panel shows. Gemini 3.8 Flash is the only model this account
+ * can actually reach: `agy models` lists it (plus effort variants of the same
+ * id), and the third-party families are drained — the 3p weekly bucket has read
+ * remainingFraction 0 since 2026-10-20, and Google removes Claude/GPT from
+ * promotional plans on 2026-11-02. Listing drained models only produces entries
+ * that fail on send.
+ *
+ * The retired entries and a switch-back procedure are parked in
+ * `docs/archived-model-catalog-20261020.md` — restoring any of them is a
+ * config edit (`models` + `visibleModels` in the profile patch), not a code
+ * change.
+ */
 const DEFAULT_CATALOG_MODELS = [
   { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Thinking)' },
-  { id: 'claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)' },
-  { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)' },
 ]
+
+/** Quota families the panel renders. Same reasoning as above; see the doc. */
+const DISPLAY_FAMILIES = ['google'] as const
 
 export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDiscovery?: AgyModelDiscovery): () => void {
   const disposers: Array<() => void> = []
@@ -497,7 +510,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       const overrides = readOverrides()
       const quotas = await refreshQuotas(false)
 
-      let discovered = dynamicCatalogModels.length > 0 ? [...dynamicCatalogModels] : [...DEFAULT_CATALOG_MODELS]
+      let discovered = [...DEFAULT_CATALOG_MODELS]
       if (modelDiscovery) {
         try {
           const configured = configuredModels(activeConfig)
