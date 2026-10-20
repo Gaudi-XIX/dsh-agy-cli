@@ -11,6 +11,7 @@ import type { Config as ConfigType } from '../provider/config.js'
 import { configuredModels } from '../provider/config.js'
 import type { AgyModelDiscovery } from '../agy/models.js'
 import type { DshWebServerLike } from '../mcp/endpoint.js'
+import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides, type AgyRuntimeOverrides } from '../agy/overrides.js'
 
 interface QuotaModelEntry {
   remainingFraction?: number
@@ -58,7 +59,6 @@ interface QuotaSummaryResponse {
   description?: string
 }
 
-const RUNTIME_OVERRIDES_PATH = join(homedir(), '.dsh', 'agy-link', 'runtime-overrides.json')
 const CORDIS_PATCH_PATH = join(homedir(), '.dsh', 'profiles', 'desktop', 'cordis.patch.yml')
 
 /**
@@ -99,27 +99,12 @@ const AGY_IDENTITY_HEADERS: Record<string, string> = {
   'X-Goog-Api-Client': 'antigravity/cli/1.4.2 aidev_client windows/amd64 consumer',
 }
 
-function readOverrides(): { hiddenModels: string[]; defaultEffort?: string; defaultModel?: string } {
-  try {
-    if (existsSync(RUNTIME_OVERRIDES_PATH)) {
-      const data = JSON.parse(readFileSync(RUNTIME_OVERRIDES_PATH, 'utf8'))
-      return {
-        hiddenModels: Array.isArray(data.hiddenModels) ? data.hiddenModels : [],
-        defaultEffort: typeof data.defaultEffort === 'string' ? data.defaultEffort : undefined,
-        defaultModel: typeof data.defaultModel === 'string' ? data.defaultModel : undefined,
-      }
-    }
-  } catch {}
-  return { hiddenModels: [] }
+function readOverrides(): AgyRuntimeOverrides {
+  return readAgyRuntimeOverrides() ?? { hiddenModels: [] }
 }
 
-function saveOverrides(overrides: { hiddenModels?: string[]; defaultEffort?: string; defaultModel?: string }): void {
-  try {
-    const current = readOverrides()
-    const merged = { ...current, ...overrides }
-    mkdirSync(dirname(RUNTIME_OVERRIDES_PATH), { recursive: true })
-    writeFileSync(RUNTIME_OVERRIDES_PATH, JSON.stringify(merged, null, 2), 'utf8')
-  } catch {}
+function saveOverrides(updates: { hiddenModels?: string[]; defaultEffort?: string; defaultModel?: string }): void {
+  saveAgyRuntimeOverrides(updates)
 }
 
 function updateCordisPatch(visibleModels?: string[], defaultModel?: string): void {
@@ -529,7 +514,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
 
     // 1. GET /plugins/agy-link/status
     reg('/plugins/agy-link/status', async (_req, res) => {
-      const overrides = readOverrides()
+      const overrides = readAgyRuntimeOverrides() ?? { hiddenModels: [], defaultEffort: undefined, defaultModel: undefined }
       const quotas = await refreshQuotas(false)
 
       let discovered = [...DEFAULT_CATALOG_MODELS]

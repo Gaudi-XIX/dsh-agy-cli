@@ -56,6 +56,7 @@ import {
   type AgyUsageSource,
 } from '../agy/log.js'
 import { classifyAgyFailure, safeAgyFailureMessage } from '../agy/errors.js'
+import { readAgyRuntimeOverrides } from '../agy/overrides.js'
 import {
   AgyParserError,
   AgyStreamParser,
@@ -413,7 +414,7 @@ function mcpToolStepOf(event: AgyJsonEvent): AgyMcpToolStep | undefined {
 }
 
 /**
- * One bridged MCP step rendered as a transcript line.
+ * One bridged MCP step rendered as a progress line for the reasoning channel.
  *
  * Deliberately NOT a DSH tool-call block. The host commits the assistant
  * message, then executes every `tool-call` block it contains and starts another
@@ -424,18 +425,91 @@ function mcpToolStepOf(event: AgyJsonEvent): AgyMcpToolStep | undefined {
  * "content arrived, vanished, then arrived several times over" report. A
  * reasoning line keeps the step visible in the transcript without handing the
  * host a call to replay.
+ *
+ * For Scheme B (规范化过程流 Step Process), each bridged step is emitted as a
+ * structured, human-readable Chinese status line into the reasoning channel,
+ * with commands/paths safely enclosed in backticks (`code`) to protect against
+ * browser auto-translation plugins. DSH Desktop and Pocket display this as the
+ * live progress indicator during execution and collapse it into the process
+ * drawer once completed, keeping the final text response 100% clean and concise.
  */
-const MCP_STEP_ARG_LIMIT = 400
+// The provider streams process lines once each (the host's reasoning text is
+// append-only). The host's own collapsed-summary logic
+// (`latestCompletedParagraphFirstLine`) splits on BLANK lines and shows the
+// first line of the latest completed paragraph while the row is running — that
+// is exactly the "fold shows only the newest step, live" behavior the user
+// asked for. So each step must be its OWN paragraph: a blank line separates
+// consecutive steps. A single leading banner line is emitted first; when the
+// row settles, the host's summary falls back to that line (the banner) as the
+// one-line collapsed view.
+function cleanStepTarget(str: string, maxLen = 100): string {
+  const singleLine = str.trim().split(/\r?\n/)[0]?.trim() ?? ''
+  if (!singleLine) return ''
+  const safe = singleLine.replace(/`/g, "'")
+  return safe.length > maxLen ? `${safe.slice(0, maxLen)}…` : safe
+}
 
-function mcpStepLogLine(step: AgyMcpToolStep, state: string): string {
-  let args: string
-  try {
-    args = JSON.stringify(step.arguments ?? {})
-  } catch {
-    args = '{…}'
+/** One process step as its own markdown paragraph (blank line = separator). */
+function mcpStepProcessLine(step: AgyMcpToolStep, state: string): string {
+  const isError = state === 'ERROR'
+  const statusIcon = isError ? '❌' : '🛠️'
+  const rawArgs = step.arguments ?? {}
+  const args = (typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : {}) as Record<string, unknown>
+
+  const pick = (...keys: string[]): string => {
+    for (const k of keys) {
+      const v = args[k]
+      if (typeof v === 'string' && v !== '') return v
+    }
+    return ''
   }
-  if (args.length > MCP_STEP_ARG_LIMIT) args = `${args.slice(0, MCP_STEP_ARG_LIMIT)}…`
-  return `[dsh ${step.toolName}] ${state === 'ERROR' ? 'failed' : 'ran'} ${args}\n`
+
+  let line: string
+  if (step.toolName === 'pwsh' || step.toolName === 'bash') {
+    const verb = isError ? '执行失败' : '执行'
+    const cmd = cleanStepTarget(typeof args.command === 'string' ? args.command : '')
+    line = cmd ? `${statusIcon} [${step.toolName}] ${verb}: \`${cmd}\`` : `${statusIcon} [${step.toolName}] ${verb}`
+  } else if (step.toolName === 'read' || step.toolName === 'write' || step.toolName === 'edit') {
+    const verbBase = step.toolName === 'read' ? '读取' : step.toolName === 'write' ? '写入' : '编辑'
+    const verb = isError ? `${verbBase}失败` : verbBase
+    const p = cleanStepTarget(pick('file_path', 'path'), 120)
+    line = p ? `${statusIcon} [${step.toolName}] ${verb}: \`${p}\`` : `${statusIcon} [${step.toolName}] ${verb}`
+  } else if (step.toolName === 'grep') {
+    const verb = isError ? '检索失败' : '检索'
+    const pat = cleanStepTarget(pick('pattern'))
+    line = pat ? `${statusIcon} [grep] ${verb}: \`${pat}\`` : `${statusIcon} [grep] ${verb}`
+  } else if (step.toolName === 'glob') {
+    const verb = isError ? '查找失败' : '查找'
+    const pat = cleanStepTarget(pick('pattern', 'include'))
+    line = pat ? `${statusIcon} [glob] ${verb}: \`${pat}\`` : `${statusIcon} [glob] ${verb}`
+  } else {
+    const verb = isError ? '执行失败' : '执行'
+    const t = cleanStepTarget(pick('description', 'toolSummary', 'toolAction', 'query', 'url', 'path', 'file_path', 'command'))
+    line = t ? `${statusIcon} [${step.toolName}] ${verb}: \`${t}\`` : `${statusIcon} [${step.toolName}] ${verb}`
+  }
+  return `${line}\n\n`
+}
+
+/**
+ * The consolidated process block opens with a banner paragraph. The host's
+ * collapsed summary for a running row is `latestCompletedParagraphFirstLine`
+ * — the first line of the latest completed paragraph — so, with one blank-line
+ * separated paragraph per step, the fold live-rolls to the newest step; when
+ * the row settles, the summary falls back to `firstLine`, i.e. this banner,
+ * giving a stable one-line view of the finished process.
+ */
+function reasoningBanner(): string {
+  return '[agy 过程流]\n\n'
+}
+
+/**
+ * The block closes with a total-step paragraph, appended after the last step's
+ * blank-line separator. It is not the settled summary (that is the banner) but
+ * it carries the count the reader needs to judge a stuck, looping turn at a
+ * glance when the body is expanded.
+ */
+function reasoningCloseLine(stepCount: number): string {
+  return `〔共 ${stepCount} 步〕\n`
 }
 
 function stepStateOf(event: AgyJsonEvent): string | undefined {
@@ -915,6 +989,23 @@ function normalizeReasoningEffort(value: unknown): AgyReasoningEffort | undefine
   )
 }
 
+// The panel's "default thinking strength" control writes ~/.dsh/agy-link/
+// runtime-overrides.json; this reads it back so the generation path uses the
+// user's choice as the last-resort effort instead of the built-in 'high'.
+// 30s TTL so a panel change takes effect without a host restart; an invalid or
+// missing file silently falls back to the built-in default.
+// `__effortOverrideCacheForTest` is the mutable record the test harness can
+// poke to clear the cache between cases without a process restart.
+export const __effortOverrideCacheForTest: { at: number; value: AgyReasoningEffort | undefined } = { at: 0, value: undefined }
+const EFFORT_OVERRIDE_TTL_MS = 30_000
+function readDefaultEffortOverride(): AgyReasoningEffort | undefined {
+  const now = Date.now()
+  if (now - __effortOverrideCacheForTest.at < EFFORT_OVERRIDE_TTL_MS) return __effortOverrideCacheForTest.value
+  __effortOverrideCacheForTest.at = now
+  __effortOverrideCacheForTest.value = readAgyRuntimeOverrides()?.defaultEffort
+  return __effortOverrideCacheForTest.value
+}
+
 function resolveAgyRetryPolicy(config: AgyRetryPolicyConfig | undefined): ResolvedRetryPolicy {
   const maxRetries = config?.maxRetries ?? 5
   if (!Number.isSafeInteger(maxRetries) || maxRetries < 0 || maxRetries > 5) {
@@ -1301,10 +1392,16 @@ export class AgyAdapter extends LlmAdapter {
     // Log deprecation if suffix used (telemetry handled by caller via model id)
     const configured = this.currentModels.find(entry => entry.id.toLowerCase() === baseId.toLowerCase()) ?? this.currentModels.find(entry => entry.id === model)
     void suffixEffort // suffix implies effort, handled in stream route; resolve keeps base id for UI consistency
-    // Declare the same default the stream route applies (gemini-* -> 'high', see effectiveEffort).
-    // Without this declaration the host cannot materialize a default effort and the UI falls back to
-    // efforts[0]='low', so the picker shows 'low' while the runtime runs 'high' — the "changed but jumps back" symptom.
-    const defaultEffort: ReasoningEffortId | undefined = baseId.toLowerCase().startsWith('gemini-') ? 'high' as ReasoningEffortId : undefined
+    // "Default thinking strength" is a user setting: the panel control writes it to
+    // ~/.dsh/agy-link/runtime-overrides.json (single source of truth), and the
+    // generation path reads it here. It is only a last-resort fallback — a
+    // purpose route, the host's requested effort, or a model-id suffix all win.
+    // Re-read per call with a 30s TTL (the panel can change it without a restart);
+    // absent/invalid file falls back to 'high', the built-in gemini default.
+    const overrideEffort = readDefaultEffortOverride()
+    const defaultEffort: ReasoningEffortId | undefined = baseId.toLowerCase().startsWith('gemini-')
+      ? (overrideEffort ?? 'high') as ReasoningEffortId
+      : undefined
     const inputModalities = this.imageInput === 'experimental'
       ? ['text', 'image'] as const
       : ['text'] as const
@@ -1432,7 +1529,6 @@ export class AgyAdapter extends LlmAdapter {
       throw error
     })
     let blockStarted = false
-    let visibleText = ''
     let resultSeen = false
     let finalResponse: string | undefined
     let finalStatus: string | undefined
@@ -1449,6 +1545,9 @@ export class AgyAdapter extends LlmAdapter {
     // transcript shows what AGY did without the host replaying any of it.
     let mcpStepsOpen = false
     let mcpStepsText = ''
+    let mcpStepCount = 0
+    let mcpBannerEmitted = false
+    let modelText = ''
     try {
       for await (const event of queue) {
         const r = event as unknown as Record<string, unknown>
@@ -1498,8 +1597,14 @@ export class AgyAdapter extends LlmAdapter {
                 mcpStepsOpen = true
                 yield { type: 'block-start', index: 1, blockType: 'reasoning' }
               }
-              const line = mcpStepLogLine(step, state)
+              if (!mcpBannerEmitted) {
+                mcpBannerEmitted = true
+                mcpStepsText += reasoningBanner()
+                yield { type: 'reasoning-delta', index: 1, text: reasoningBanner() }
+              }
+              const line = mcpStepProcessLine(step, state)
               mcpStepsText += line
+              mcpStepCount += 1
               yield { type: 'reasoning-delta', index: 1, text: line }
             }
             continue
@@ -1512,7 +1617,7 @@ export class AgyAdapter extends LlmAdapter {
             blockStarted = true
             yield { type: 'block-start', index: 0, blockType: 'text' }
           }
-          visibleText += delta
+          modelText += delta
           yield { type: 'text-delta', index: 0, text: delta }
         }
       }
@@ -1521,6 +1626,8 @@ export class AgyAdapter extends LlmAdapter {
       queue.end()
       persistentRequest?.catch(() => undefined)
     }
+    const mcpCloseLine = mcpStepCount > 0 ? reasoningCloseLine(mcpStepCount) : ''
+    mcpStepsText = `${mcpStepsText}${mcpCloseLine}`
     const selectedUsage = latestStepUsage ?? fallbackUsage ?? resultUsage
     const usageSource: AgyUsageSource | undefined = latestStepUsage !== undefined
       ? 'step'
@@ -1581,22 +1688,25 @@ export class AgyAdapter extends LlmAdapter {
     // tool-call block is the whole record, and a blank text block would land in
     // the transcript as an empty assistant message (see the one-shot path).
     if (finalResponse !== undefined && finalResponse.length > 0) {
-      const suffix = visibleText.length === 0
+      const suffix = modelText.length === 0
         ? finalResponse
-        : finalResponse.startsWith(visibleText) ? finalResponse.slice(visibleText.length) : ''
+        : finalResponse.startsWith(modelText) ? finalResponse.slice(modelText.length) : ''
       if (suffix.length > 0) {
         if (!blockStarted) {
           blockStarted = true
           yield { type: 'block-start', index: 0, blockType: 'text' }
         }
-        visibleText += suffix
+        modelText += suffix
         yield { type: 'text-delta', index: 0, text: suffix }
       }
     }
     if (blockStarted) {
-      yield { type: 'block-end', index: 0, block: { type: 'text', text: visibleText } }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: modelText } }
     }
     if (mcpStepsOpen) {
+      if (mcpCloseLine !== '') {
+        yield { type: 'reasoning-delta', index: 1, text: mcpCloseLine }
+      }
       yield { type: 'block-end', index: 1, block: { type: 'reasoning', text: mcpStepsText } }
     }
     if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
@@ -1640,8 +1750,12 @@ export class AgyAdapter extends LlmAdapter {
     const baseModel = normalizeModelId(rawModel)
     const suffixEffort = extractModelEffort(rawModel)
     // AGY 1.1.17+ requires --effort for gemini-* flash/pro models (low/high/medium variants), but claude-* does NOT support --effort.
-    // Default to 'high' only for gemini-* when no explicit effort is provided to avoid AGY_REQUEST "requires --effort".
-    const defaultEffortForModel = baseModel.toLowerCase().startsWith('gemini-') ? 'high' as const : undefined
+    // When nothing higher in the chain chose an effort, the last-resort default is the
+    // user's panel setting (runtime overrides file) if present, else the built-in 'high'
+    // for gemini-* to avoid AGY_REQUEST "requires --effort".
+    const defaultEffortForModel = baseModel.toLowerCase().startsWith('gemini-')
+      ? (readDefaultEffortOverride() ?? 'high') as AgyReasoningEffort
+      : undefined
     let effectiveEffort: AgyReasoningEffort | undefined = purposeReasoningEffort ?? requestedReasoningEffort ?? suffixEffort ?? defaultEffortForModel
     // Claude models in AGY 1.1.17 report "is not supported for model" when --effort is sent; suppress for claude-*
     if (baseModel.toLowerCase().startsWith('claude-')) effectiveEffort = undefined
@@ -2029,12 +2143,14 @@ export class AgyAdapter extends LlmAdapter {
     })
 
     let blockStarted = false
-    let visibleText = ''
     // One consolidated reasoning block (index 1) records the bridged tool steps
     // and, when the turn was cut short, AGY's own reason for it. The block opens
     // lazily so a turn with neither keeps its plain text-only shape.
     let mcpStepsOpen = false
     let mcpStepsText = ''
+    let mcpStepCount = 0
+    let mcpBannerEmitted = false
+    let modelText = ''
     let resultSeen = false
     let finalResponse: string | undefined
     let finalStatus: string | undefined
@@ -2138,8 +2254,14 @@ export class AgyAdapter extends LlmAdapter {
                 mcpStepsOpen = true
                 yield { type: 'block-start', index: 1, blockType: 'reasoning' }
               }
-              const line = mcpStepLogLine(step, state)
+              if (!mcpBannerEmitted) {
+                mcpBannerEmitted = true
+                mcpStepsText += reasoningBanner()
+                yield { type: 'reasoning-delta', index: 1, text: reasoningBanner() }
+              }
+              const line = mcpStepProcessLine(step, state)
               mcpStepsText += line
+              mcpStepCount += 1
               yield { type: 'reasoning-delta', index: 1, text: line }
             }
             // The MCP plumbing step carries no model text, but other step
@@ -2156,7 +2278,7 @@ export class AgyAdapter extends LlmAdapter {
             blockStarted = true
             yield { type: 'block-start', index: 0, blockType: 'text' }
           }
-          visibleText += delta
+          modelText += delta
           yield { type: 'text-delta', index: 0, text: delta }
         }
 
@@ -2227,7 +2349,7 @@ export class AgyAdapter extends LlmAdapter {
     // 1508 and the result branch at src/host/mapper.ts:400-428); the difference
     // is that a placeholder response is not deliverable content, so the streamed
     // text decides whether anything survives.
-    const streamedPartialAnswer = resultSeen && !isSuccessStatus(finalStatus) && visibleText.trim().length > 0
+    const streamedPartialAnswer = resultSeen && !isSuccessStatus(finalStatus) && modelText.trim().length > 0
     if (streamedPartialAnswer) telemetry.partialAnswerDelivered = true
     if (resultSeen && !isSuccessStatus(finalStatus) && !streamedPartialAnswer) {
       const detail = [finalStatus, finalErrorDetail].filter(value => value !== undefined).join(' ')
@@ -2307,35 +2429,45 @@ export class AgyAdapter extends LlmAdapter {
     // real partial answer, so leave it as it stands.
     const appendFinalResponse = !streamedPartialAnswer && finalResponse !== undefined && finalResponse.trim().length > 0
     if (appendFinalResponse && finalResponse !== undefined) {
-      const suffix = visibleText.length === 0
+      const suffix = modelText.length === 0
         ? finalResponse
-        : finalResponse.startsWith(visibleText) ? finalResponse.slice(visibleText.length) : ''
+        : finalResponse.startsWith(modelText) ? finalResponse.slice(modelText.length) : ''
       if (suffix.length > 0) {
         if (!blockStarted) {
           blockStarted = true
           yield { type: 'block-start', index: 0, blockType: 'text' }
         }
-        visibleText += suffix
+        modelText += suffix
         yield { type: 'text-delta', index: 0, text: suffix }
       }
     }
 
     if (blockStarted) {
-      yield { type: 'block-end', index: 0, block: { type: 'text', text: visibleText } }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: modelText } }
     }
     // AGY's own reason for a cut-short turn belongs in the same reasoning block
     // as the bridged tool steps, so the transcript gets one annotation, not two.
     if (streamedPartialAnswer) {
       const reason = (lastResultError ?? finalErrorDetail ?? 'AGY reported status ERROR').trim()
-      const line = `[agy finished with error] ${reason}\n`
+      const line = `[agy finished with error] ${reason}\n\n`
       if (!mcpStepsOpen) {
         mcpStepsOpen = true
         yield { type: 'block-start', index: 1, blockType: 'reasoning' }
       }
+      if (!mcpBannerEmitted) {
+        mcpBannerEmitted = true
+        mcpStepsText += reasoningBanner()
+        yield { type: 'reasoning-delta', index: 1, text: reasoningBanner() }
+      }
       mcpStepsText += line
       yield { type: 'reasoning-delta', index: 1, text: line }
     }
+    const mcpCloseLine = mcpStepCount > 0 ? reasoningCloseLine(mcpStepCount) : ''
+    mcpStepsText = `${mcpStepsText}${mcpCloseLine}`
     if (mcpStepsOpen) {
+      if (mcpCloseLine !== '') {
+        yield { type: 'reasoning-delta', index: 1, text: mcpCloseLine }
+      }
       yield { type: 'block-end', index: 1, block: { type: 'reasoning', text: mcpStepsText } }
     } else if (!blockStarted && telemetry.toolCallCount === 0) {
       throw new LlmError('AGY completed without a text response', EMPTY_RESPONSE_CODE)

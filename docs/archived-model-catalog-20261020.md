@@ -71,7 +71,7 @@
    ```
    两处都改：`visibleModels` 过滤 `models`，只改一处不会让模型出现。
 3. 恢复面板勾选与额度卡：把 `src/web/router.ts` 的 `DEFAULT_CATALOG_MODELS` 补回上表四行、`DISPLAY_FAMILIES` 改成 `['google', 'anthropic', 'openai'] as const`；`client/index.ts` 的额度区补回两行 `renderQuotaBar('Claude','anthropic',acc)` / `renderQuotaBar('GPT-OSS','openai',acc)`，`allChildModels` 恢复三族展开。
-4. 重新构建：`npx --no-install tsc -p tsconfig.json`（lib/ 供宿主），面板客户端需 `npm run build:client`——**该命令当前断的**（`package.json:54` 硬编码 `C:/Users/toast/.dsh/profiles/desktop/node_modules/tsdown/dist/run.mjs`，本机无 tsdown，见下节）。
+4. 重新构建：`npx --no-install tsc -p tsconfig.json`（lib/ 供宿主），面板客户端 `npm run build:client`（2026-10-20 14:2x 起可用，见 §5）。
 5. 重启 DeepSeek Harness 才生效；面板侧 Ctrl+R 只刷新已装载的客户端 bundle，**不是**重读 `dist/client.js`。
 
 ### 4.2 恢复 `dynamicCatalogModels`（把上游目录全量喂给面板）
@@ -90,16 +90,18 @@ let discovered = dynamicCatalogModels.length > 0 ? [...dynamicCatalogModels] : [
 ```
 不建议恢复：每次 status 轮询都把 19 条目录随响应下发，而面板只有 1 条可勾选；且被隐藏的条目点发送就是 404/429。
 
-## 5. 构建命令的已知断裂（恢复时的绊脚石）
+## 5. 构建命令的断裂 —— 已于 2026-10-20 14:2x 修复（原文保留作历史）
 
-`npm run build:client` 因 `package.json:54` 写死了本机 profile 下的 tsdown 路径而必然失败，本机无 tsdown（仓 devDependencies 也从未有过）。可用口径：
+`npm run build:client` 曾因 `package.json:54` 写死本机 profile 下的 tsdown 路径而必然失败，本机无 tsdown（仓 devDependencies 也从未有过）。
+
+**现口径（已落盘）**：`build:client` 改为 `node scripts/build-client.mjs`，用 TypeScript 编译器 API（`transpileModule`，`typescript` 本就是 devDependency）把 `client/*.ts` 打成单个 `__ModuleLoader__` 模块写 `dist/client.js`，零新增依赖；`tsdown.client.config.ts` 已删。冒烟测试 `node scripts/build-client-smoke.mjs` 按宿主方式装载产物并断言 `name`/`inject`/`apply` 契约。`npm test` 从此全绿（289/289，含 build）。
+
+以下为修复前的可用口径，仅在 `scripts/build-client.mjs` 再次损坏时作临时绕行：
 
 ```
 npx --no-install tsc -p tsconfig.json --noEmit   # 类型检查
 node scripts/run-tests.mjs                       # 测试
 ```
-
-要修就得装依赖（`tsdown@0.22.14`，与同类实现 chaos-03x / amlyczz / Jaylor-Wang / suntianc 四家同款），属「新增依赖需用户点头」的红线，用户 2026-10-20 明确表示暂缓（「用得很顺，没出现不能的问题」）。
 
 ## 6. 同批次相关文档
 

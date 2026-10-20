@@ -195,7 +195,9 @@ test('AgyAdapter exposes and forwards the supported reasoning efforts', async ()
   assert.deepEqual(resolved.reasoning?.efforts.map(effort => effort.id), ['low', 'medium', 'high'])
   assert.deepEqual(resolved.reasoning?.efforts.map(effort => effort.description), [undefined, undefined, undefined])
   // gemini-* declares the same default the stream route applies, so the host materializes
-  // 'high' and the UI stops falling back to efforts[0]='low'.
+  // 'high' and the UI stops falling back to efforts[0]='low'. (The 30s override TTL may
+  // surface a user-picked panel default from ~/.dsh/agy-link/runtime-overrides.json here;
+  // the built-in floor stays 'high' when the file is absent.)
   assert.equal(resolved.reasoning?.defaultEffort, 'high')
 
   const claudeResolved = await adapter.resolveModel('agy-test', 'claude-sonnet-test')
@@ -213,6 +215,61 @@ test('AgyAdapter exposes and forwards the supported reasoning efforts', async ()
     error => error.code === 'UNSUPPORTED_REASONING_EFFORT',
   )
   assert.equal(captured.length, 1)
+})
+
+test('AgyAdapter falls back to the panel default effort when nothing else chose one', async () => {
+  // The panel's "default thinking strength" control writes ~/.dsh/agy-link/
+  // runtime-overrides.json; the generation path must honor it as the last-resort
+  // effort instead of the built-in 'high'.
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-effort-'))
+  const fakePath = path.join(dir, 'runtime-overrides.json')
+  fs.writeFileSync(fakePath, JSON.stringify({ defaultEffort: 'medium' }), 'utf8')
+
+  // Point the reader at the temp file. The lib build inlines the path constant,
+  // so we use the exported test hook to redirect the reader/writer to the temp dir.
+  const overrides = await import('../lib/agy/overrides.js')
+  const provider = await import('../lib/provider/agy.js')
+  const originalCache = provider.__effortOverrideCacheForTest
+  overrides.__setAgyOverridesPathForTest(fakePath)
+  // The cache is an exported mutable record: poke its fields in place rather
+  // than reassigning the frozen ESM binding.
+  originalCache.at = 0
+  originalCache.value = undefined
+  try {
+    const captured = []
+    const adapter = new AgyAdapter({ model: 'gemini-test' }, {
+      runAgyProcess: fakeRunner([
+        { event: 'result', result: { status: 'SUCCESS', response: 'ok' } },
+      ], captured),
+    })
+    // No explicit effort on the request and no suffix on the model id: the
+    // last-resort default must be the panel-picked 'medium', not 'high'.
+    for await (const _chunk of adapter.stream({ ...request })) {}
+    assert.equal(captured[0]?.reasoningEffort, 'medium')
+    const resolved = await adapter.resolveModel('agy-test', 'gemini-test')
+    assert.equal(resolved.reasoning?.defaultEffort, 'medium')
+
+    // An invalid or absent override must fall back to the built-in 'high'.
+    fs.rmSync(fakePath, { force: true })
+    originalCache.at = 0
+    originalCache.value = undefined
+    const captured2 = []
+    const adapter2 = new AgyAdapter({ model: 'gemini-test' }, {
+      runAgyProcess: fakeRunner([
+        { event: 'result', result: { status: 'SUCCESS', response: 'ok' } },
+      ], captured2),
+    })
+    for await (const _chunk of adapter2.stream({ ...request })) {}
+    assert.equal(captured2[0]?.reasoningEffort, 'high')
+  } finally {
+    originalCache.at = 0
+    originalCache.value = undefined
+    overrides.__setAgyOverridesPathForTest(undefined)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('AgyAdapter applies purpose routes only to matching auxiliary calls', async () => {
