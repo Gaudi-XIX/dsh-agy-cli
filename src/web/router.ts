@@ -322,6 +322,39 @@ let lastQuotaError: 'unauthorized' | 'network' | null = null
 // on every call; an unset value simply skips renewal instead of guessing.
 let quotaConfig: ConfigType | undefined
 
+// ---- attach diagnostics (Models page) ----
+// The host renders `settings.models.provider-card` only for the directory row
+// whose `settingsNs` equals the key the client registered, and the plugin's
+// three boot registrations are best-effort (a duplicate mount throws and used to
+// be swallowed). From outside the browser that made four different failures look
+// identical: no directory row, a refused registration, a card the host never
+// dispatched, and a card that rendered empty. `/plugins/agy-link/diagnose`
+// reports the first two from the host side and the fourth from the browser.
+const bootNotes = new Map<string, string>()
+
+/** Record the outcome of one boot registration step (called from apply()). */
+export function noteRegistration(step: string, detail: string): void {
+  bootNotes.set(step, detail)
+}
+
+interface CardPing {
+  at: number
+  props: string[]
+}
+
+const cardPings: CardPing[] = []
+
+/** Record one card mount reported by the browser half. */
+export function noteCardPing(props: string[]): void {
+  cardPings.push({ at: Date.now(), props })
+  if (cardPings.length > 20) cardPings.shift()
+}
+
+/** Snapshot for `/plugins/agy-link/diagnose`. */
+export function getAttachDiagnostics(): { notes: Record<string, string>; cardPings: CardPing[] } {
+  return { notes: Object.fromEntries(bootNotes), cardPings: [...cardPings] }
+}
+
 async function refreshQuotas(force = false): Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> {
   const now = Date.now()
   const cacheFresh = !force && now - lastQuotaFetchTime < 30_000 && Object.keys(cachedQuotas).length > 0
@@ -579,6 +612,51 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         clearInterval(keepaliveTimer)
       })
     }
+
+    // 0. GET /plugins/agy-link/diagnose — the Models-page attach path as the
+    // host sees it. `configurable` must contain one entry whose settingsNs is
+    // the card key; when it does and `cardPings` is still empty, the host never
+    // dispatched the entry (a directory/namespace problem) rather than the card
+    // rendering nothing (a card problem). Read-only; safe to poll.
+    reg('/plugins/agy-link/diagnose', (_req, res) => {
+      const llm = (ctx as unknown as {
+        llm?: {
+          listProviders?: () => Array<{ id: string }>
+          listConfigurableProviders?: () => Array<{ provider: string; displayName: string; settingsNs: string; settingsPath: string[] }>
+        }
+      }).llm
+      const readOrNull = <T>(fn: () => T): T | string => {
+        try {
+          return fn()
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error)
+        }
+      }
+      const configurable = readOrNull(() => (llm?.listConfigurableProviders?.() ?? [])
+        .map((entry) => ({ provider: entry.provider, displayName: entry.displayName, settingsNs: entry.settingsNs })))
+      const diagnostics = getAttachDiagnostics()
+      sendJson(res, 200, {
+        cardSlot: 'settings.models.provider-card',
+        cardKey: 'dsh-agy-provider',
+        ...diagnostics,
+        providers: readOrNull(() => (llm?.listProviders?.() ?? []).map((provider) => provider.id)),
+        configurable,
+        rowCarriesCardKey: Array.isArray(configurable)
+          ? configurable.some((entry) => entry.settingsNs === 'dsh-agy-provider')
+          : null,
+      })
+    })
+
+    // The browser half reports every mount of the card here. A dispatch that
+    // never happens never arrives, which is what separates "no row" from "card
+    // rendered empty"; the prop names prove which owner props the host passed.
+    reg('/plugins/agy-link/card-ping', async (req, res) => {
+      const body = await readBody(req)
+      const raw = body.props
+      const props = Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : []
+      noteCardPing(props)
+      sendJson(res, 200, { ok: true })
+    })
 
     // 1. GET /plugins/agy-link/status
     reg('/plugins/agy-link/status', async (_req, res) => {

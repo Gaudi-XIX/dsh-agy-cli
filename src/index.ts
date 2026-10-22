@@ -86,7 +86,7 @@ import {
   type DshToolRuntimeLike,
   type DshWebServerLike,
 } from './mcp/bridge.js'
-import { setupWebRoutes } from './web/router.js'
+import { noteRegistration, setupWebRoutes } from './web/router.js'
 import {
   findMissingAgentTemplates,
   type MissingAgentTemplate,
@@ -165,14 +165,44 @@ export function apply(ctx: Context, config: ConfigType): void {
   })
   // Settings panel: expose the local AGY CLI as the Antigravity CLI provider.
   // The namespace is the plugin name; settingsPath [] means the whole section is the profile.
-  try {
-    ctx.llm.registerConfigurableProviders([{
-      provider: 'agy',
-      displayName: 'Antigravity CLI',
-      settingsNs: 'dsh-agy-provider',
-      settingsPath: [],
-    }])
-  } catch {}
+  //
+  // The outcome is recorded, not discarded: the Models page attaches the AGY
+  // card only to a directory row whose `settingsNs` is exactly this string, and
+  // a refused registration (DUPLICATE_DIRECTORY when this profile mounts the
+  // plugin twice) used to be swallowed — which made "no card on the Models page"
+  // indistinguishable from "card rendered empty". `/plugins/agy-link/diagnose`
+  // now reports both the refusal and the directory it actually has.
+  const registerProviderDirectory = (): boolean => {
+    try {
+      ctx.llm.registerConfigurableProviders([{
+        provider: 'agy',
+        displayName: 'Antigravity CLI',
+        settingsNs: 'dsh-agy-provider',
+        settingsPath: [],
+      }])
+      noteRegistration('configurableProviders', 'ok')
+      return true
+    } catch (error) {
+      noteRegistration('configurableProviders', error instanceof Error ? error.message : String(error))
+      return false
+    }
+  }
+  if (!registerProviderDirectory()) {
+    // Why a retry: a refused registration means another mount of this plugin
+    // already holds the `agy` entry. If that mount is disposed afterwards (the
+    // bundle mount being replaced by the patch override), the directory loses the
+    // entry and the Models page keeps listing the provider with an EMPTY
+    // settingsNs — a row that renders no card. Retrying once after the loader
+    // settles repairs that order dependence without a host restart.
+    ctx.effect(() => {
+      const timers = [3_000, 10_000].map((delay) => {
+        const timer = setTimeout(() => { registerProviderDirectory() }, delay)
+        if (typeof timer.unref === 'function') timer.unref()
+        return timer
+      })
+      return () => { for (const timer of timers) clearTimeout(timer) }
+    })
+  }
   try {
     ctx.llm.registerModelDiscovery('dsh-agy-provider', async (request) => {
       // If editing an existing agy route, prefer our already-known catalog; otherwise discover via AGY CLI.
@@ -188,12 +218,18 @@ export function apply(ctx: Context, config: ConfigType): void {
         ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }),
       }))
     })
-  } catch {}
+    noteRegistration('modelDiscovery', 'ok')
+  } catch (error) {
+    noteRegistration('modelDiscovery', error instanceof Error ? error.message : String(error))
+  }
 
   // Mount web HTTP routes for GUI control panel & status polling (/plugins/agy-link/*)
   try {
     setupWebRoutes(ctx, activeConfig, modelDiscovery)
-  } catch {}
+    noteRegistration('webRoutes', 'ok')
+  } catch (error) {
+    noteRegistration('webRoutes', error instanceof Error ? error.message : String(error))
+  }
 
   // Settings are resolved before the enabled check, so disabled profiles can
   // still be edited from the configuration surface.

@@ -829,11 +829,21 @@ export function apply(ctx: ClientContext): void {
 		useEffect(() => locale.subscribe(() => rerender((revision) => revision + 1)), []);
 		return locale.bind(NS) as (key: AgyLocaleKey, params?: Record<string, unknown>) => string;
 	};
-	const AgySettingsSection = (): unknown => {
+	const AgySettingsSection = (props?: unknown): unknown => {
 		const t = useAgyTranslation();
 		const { status, refresh } = useAgyStatus();
 const [loadingAction, setLoadingAction] = useState<string | null>(null);
 		const [toast, setToast] = useState<ToastNotice | null>(null);
+
+		// One mount report per mount. The host dispatches this entry with owner
+		// props (`provider`, `configured`, `keyConfigured`), so an empty report
+		// list on the server proves the host never dispatched the entry at all —
+		// the slot registry can be healthy while the directory row that would
+		// dispatch it is missing. See `/plugins/agy-link/diagnose`.
+		useEffect(() => {
+			const names = props !== null && typeof props === 'object' ? Object.keys(props as Record<string, unknown>) : [];
+			void postJson('/plugins/agy-link/card-ping', { props: names });
+		}, []);
 
 		// Cooldown expiry and quota countdowns are Date.now()-derived while the
 		// payload itself does NOT change when they lapse — without a wall-clock
