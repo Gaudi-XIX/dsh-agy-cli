@@ -3,14 +3,13 @@ export const NS = 'agy-link'
 
 /** Simplified Chinese is preserved as the original UI language and key source. */
 export const zh = {
-  'section.label': 'Antigravity',
   'code.title': '代码', 'code.inspect': '检查',
   'tv.command': '命令', 'tv.write': '写入', 'tv.edit': '编辑', 'tv.read': '读取', 'tv.search': '搜索', 'tv.webSearch': '网页搜索', 'tv.list': '列表', 'tv.delete': '删除', 'tv.tool': '工具',
   'tv.noOutput': '(无输出)', 'tv.noMatches': '(无匹配)', 'tv.noChanges': '(无文本变更)', 'tv.emptyDir': '(空目录)', 'tv.noDetail': '(无详情)',
   'tv.hint.expandInspect': '点击展开 · 右键检查', 'tv.hint.collapseInspect': '点击收起 · 右键检查', 'tv.hint.expand': '点击展开', 'tv.hint.collapse': '点击收起',
   'tv.diffMore': '… 其余 {count} 行未渲染',
   'code.copy': '复制', 'code.copied': '已复制',
-  'console.title': 'Antigravity 管理控制台',
+  'auth.tokenLeft': '凭据 {minutes} 分钟后过期', 'auth.tokenRenewing': '凭据已过期，正在自动续期', 'auth.tokenExpired': '凭据已过期', 'auth.tokenRenewFailed': '凭据已过期，自动续期失败', 'auth.tokenHint': 'Keyring 里 gemini:antigravity 的 access_token 有效期；到期前一刻插件会自动启动 agy 续期，消耗零 token',
   'status.ready': '就绪', 'status.needsAuth': '待认证', 'status.loading': '正在加载 Antigravity 状态...',
   'status.authRequired': '需重新登录', 'status.primary': '主用', 'status.proxy': '代理', 'status.inUse': '当前使用',
   'account.add': '添加 Google 账号', 'account.aliasDefault': '备用 Google 账号 {number}', 'account.defaultAlias': '主账号（系统登录）',
@@ -23,7 +22,6 @@ export const zh = {
   'quota.fiveHour': '5 小时额度', 'quota.weekly': '周额度', 'quota.refreshed': '额度已刷新',
   'quota.expiredHint': '登录凭据已过期，额度暂无法读取。发一条 AGY 消息（或运行一次 agy）即可自动刷新。',
   'quota.accountUnknown': '本机账号',
-  'header.badgeTitleSingle': 'Antigravity 已就绪 · 点击打开控制台',
   'proxy.button': '代理', 'proxy.placeholder': '专属代理 URL（如：http://127.0.0.1:7890；留空则使用全局）',
   'proxy.save': '保存', 'proxy.saved': '代理已保存', 'cancel': '取消',
   'auth.openBrowser': '打开浏览器登录', 'auth.openingBrowser': '正在打开浏览器...',
@@ -49,20 +47,19 @@ export const zh = {
   'models.label': '模型显示：', 'models.empty': '模型目录还没有可用模型，发一次对话或点“刷新额度”后再来管理',
   'models.hint': '点击切换显示/隐藏；关闭的模型不在模型选择器中列出，进行中的会话不受影响。',
   'header.refreshQuota': '刷新额度', 'header.refreshing': '刷新中',
-  'console.close': '关闭（Esc）', 'header.badgeTitle': 'Antigravity：{count} 个账号已就绪 · 点击打开控制台',
 } as const
 
 export type AgyLocaleKey = keyof typeof zh
 export type AgyDictionary = Record<AgyLocaleKey, string>
 
 export const en: AgyDictionary = {
-  'section.label': 'Antigravity', 'console.title': 'Antigravity Management Console',
   'code.title': 'Code', 'code.inspect': 'Inspect',
   'tv.command': 'Command', 'tv.write': 'Write', 'tv.edit': 'Edit', 'tv.read': 'Read', 'tv.search': 'Search', 'tv.webSearch': 'Web Search', 'tv.list': 'List', 'tv.delete': 'Delete', 'tv.tool': 'Tool',
   'tv.noOutput': '(no output)', 'tv.noMatches': '(no matches)', 'tv.noChanges': '(no textual changes)', 'tv.emptyDir': '(empty directory)', 'tv.noDetail': '(no detail)',
   'tv.hint.expandInspect': 'Click to expand · right-click to inspect', 'tv.hint.collapseInspect': 'Click to collapse · right-click to inspect', 'tv.hint.expand': 'Click to expand', 'tv.hint.collapse': 'Click to collapse',
   'tv.diffMore': '… {count} more lines not rendered',
   'code.copy': 'Copy', 'code.copied': 'Copied',
+  'auth.tokenLeft': 'Credentials expire in {minutes} min', 'auth.tokenRenewing': 'Credentials expired — renewing automatically', 'auth.tokenExpired': 'Credentials expired', 'auth.tokenRenewFailed': 'Credentials expired — automatic renewal failed', 'auth.tokenHint': 'Lifetime of the gemini:antigravity access_token in the Windows keyring. The plugin starts agy just before it lapses to renew it, at zero token cost',
   'status.ready': 'Ready', 'status.needsAuth': 'Authentication required', 'status.loading': 'Loading Antigravity status...',
   'status.authRequired': 'Sign in again required', 'status.primary': 'Primary', 'status.proxy': 'Proxy', 'status.inUse': 'In use',
   'account.add': 'Add Google account', 'account.aliasDefault': 'Backup Google account {number}', 'account.defaultAlias': 'Primary account (system sign-in)',
@@ -75,7 +72,6 @@ export const en: AgyDictionary = {
   'quota.fiveHour': '5-hour quota', 'quota.weekly': 'Weekly quota', 'quota.refreshed': 'Quota refreshed',
   'quota.expiredHint': 'Sign-in credentials have expired, so the quota cannot be read right now. Send one AGY message (or run agy once) and they refresh automatically.',
   'quota.accountUnknown': 'This machine',
-  'header.badgeTitleSingle': 'Antigravity ready · click to open the console',
   'proxy.button': 'Proxy', 'proxy.placeholder': 'Dedicated proxy URL (for example: http://127.0.0.1:7890; leave blank to use the global proxy)',
   'proxy.save': 'Save', 'proxy.saved': 'Proxy saved', 'cancel': 'Cancel',
   'auth.openBrowser': 'Open browser to sign in', 'auth.openingBrowser': 'Opening browser...',
@@ -101,17 +97,16 @@ export const en: AgyDictionary = {
   'models.label': 'Model visibility:', 'models.empty': 'No models in the catalog yet — send a message or click "Refresh quota", then come back to manage them',
   'models.hint': 'Click to show/hide. Hidden models are not listed in the model picker; ongoing sessions are unaffected.',
   'header.refreshQuota': 'Refresh quota', 'header.refreshing': 'Refreshing...',
-  'console.close': 'Close (Esc)', 'header.badgeTitle': 'Antigravity: {count} accounts ready · click to open the console',
 }
 
 export const ptBR: AgyDictionary = {
-  'section.label': 'Antigravity', 'console.title': 'Console de gerenciamento do Antigravity',
   'code.title': 'Código', 'code.inspect': 'Inspecionar',
   'tv.command': 'Comando', 'tv.write': 'Escrever', 'tv.edit': 'Editar', 'tv.read': 'Ler', 'tv.search': 'Buscar', 'tv.webSearch': 'Busca na web', 'tv.list': 'Listar', 'tv.delete': 'Excluir', 'tv.tool': 'Ferramenta',
   'tv.noOutput': '(sem saída)', 'tv.noMatches': '(nenhuma correspondência)', 'tv.noChanges': '(sem alterações de texto)', 'tv.emptyDir': '(diretório vazio)', 'tv.noDetail': '(sem detalhes)',
   'tv.hint.expandInspect': 'Clique para expandir · clique direito para inspecionar', 'tv.hint.collapseInspect': 'Clique para recolher · clique direito para inspecionar', 'tv.hint.expand': 'Clique para expandir', 'tv.hint.collapse': 'Clique para recolher',
   'tv.diffMore': '… {count} linhas restantes não renderizadas',
   'code.copy': 'Copiar', 'code.copied': 'Copiado',
+  'auth.tokenLeft': 'As credenciais expiram em {minutes} min', 'auth.tokenRenewing': 'Credenciais expiradas — renovando automaticamente', 'auth.tokenExpired': 'Credenciais expiradas', 'auth.tokenRenewFailed': 'Credenciais expiradas — a renovação automática falhou', 'auth.tokenHint': 'Validade do access_token gemini:antigravity no Windows keyring. O plugin inicia o agy pouco antes de expirar para renová-lo, sem custo de tokens',
   'status.ready': 'Pronto', 'status.needsAuth': 'Autenticação necessária', 'status.loading': 'Carregando o status do Antigravity...',
   'status.authRequired': 'É necessário entrar novamente', 'status.primary': 'Principal', 'status.proxy': 'Proxy', 'status.inUse': 'Em uso',
   'account.add': 'Adicionar conta Google', 'account.aliasDefault': 'Conta Google reserva {number}', 'account.defaultAlias': 'Conta principal (login do sistema)',
@@ -124,7 +119,6 @@ export const ptBR: AgyDictionary = {
   'quota.fiveHour': 'Cota de 5 horas', 'quota.weekly': 'Cota semanal', 'quota.refreshed': 'Cota atualizada',
   'quota.expiredHint': 'As credenciais de login expiraram, então a cota não pode ser lida agora. Envie uma mensagem AGY (ou execute o agy uma vez) e elas serão atualizadas automaticamente.',
   'quota.accountUnknown': 'Esta máquina',
-  'header.badgeTitleSingle': 'Antigravity pronto · clique para abrir o console',
   'proxy.button': 'Proxy', 'proxy.placeholder': 'URL do proxy exclusivo (por exemplo: http://127.0.0.1:7890; deixe vazio para usar o proxy global)',
   'proxy.save': 'Salvar', 'proxy.saved': 'Proxy salvo', 'cancel': 'Cancelar',
   'auth.openBrowser': 'Abrir navegador para entrar', 'auth.openingBrowser': 'Abrindo navegador...',
@@ -150,17 +144,16 @@ export const ptBR: AgyDictionary = {
   'models.label': 'Visibilidade dos modelos:', 'models.empty': 'Ainda não há modelos no catálogo — envie uma mensagem ou clique em "Atualizar cota" e volte para gerenciá-los',
   'models.hint': 'Clique para mostrar/ocultar. Modelos ocultos não aparecem no seletor de modelos; as sessões em andamento não são afetadas.',
   'header.refreshQuota': 'Atualizar cota', 'header.refreshing': 'Atualizando...',
-  'console.close': 'Fechar (Esc)', 'header.badgeTitle': 'Antigravity: {count} contas prontas · clique para abrir o console',
 }
 
 export const es: AgyDictionary = {
-  'section.label': 'Antigravity', 'console.title': 'Consola de administración de Antigravity',
   'code.title': 'Código', 'code.inspect': 'Inspeccionar',
   'tv.command': 'Comando', 'tv.write': 'Escribir', 'tv.edit': 'Editar', 'tv.read': 'Leer', 'tv.search': 'Buscar', 'tv.webSearch': 'Búsqueda web', 'tv.list': 'Listar', 'tv.delete': 'Eliminar', 'tv.tool': 'Herramienta',
   'tv.noOutput': '(sin salida)', 'tv.noMatches': '(sin coincidencias)', 'tv.noChanges': '(sin cambios de texto)', 'tv.emptyDir': '(directorio vacío)', 'tv.noDetail': '(sin detalles)',
   'tv.hint.expandInspect': 'Clic para expandir · clic derecho para inspeccionar', 'tv.hint.collapseInspect': 'Clic para contraer · clic derecho para inspeccionar', 'tv.hint.expand': 'Clic para expandir', 'tv.hint.collapse': 'Clic para contraer',
   'tv.diffMore': '… {count} líneas restantes no renderizadas',
   'code.copy': 'Copiar', 'code.copied': 'Copiado',
+  'auth.tokenLeft': 'Las credenciales caducan en {minutes} min', 'auth.tokenRenewing': 'Credenciales caducadas — renovando automáticamente', 'auth.tokenExpired': 'Credenciales caducadas', 'auth.tokenRenewFailed': 'Credenciales caducadas — la renovación automática falló', 'auth.tokenHint': 'Vigencia del access_token gemini:antigravity en el Windows keyring. El plugin inicia agy justo antes de que caduque para renovarlo, sin coste de tokens',
   'status.ready': 'Listo', 'status.needsAuth': 'Se requiere autenticación', 'status.loading': 'Cargando el estado de Antigravity...',
   'status.authRequired': 'Debe iniciar sesión de nuevo', 'status.primary': 'Principal', 'status.proxy': 'Proxy', 'status.inUse': 'En uso',
   'account.add': 'Añadir cuenta de Google', 'account.aliasDefault': 'Cuenta de Google de respaldo {number}', 'account.defaultAlias': 'Cuenta principal (inicio de sesión del sistema)',
@@ -173,7 +166,6 @@ export const es: AgyDictionary = {
   'quota.fiveHour': 'Cuota de 5 horas', 'quota.weekly': 'Cuota semanal', 'quota.refreshed': 'Cuota actualizada',
   'quota.expiredHint': 'Las credenciales de acceso han caducado, por lo que ahora no se puede leer la cuota. Envía un mensaje AGY (o ejecuta agy una vez) y se actualizarán automáticamente.',
   'quota.accountUnknown': 'Esta máquina',
-  'header.badgeTitleSingle': 'Antigravity listo · haga clic para abrir la consola',
   'proxy.button': 'Proxy', 'proxy.placeholder': 'URL de proxy exclusivo (por ejemplo: http://127.0.0.1:7890; déjelo vacío para usar el proxy global)',
   'proxy.save': 'Guardar', 'proxy.saved': 'Proxy guardado', 'cancel': 'Cancelar',
   'auth.openBrowser': 'Abrir navegador para iniciar sesión', 'auth.openingBrowser': 'Abriendo navegador...',
@@ -199,5 +191,4 @@ export const es: AgyDictionary = {
   'models.label': 'Visibilidad de modelos:', 'models.empty': 'Aún no hay modelos en el catálogo: envía un mensaje o haz clic en "Actualizar cuota" y vuelve para gestionarlos',
   'models.hint': 'Haz clic para mostrar/ocultar. Los modelos ocultos no aparecen en el selector de modelos; las sesiones en curso no se ven afectadas.',
   'header.refreshQuota': 'Actualizar cuota', 'header.refreshing': 'Actualizando...',
-  'console.close': 'Cerrar (Esc)', 'header.badgeTitle': 'Antigravity: {count} cuentas listas · haga clic para abrir la consola',
 }

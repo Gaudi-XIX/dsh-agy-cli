@@ -112,6 +112,30 @@ export interface Config {
   persistentReadyTimeoutMs?: number
   /** Fallback policy when persistent cannot start: never or before-accept only. */
   persistentFallback?: PersistentFallbackMode
+  /**
+   * How often the plugin checks AGY's keyring token, in ms; `0` disables the
+   * check. The check is a Credential Manager read, and starting agy.exe only
+   * happens on the tick inside `tokenKeepaliveLeadMs` before the expiry — AGY
+   * ignores a token it still considers valid, so a wide window would just spin
+   * the process for nothing. Keep this well under the lead: 60 s interval with a
+   * 60 s lead gives several chances to fire before the credential dies.
+   */
+  tokenKeepaliveMs?: number
+  /**
+   * The token is renewed once it has less life than this. AGY itself only
+   * rotates an EXPIRED token, so this is really "fire on the last tick before
+   * the moment it lapses" — see `src/agy/keepalive.ts`.
+   */
+  tokenKeepaliveLeadMs?: number
+  /**
+   * Working directory handed to the renewal run. agy itself only reads the
+   * keyring/network during a wake-up turn, so any existing directory works; the
+   * plugin cannot assume the host process has a usable one, and the host's cwd
+   * is not guaranteed to exist (a removed workspace directory makes Node's
+   * spawn fail with a bare ENOENT that reads like a missing executable).
+   * Defaults to the user profile directory.
+   */
+  tokenKeepaliveCwd?: string
   /** AttachmentStore-to-AGY image bridge; omitted/off preserves text-only behavior. */
   imageInput?: 'off' | 'experimental'
   /** Deterministic response used only by the M1 mock route. */
@@ -278,6 +302,12 @@ export function createConfigSchema(defaults: {
       retryableCodes: [...AGY_RETRYABLE_CODES],
     }).hidden(),
     purposeRoutes: PurposeRoutes.description('Purpose-specific overrides').hidden(),
+    // Default lead equals the default interval on purpose: agy only rotates a
+    // token it already considers expired, so there is no benefit to a wide
+    // window — it would just restart agy.exe on every tick without effect.
+    tokenKeepaliveMs: z.number().min(0).max(3_600_000).default(60_000).description('Keyring token keep-alive check interval ms; 0 disables it').hidden(),
+    tokenKeepaliveLeadMs: z.number().min(0).max(3_600_000).default(60_000).description('Renew the keyring token once it has less life than this ms').hidden(),
+    tokenKeepaliveCwd: z.string().description('Working directory for the renewal run; defaults to the user profile directory').hidden(),
     imageInput: z.union(['off', 'experimental'] as const).description('Image input mode'),
     response: z.string().default('AGY mock provider is ready.').description('Mock response').hidden(),
     delayMs: z.number().min(0).max(60_000).default(0).description('Mock delay ms').hidden(),
@@ -327,6 +357,8 @@ export function createConfigSchema(defaults: {
       toolProtocolRepairRetries: { $description: 'DSH 工具协议返回非 JSON 时的修复重试次数' },
       toolProtocolPlainTextFallback: { $description: '修复仍失败时是否将普通文本安全降级为最终消息' },
       purposeRoutes: { $description: '按用途（压缩/标题）的模型覆盖' },
+      tokenKeepaliveMs: { $description: '凭据保活检查间隔（毫秒，默认 60 秒）；0 表示关闭。到期前一个周期内才真正启动 agy 续期' },
+      tokenKeepaliveLeadMs: { $description: '凭据剩余有效期低于该毫秒数时自动续期（默认 60 秒）' },
       imageInput: { $description: '图片输入：off=关闭, experimental=通过最小 view_file Agent 处理附件' },
     },
     en: {
@@ -364,6 +396,8 @@ export function createConfigSchema(defaults: {
       toolProtocolRepairRetries: { $description: 'Repair retries when a DSH tool response is not JSON' },
       toolProtocolPlainTextFallback: { $description: 'Safely treat plain text as a final message after repair' },
       purposeRoutes: { $description: 'Purpose-specific model overrides' },
+      tokenKeepaliveMs: { $description: 'Keyring token keep-alive check interval (ms, default 60 s); 0 disables it. agy is only started on the tick inside the lead' },
+      tokenKeepaliveLeadMs: { $description: 'Renew the keyring token once it has less than this many ms of life left (default 60 s)' },
       imageInput: { $description: 'Image input: off, or experimental through the minimal view_file Agent' },
     },
   })

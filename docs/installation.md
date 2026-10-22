@@ -1,5 +1,27 @@
 # 安装与使用（0.10.0）
 
+## 凭据自动续期（0.10.x 起默认开启）
+
+AGY 的 Google 凭据存放在 Windows 凭据管理器 `gemini:antigravity`（blob 内自带 `expiry` 与 `expires_in`）。凭据过期后额度接口一律返回 401，面板只剩一条过期横幅——账号本身没问题，只是没人触发过 agy。
+
+插件现在自己管这条链路，**不消耗任何模型 token**：
+
+| 环节 | 行为 |
+|---|---|
+| 检查间隔 | `tokenKeepaliveMs`，默认 60000（1 分钟）；`0` 关闭 |
+| 触发窗口 | `tokenKeepaliveLeadMs`，默认 60000：凭据剩余寿命 ≤ 60 秒才会真正启动 agy |
+| 续期动作 | 启动一次 `agy -p "." --effort low --disable-slash-commands`，stdin 立即关闭 |
+
+关键实测（2026-10-22，本机 agy 1.4.2 + gemini-3.8-flash）：
+
+- agy 只在凭据**已经过期**时才轮换（日志 `keyringAuth: loaded ... expired=true` → `browser.go:265 token refreshed`）。带剩余寿命的凭据只被读一遍就退出，所以触发窗口设宽没有意义，只会每次多起一个进程。
+- 关闭 stdin 的那次运行：日志出现 `silent auth` → `Starting conversation update stream` → 立刻 `CLI store manager shutting down`，**`streamGenerateContent` 计数为 0**，即上游生成调用一次都没发生。
+- 续期失败（网络/鉴权墙）不会每分钟重试：同一个 `expiry` 只尝试一次，直到凭据真的变化。
+- **续期命令不能带 `--input-format stream-json`**：agy 会以退出码 2 拒绝，stderr 为 `--input-format stream-json reads prompts from stdin, so a prompt given on the command line would be ignored`。首版正是踩了这个（`-p "."` 与 stream-json 同时给），进程 2.4 秒就退出、凭据一个字节没动，而调用方只看「进程有没有抛错」，于是把失败当成成功。现在 argv 只有 `-p . --model <id> --effort low --disable-slash-commands`，stdin 序列化帧也一并去掉（没有 stream-json 就没有读帧的人）。
+- 失败必须可见：`refreshAgyTokenIfDue` 会检查退出码，把结果分成 `completed` / `not-rotated`（退出 0 但 keyring 没动）/ `rejected`（参数被拒）/ `failed`（起不来），stderr 首行进 `detail`；`GET /plugins/agy-link/status` 的 `auth` 里带 `keepaliveLastReason` 与 `keepaliveLastDetail`，面板过期时若续期是坏的，直接显示「自动续期失败」并把原因放进悬停提示。
+
+面板头部会显示「凭据 N 分钟后过期」，最后 5 分钟转黄、过期转红并提示「正在自动续期」。这是判断续期是否真的在工作的一手读数——如果红线长时间停在那里，先看悬停提示里的失败原因，再手动跑一次 `agy -p .` 对照。
+
 ## 前置条件
 
 - Windows 11（当前实机验证平台，CI 覆盖 Ubuntu/macOS）。
@@ -158,6 +180,7 @@ DSH Web 的设置面板由 `Config` schema 的 `title/description` 与 `ctx.llm.
 - 模型列表为多选勾选框，勾选结果写回 `visibleModels`；未勾选不在选择器出现，但显式请求仍兼容。
 - 推理强度为独立下拉（`reasoningEffort: low/medium/high`），`listModels` 仅返回 base 并带 `reasoning.efforts`。
 - 每个字段通过 `schemastery .i18n({'zh-CN':{},en:{}})` 提供双语，DSH 按当前 locale 自动切换；英文为 fallback。
+- **AGY 管理面板的位置**：插件客户端注册宿主 keyed 槽 `settings.models.provider-card`（`key: 'dsh-agy-provider'`，即 Node 半 `settingsNs` 的同一字符串），额度/思考强度/模型显隐三块渲染在「设置 → 模型」里 Antigravity CLI 那一行的卡片扩展区。它**不在**设置导航里单开分区，**不在**会话页头部挂徽标——这是 2026-10-21 用户裁定的形态，历史形态与被拆控件的恢复步骤见 [archived-panel-ui-20261020.md](archived-panel-ui-20261020.md)。
 
 ## 诊断
 

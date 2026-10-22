@@ -6,7 +6,7 @@ import { BRAND_COLORS, BRAND_PATHS, UI_PATHS } from './brand-icons.ts';
 import { installAgyToolView } from './toolview.ts';
 import { installMermaidRendering } from './mermaid.ts';
 import { en, es, NS, ptBR, zh, type AgyLocaleKey } from './locales.ts';
-import { installAutoExpandReasoning } from './reasoning.ts';
+import { installReasoningFollow } from './reasoning.ts';
 import { installImageEnhancer } from './images.ts';
 import { installDecisionChips } from './decisions.ts';
 
@@ -20,25 +20,12 @@ type ReactApi = {
 const R = require('react') as ReactApi;
 const { createElement: h, useState, useEffect, useRef } = R;
 
-const reactDom = require('react-dom') as {
-	createPortal?: (node: unknown, container: unknown) => unknown;
-};
-
 const win = globalThis as unknown as {
 	location?: { origin?: string };
 	fetch?: (url: string, init?: Record<string, unknown>) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 	open?: (url: string, target?: string) => void;
-	document?: { body?: unknown } | null;
 	addEventListener?: (type: string, listener: (ev: any) => void, useCapture?: boolean) => void;
 	removeEventListener?: (type: string, listener: (ev: any) => void, useCapture?: boolean) => void;
-};
-
-const bodyEl = win.document?.body ?? null;
-const portalToBody = (node: unknown) => {
-	if (bodyEl && reactDom && typeof reactDom.createPortal === 'function') {
-		return reactDom.createPortal(node, bodyEl);
-	}
-	return node;
 };
 
 export const name = 'dsh-agy-provider-client';
@@ -73,6 +60,20 @@ interface StatusPayload {
 		qrDataUrl?: string;
 		startedAt?: number;
 		expiresAt?: number;
+		/**
+		 * Keyring OAuth token lifetime. Not to be confused with `expiresAt`, which
+		 * belongs to a login-flow QR code. These two drive the "凭据 N 分钟后过期"
+		 * line — a renewal that silently fails has to be readable here, otherwise
+		 * the panel looks fine right up until the quota card goes empty.
+		 */
+		tokenExpiresAt?: string | null;
+		tokenExpiresInSeconds?: number | null;
+		/** Whether the host is running the automatic keep-alive. */
+		keepalive?: boolean;
+		/** Outcome of the last renewal attempt: 'completed' | 'not-rotated' | 'rejected' | 'failed'. */
+		keepaliveLastReason?: string | null;
+		/** Why that attempt failed, when it did. */
+		keepaliveLastDetail?: string | null;
 		message?: string;
 	};
 	quotaError?: 'unauthorized' | 'network' | null;
@@ -147,10 +148,10 @@ async function postJson(path: string, body: Record<string, unknown>): Promise<an
 }
 
 // ---- shared status polling ----
-// ONE module-level fetch loop serves every mounted consumer (settings panel,
-// header badge, modal). Per-component 3s loops used to stack (three full
-// payload fetches per interval with the modal open), had no overlap guard,
-// and let a slow stale response overwrite a newer one.
+// ONE module-level fetch loop serves every mounted consumer (the provider card
+// in the host's Models settings page). Per-component 3s loops used to stack
+// (several full payload fetches per interval), had no overlap
+// guard, and let a slow stale response overwrite a newer one.
 const statusListeners = new Set<(s: StatusPayload) => void>();
 let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 let statusFetchSeq = 0;
@@ -204,22 +205,6 @@ function useAgyStatus(): { status: StatusPayload | null; refresh: () => Promise<
 	};
 	return { status, refresh };
 }
-
-/** Global modal state for opening Antigravity console dialog from footer shortcut or header status */
-const agyModalStore = {
-	open: false,
-	listeners: new Set<() => void>(),
-	setOpen(v: boolean) {
-		agyModalStore.open = v;
-		agyModalStore.listeners.forEach((fn) => fn());
-	},
-	subscribe(fn: () => void) {
-		agyModalStore.listeners.add(fn);
-		return () => {
-			agyModalStore.listeners.delete(fn);
-		};
-	},
-};
 
 /**
  * Format reset timestamp into readable date/time + relative countdown.
@@ -362,8 +347,6 @@ const GLOBAL_CSS = `
 	--agy-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05);
 	--agy-shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08);
 	--agy-shadow-card-primary: 0 0 0 1px #3b82f6, 0 4px 14px rgba(37, 99, 235, 0.12);
-	--agy-shadow-modal: 0 20px 50px rgba(0, 0, 0, 0.18);
-	--agy-modal-backdrop: rgba(15, 23, 42, 0.5);
 
 	/* Badges */
 	--agy-badge-primary-bg: #dbeafe;
@@ -432,10 +415,6 @@ const GLOBAL_CSS = `
 	--agy-toast-error-text: #991b1b;
 	--agy-toast-error-border: #fca5a5;
 
-	/* Auth Modal / Box */
-	--agy-auth-box-bg: #f0f7ff;
-	--agy-auth-box-border: #3b82f6;
-
 	/* Segment control */
 	--agy-seg-group-bg: #e2e8f0;
 	--agy-seg-group-border: #cbd5e1;
@@ -483,8 +462,6 @@ body.dark,
 	--agy-shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3);
 	--agy-shadow-card-hover: 0 6px 16px rgba(0, 0, 0, 0.4);
 	--agy-shadow-card-primary: 0 0 16px rgba(59, 130, 246, 0.25);
-	--agy-shadow-modal: 0 25px 60px rgba(0, 0, 0, 0.8);
-	--agy-modal-backdrop: rgba(0, 0, 0, 0.75);
 
 	/* Badges */
 	--agy-badge-primary-bg: #1e3a8a;
@@ -553,10 +530,6 @@ body.dark,
 	--agy-toast-error-text: #fca5a5;
 	--agy-toast-error-border: #dc2626;
 
-	/* Auth Modal / Box */
-	--agy-auth-box-bg: #0f223a;
-	--agy-auth-box-border: #3b82f6;
-
 	/* Segment control */
 	--agy-seg-group-bg: #090d16;
 	--agy-seg-group-border: #334155;
@@ -605,33 +578,6 @@ body.dark,
 }
 .agy-progress-fill {
 	transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.agy-modal-backdrop {
-	position: fixed;
-	inset: 0;
-	z-index: 9999;
-	background: var(--agy-modal-backdrop);
-	backdrop-filter: blur(6px);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 16px;
-	box-sizing: border-box;
-}
-.agy-modal-panel {
-	position: relative;
-	width: 100%;
-	max-width: 640px;
-	max-height: min(820px, calc(100vh - 48px));
-	background: var(--agy-bg-panel);
-	border: 1px solid var(--agy-border-card);
-	border-radius: 14px;
-	box-shadow: var(--agy-shadow-modal);
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-	color: var(--agy-text-primary);
-	font-family: var(--agy-font-family);
 }
 .agy-submodel-row {
 	display: flex;
@@ -863,14 +809,6 @@ const S: Record<string, Record<string, unknown>> = {
 		fontSize: '12.5px',
 		fontWeight: 500,
 	},
-	authModal: {
-		background: 'var(--agy-auth-box-bg)',
-		border: '1.5px solid var(--agy-auth-box-border)',
-		borderRadius: '10px',
-		padding: '14px 16px',
-		marginBottom: '14px',
-		color: 'var(--agy-text-primary)',
-	},
 };
 
 export function apply(ctx: ClientContext): void {
@@ -891,7 +829,7 @@ export function apply(ctx: ClientContext): void {
 		useEffect(() => locale.subscribe(() => rerender((revision) => revision + 1)), []);
 		return locale.bind(NS) as (key: AgyLocaleKey, params?: Record<string, unknown>) => string;
 	};
-	const AgySettingsSection = (props?: any): unknown => {
+	const AgySettingsSection = (): unknown => {
 		const t = useAgyTranslation();
 		const { status, refresh } = useAgyStatus();
 const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -1188,15 +1126,55 @@ const [loadingAction, setLoadingAction] = useState<string | null>(null);
 			);
 		}
 
+		// Credential lifetime, not login-flow state. The keep-alive runs on the
+		// host, so the only way to notice it failing is to show the clock the
+		// user can watch: green while there is time, amber in the last minutes,
+		// red once the credential is gone.
+		const tokenSeconds = typeof status?.auth?.tokenExpiresInSeconds === 'number'
+			? status.auth.tokenExpiresInSeconds
+			: null;
+		const keepaliveOn = status?.auth?.keepalive === true;
+		// The host now reports why the last renewal attempt gave up. Without this
+		// the panel said "renewing…" forever while agy.exe was in fact rejecting
+		// our own argv and exiting before it ever touched the credential.
+		const renewalReason = typeof status?.auth?.keepaliveLastReason === 'string'
+			? status.auth.keepaliveLastReason
+			: null;
+		const renewalDetail = typeof status?.auth?.keepaliveLastDetail === 'string'
+			? status.auth.keepaliveLastDetail
+			: null;
+		const renewalBroken = renewalReason === 'rejected' || renewalReason === 'failed' || renewalReason === 'not-rotated';
+		const tokenLine = (() => {
+			if (tokenSeconds === null) return null;
+			const expired = tokenSeconds <= 0;
+			const warned = !expired && tokenSeconds <= 300;
+			// A broken renewal outranks the clock: it is the thing the user has to fix.
+			const broken = renewalBroken && (expired || warned);
+			const text = expired
+				? (broken
+					? t('auth.tokenRenewFailed')
+					: keepaliveOn ? t('auth.tokenRenewing') : t('auth.tokenExpired'))
+				: t('auth.tokenLeft').replace('{minutes}', String(Math.max(1, Math.round(tokenSeconds / 60))));
+			return h('span', {
+				style: {
+					fontSize: '11.5px',
+					fontWeight: 600,
+					color: expired || broken ? 'var(--agy-warn-text)' : warned ? 'var(--agy-quota-med-text)' : 'var(--agy-text-tertiary)',
+				},
+				title: renewalDetail === null ? t('auth.tokenHint') : `${t('auth.tokenHint')}\n${renewalReason ?? ''}: ${renewalDetail}`,
+			}, `${expired ? '⚠ ' : ''}${text}`);
+		})();
+
 		return h('div', { style: S.container },
 			h('style', null, GLOBAL_CSS),
 			h('div', { style: S.headerCard },
-				// No icon + "Antigravity" here: the host settings nav already
-				// labels this section, and the modal dialog prints its own
-				// console title. Rendering it a third time inside the panel was
-				// the duplicate product name the account card did not need.
+				// No icon + "Antigravity" here: the host Models settings page
+				// already names this provider row ("Antigravity CLI"), so the
+				// panel body repeating the product name was the duplicate the
+				// account card did not need.
 				h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
 					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? t('status.ready') : t('status.needsAuth')),
+					tokenLine,
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
@@ -1268,163 +1246,25 @@ const [loadingAction, setLoadingAction] = useState<string | null>(null);
 		);
 	};
 
-	/** Modal dialog container rendered into document.body */
-	const AgyModalDialog = (): unknown => {
-		const t = useAgyTranslation();
-		const [isOpen, setIsOpen] = useState(agyModalStore.open);
-
-		useEffect(() => {
-			const unsubscribe = agyModalStore.subscribe(() => {
-				setIsOpen(agyModalStore.open);
-			});
-			return unsubscribe;
-		}, []);
-
-		useEffect(() => {
-			if (!isOpen) return;
-			const onKey = (e: any) => {
-				if (e.key === 'Escape') {
-					e.stopPropagation();
-					agyModalStore.setOpen(false);
-				}
-			};
-			win.addEventListener?.('keydown', onKey, true);
-			return () => win.removeEventListener?.('keydown', onKey, true);
-		}, [isOpen]);
-
-		if (!isOpen) return null;
-
-		return h('div', {
-			className: 'agy-modal-backdrop',
-			onClick: (e: { target: unknown; currentTarget: unknown }) => {
-				if (e.target === e.currentTarget) agyModalStore.setOpen(false);
-			},
-		},
-			h('div', { className: 'agy-modal-panel', role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'agy-console-title' },
-				h('div', {
-					style: {
-						display: 'flex',
-						alignItems: 'center',
-						justifyContent: 'space-between',
-						padding: '14px 18px',
-						borderBottom: '1px solid var(--agy-border-card)',
-						background: 'var(--agy-bg-header)',
-						color: 'var(--agy-text-primary)',
-					},
-				},
-					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-						agyIcon(18),
-						h('strong', { id: 'agy-console-title', style: { fontSize: '14.5px', fontWeight: 700, color: 'var(--agy-text-primary)' } }, t('console.title')),
-					),
-					h('button', {
-						type: 'button',
-						title: t('console.close'),
-						'aria-label': t('console.close'),
-						style: {
-							background: 'var(--agy-bg-btn)',
-							border: '1px solid var(--agy-border-btn)',
-							color: 'var(--agy-text-btn)',
-							cursor: 'pointer',
-							padding: '4px 8px',
-							borderRadius: '6px',
-							display: 'inline-flex',
-							alignItems: 'center',
-						},
-						onClick: () => agyModalStore.setOpen(false),
-					}, uiIcon('x', 14, 'var(--agy-text-btn)')),
-				),
-				h('div', { style: { overflowY: 'auto', padding: '18px', flex: '1', background: 'var(--agy-bg-panel)' } },
-					h(AgySettingsSection, { isModal: true, onClose: () => agyModalStore.setOpen(false) }),
-				),
-			),
-		);
-	};
-
-	/** Session Header badge in chat toolbar */
-	const AgySessionStatus = (): unknown => {
-		const t = useAgyTranslation();
-		const { status } = useAgyStatus();
-		// Wall-clock tick: cooldown dots derive from Date.now() and the payload
-		// does not change when a cooldown lapses.
-		const [, setTimeTick] = useState(0);
-		useEffect(() => {
-			const timer = setInterval(() => setTimeTick((n) => n + 1), 30_000);
-			return () => clearInterval(timer);
-		}, []);
-
-		const pool = status?.pool;
-		const accounts = pool?.accounts ?? [];
-		const account = accounts[0];
-		const authPhase = status?.auth?.phase ?? 'unknown';
-		// A keyring entry proves an identity exists, not that its token still
-		// passes Google's auth — the quota RPCs report that as `quotaError`.
-		const isAuthed = authPhase !== 'expired' && (authPhase === 'ok' || accounts.length > 0);
-		const color = status === null ? '#64748b'
-			: status.dormantReason || authPhase === 'expired' ? '#f59e0b'
-			: isAuthed ? '#10b981'
-			: '#f59e0b';
-		// One account, so there is no "which account is serving" question left to
-		// answer: the badge just names the identity. No email suffix — the alias
-		// the server builds already carries it, and repeating it made the address
-		// show twice between this badge and the panel card.
-		const badgeTitle = isAuthed ? t('header.badgeTitleSingle') : t('status.needsAuth');
-		const buttonLabel = account?.alias ? `AGY · ${account.alias}` : 'AGY';
-
-		const badge = h('button',
-			{
-				type: 'button',
-				title: badgeTitle,
-				className: 'agy-btn',
-				onClick: () => agyModalStore.setOpen(true),
-				style: {
-					background: 'var(--agy-bg-header)',
-					border: '1px solid var(--agy-border-card)',
-					borderRadius: '999px',
-					cursor: 'pointer',
-					padding: '3px 10px',
-					fontSize: '11.5px',
-					fontWeight: 600,
-					lineHeight: 1.5,
-					color: 'var(--agy-text-primary)',
-					display: 'inline-flex',
-					alignItems: 'center',
-					gap: '6px',
-					boxShadow: 'var(--agy-shadow-card)',
-				},
-			},
-			h('span', { style: { display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: color } }),
-			buttonLabel,
-		);
-		return h('div', { style: { display: 'inline-block' } },
-			badge,
-			portalToBody(h(AgyModalDialog, null)),
-		);
-	};
-
-	// Register in header session toolbar
-	ctx.slots.inject('conversation.session.header.actions', () => {
+	// Antigravity's management surface lives INSIDE the host's Models settings
+	// page: the provider row this plugin declares (`settingsNs:
+	// 'dsh-agy-provider'` in src/index.ts) is the only entry point. The Models
+	// section dispatches `settings.models.provider-card` on every card that
+	// renders a directory row with `entryKey = row.entry.settingsNs`, and the
+	// slot core renders the entry whose registered `key` equals that entryKey
+	// verbatim — so this one key both selects the saved row and its first-run
+	// setup card.
+	//
+	// NO registration in `conversation.session.header.actions` (a chat toolbar
+	// badge) and NONE in `settings.section` (a nav entry of its own): the user's
+	// directive is that this plugin shows up nowhere except the settings-model
+	// page.
+	ctx.slots.inject('settings.models.provider-card', () => {
 		const dispose = ctx.slots.register(
 			{
-				name: 'conversation.session.header.actions',
-				id: 'agy-link-status',
-				order: 10,
-				label: () => locale.bind(NS)('section.label'),
-				locale: NS,
-			},
-			AgySessionStatus,
-		);
-		return dispose;
-	});
-
-	// Register in settings section (under Gear icon -> Antigravity)
-	ctx.slots.inject('settings.section', () => {
-		const dispose = ctx.slots.register(
-			{
-				name: 'settings.section',
-				id: 'agy-link',
-				order: 20,
-				label: () => locale.bind(NS)('section.label'),
-				locale: NS,
+				name: 'settings.models.provider-card',
+				key: 'dsh-agy-provider',
+				id: 'agy-link-provider-card',
 			},
 			AgySettingsSection,
 		);
@@ -1437,10 +1277,12 @@ const [loadingAction, setLoadingAction] = useState<string | null>(null);
 	// as a terminal / diff / read / search card instead of a generic text row.
 	installAgyToolView(ctx);
 
-	// Auto-expand reasoning blocks containing full model thought prose.
-	// Installed through ctx.effect so a plugin reload DISCONNECTS the old
-	// MutationObserver instead of stacking one observer per reload.
-	ctx.effect(() => installAutoExpandReasoning());
+	// Keep an opened reasoning body pinned to its newest line while the row
+	// runs. The fold itself (one-line "newest step" summary) is the host's,
+	// driven by the provider's one-paragraph-per-step text. Installed through
+	// ctx.effect so a plugin reload DISCONNECTS the old MutationObserver
+	// instead of stacking one observer per reload.
+	ctx.effect(() => installReasoningFollow());
 
 	// Draw ```mermaid fences (DSH's shiki pass has no mermaid grammar and
 	// leaves them as plain code blocks). Same lifecycle contract as above.

@@ -12,6 +12,7 @@ import { configuredModels } from '../provider/config.js'
 import type { AgyModelDiscovery } from '../agy/models.js'
 import type { DshWebServerLike } from '../mcp/endpoint.js'
 import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides, type AgyRuntimeOverrides } from '../agy/overrides.js'
+import { lastKeepaliveOutcome, refreshAgyTokenIfDue } from '../agy/keepalive.js'
 
 interface QuotaModelEntry {
   remainingFraction?: number
@@ -177,6 +178,8 @@ interface KeyringIdentity {
   accessToken: string | null
   email?: string | undefined
   name?: string | undefined
+  /** Epoch ms from `token.expiry`; undefined when the blob has no readable expiry. */
+  expiresAtMs?: number | undefined
 }
 
 function readIdentityFromKeyring(): KeyringIdentity {
@@ -191,6 +194,12 @@ function readIdentityFromKeyring(): KeyringIdentity {
     const jsonStr = Buffer.from(b64, 'base64').toString('utf8')
     const parsed = JSON.parse(jsonStr)
     const accessToken = parsed?.token?.access_token ?? null
+    // `expiry` is the field agy.exe itself compares against before rotating the
+    // token, so it is the one reading the panel should trust: no id_token
+    // decoding, no guess from `expires_in`.
+    const rawExpiry = parsed?.token?.expiry
+    const parsedExpiry = typeof rawExpiry === 'string' ? Date.parse(rawExpiry) : Number.NaN
+    const expiresAtMs = Number.isFinite(parsedExpiry) ? parsedExpiry : undefined
 
     let email: string | undefined
     let name: string | undefined
@@ -207,7 +216,7 @@ function readIdentityFromKeyring(): KeyringIdentity {
       } catch {}
     }
 
-    return { accessToken, email, name }
+    return { accessToken, email, name, expiresAtMs }
   } catch {
     return { accessToken: null }
   }
@@ -299,32 +308,65 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
 
 let cachedQuotas: Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>> = {}
 let lastQuotaFetchTime = 0
+// The access token the cached snapshot was measured with. Comparing it against
+// the live keyring is how a renewed credential invalidates the 30 s cache.
+let lastQuotaToken: string | undefined
 // Why this exists: the panel needs to tell "credentials expired" apart from
 // "no quota data yet". Google answers 401 UNAUTHENTICATED when the OAuth token
 // in the Windows keyring has lapsed (agy.exe refreshes it on its next run).
 // A silent catch used to turn that into an empty quota card with no hint.
 let lastQuotaError: 'unauthorized' | 'network' | null = null
 
+// `refreshQuotas` sits outside `setupWebRoutes` (it is module-level state), but
+// renewal needs the live config. setupWebRoutes installs the current one here
+// on every call; an unset value simply skips renewal instead of guessing.
+let quotaConfig: ConfigType | undefined
+
 async function refreshQuotas(force = false): Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> {
   const now = Date.now()
-  if (!force && now - lastQuotaFetchTime < 30_000 && Object.keys(cachedQuotas).length > 0) {
-    return cachedQuotas
-  }
-
-  const token = readAccessTokenFromKeyring()
-  if (!token) {
-    lastQuotaError = 'unauthorized'
-    return cachedQuotas
+  const cacheFresh = !force && now - lastQuotaFetchTime < 30_000 && Object.keys(cachedQuotas).length > 0
+  if (cacheFresh) {
+    // A cached snapshot is only valid while the credential it describes is
+    // still in the keyring unchanged. That is how a renewal done by anything
+    // else (the timer, or this plugin's own keep-alive) shows up on the panel
+    // without waiting out the 30 s window.
+    if (readAccessTokenFromKeyring() === lastQuotaToken) return cachedQuotas
+    lastQuotaFetchTime = 0
   }
 
   try {
+    // Renewal is decided before the fetch, because the token we are about to
+    // send may already be past the lead window. `refreshAgyTokenIfDue` is cheap
+    // when nothing is due and refuses to loop on a failing keyring, so it can
+    // sit on every refresh path (status poll, timer, manual refresh). A lead of
+    // 0 means the operator disabled renewal in one place instead of two.
+    if (quotaConfig !== undefined) {
+      const keepaliveCwd = quotaConfig.tokenKeepaliveCwd?.trim()
+        || process.env.USERPROFILE?.trim()
+        || process.env.HOME?.trim()
+      await refreshAgyTokenIfDue({
+        executable: quotaConfig.agyPath?.trim() || undefined,
+        model: quotaConfig.model,
+        leadMs: quotaConfig.tokenKeepaliveLeadMs ?? 0,
+        ...(keepaliveCwd === undefined || keepaliveCwd.length === 0 ? {} : { cwd: keepaliveCwd }),
+      })
+    }
+    // Read after the renewal attempt, never before: sending a token that was
+    // just replaced would guarantee a 401 for this very fetch.
+    const liveToken = readAccessTokenFromKeyring()
+    if (!liveToken) {
+      lastQuotaError = 'unauthorized'
+      return cachedQuotas
+    }
+    lastQuotaToken = liveToken
+
     // Read the host that actually serves our generation traffic. prod is only a
     // catalog fallback: its quota numbers are an empty ledger (see the comment
     // on QUOTA_ENDPOINT_DAILY), so falling back to it would reintroduce the
     // fake-100% panel.
     const [summaryRaw, modelsRaw] = await Promise.all([
-      fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:retrieveUserQuotaSummary`, token).catch(() => null) as Promise<QuotaSummaryResponse | null>,
-      fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:fetchAvailableModels`, token).catch(() => null) as Promise<{ models?: Record<string, { displayName?: string; quotaInfo?: QuotaModelEntry }> } | null>,
+      fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:retrieveUserQuotaSummary`, liveToken).catch(() => null) as Promise<QuotaSummaryResponse | null>,
+      fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:fetchAvailableModels`, liveToken).catch(() => null) as Promise<{ models?: Record<string, { displayName?: string; quotaInfo?: QuotaModelEntry }> } | null>,
     ])
 
     // "Unauthenticated" is the only failure worth surfacing in the UI: it means
@@ -482,6 +524,10 @@ const DISPLAY_FAMILIES = ['google'] as const
 
 export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDiscovery?: AgyModelDiscovery): () => void {
   const disposers: Array<() => void> = []
+  quotaConfig = activeConfig
+  disposers.push(() => {
+    if (quotaConfig === activeConfig) quotaConfig = undefined
+  })
 
   ctx.inject(['webServer'], (innerCtx) => {
     const webServer = (innerCtx as unknown as { webServer: DshWebServerLike }).webServer
@@ -510,6 +556,28 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     const reg = (path: string, handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>) => {
       const d = webServer.register({ kind: 'exact', path, handler })
       if (typeof d === 'function') disposers.push(d)
+    }
+
+    // Automatic renewal. The actual decision lives in `refreshQuotas` (it runs
+    // right before the quota fetch, which is the only moment a lapsed token
+    // actually costs something). This timer only exists so renewal also happens
+    // while nobody is looking at the panel — a status poll alone is not a
+    // dependable clock. See `src/agy/keepalive.ts`.
+    const keepaliveMs = activeConfig.tokenKeepaliveMs ?? 0
+    if (keepaliveMs > 0) {
+      let stopped = false
+      const keepaliveTimer = setInterval(() => {
+        if (stopped) return
+        // force=false: refreshQuotas still renews when due; it just will not
+        // refetch quota numbers that are younger than the 30 s cache.
+        void refreshQuotas(false).catch(() => {})
+      }, keepaliveMs)
+      // The host must be able to exit without waiting for this timer.
+      if (typeof keepaliveTimer.unref === 'function') keepaliveTimer.unref()
+      disposers.push(() => {
+        stopped = true
+        clearInterval(keepaliveTimer)
+      })
     }
 
     // 1. GET /plugins/agy-link/status
@@ -557,6 +625,18 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         defaultEffort,
         auth: {
           phase: lastQuotaError === 'unauthorized' ? 'expired' : 'signed_in',
+          // The panel needs the real expiry, not just a boolean: with automatic
+          // renewal in place the useful question became "how long is left", and
+          // a refresh that silently fails must still be visible.
+          tokenExpiresAt: identity.expiresAtMs === undefined ? null : new Date(identity.expiresAtMs).toISOString(),
+          tokenExpiresInSeconds: identity.expiresAtMs === undefined
+            ? null
+            : Math.round((identity.expiresAtMs - Date.now()) / 1000),
+          keepalive: keepaliveMs > 0,
+          // Report the last renewal verdict so a failed renew is visible in the
+          // panel instead of masquerading as "still renewing".
+          keepaliveLastReason: lastKeepaliveOutcome()?.reason ?? null,
+          keepaliveLastDetail: lastKeepaliveOutcome()?.detail ?? null,
           message: lastQuotaError === 'unauthorized'
             ? '登录已过期：发一条 AGY 消息即可自动刷新凭据'
             : 'Windows Credential Manager (gemini:antigravity) 就绪',

@@ -207,6 +207,11 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
       retryableCodes: [...AGY_RETRYABLE_CODES],
     },
     purposeRoutes: { compaction: {}, sessionTitle: {} },
+    // Keyring token keep-alive: a Credential Manager read every minute, and agy
+    // is only started on the tick inside the 60 s lead before the expiry (AGY
+    // ignores a token that is merely close to expiring). 0 disables it.
+    tokenKeepaliveMs: 60_000,
+    tokenKeepaliveLeadMs: 60_000,
     response: 'AGY mock provider is ready.',
     delayMs: 0,
   })

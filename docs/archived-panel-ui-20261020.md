@@ -4,6 +4,16 @@
 > 单账号额度卡 + 思考强度 + 模型显示三块。本文件记录被拆掉的 UI 形状、拆分依据、以及
 > **将来要恢复时该接哪些线**。代码本体不删——git 历史里在 `HEAD~` 的 `client/index.ts`，
 > 恢复第一步就是 `git show` 取回。
+>
+> **挂载点（2026-10-21 用户裁定后变更）**：面板不再注册 `settings.section`（设置导航独立分区）
+> 与 `conversation.session.header.actions`（会话页头部徽标），改为注册宿主 keyed 槽
+> `settings.models.provider-card`（`key: 'dsh-agy-provider'`，与 `src/index.ts:169-174`
+> `registerConfigurableProviders` 的 `settingsNs` 逐字相同），渲染在宿主「设置-模型」页
+> Antigravity CLI 那一行的卡片扩展区。模态（`AgyModalDialog`/`agyModalStore`）、徽标
+> （`AgySessionStatus`）与 `portalToBody` 随之删除，相关 locale 键
+> （`section.label`/`console.title`/`console.close`/`header.badgeTitle*`）与 modal CSS
+> 同步移除；第 5 条「重复的产品名」中的「会话头徽章」一项已不存在。
+> 恢复旧形态时，两处注册的写法见本文件 git 历史（`HEAD~1` 之前的 `client/index.ts`）。
 
 ## 一、为什么拆
 
@@ -66,10 +76,12 @@
 即「接上消费者」这条路被产品契约堵死，只剩拆。
 
 ### 5. 重复的产品名
-`Antigravity` 在四处出现：宿主设置导航的 `section.label`、模态标题 `console.title`、
+`Antigravity` 原在四处出现：宿主设置导航的 `section.label`、模态标题 `console.title`、
 面板 header 的图标+字面量、会话头徽章。宿主导航与模态标题由宿主/对话框各自负责，面板 header
 再打一次是第三次。账号别名 `name (email)` 由服务端拼好，徽章再拼 `(email)` 就是地址显示两遍。
-现：面板 header 无图标无产品名；徽章 `AGY · <alias>`，不带 email。
+2026-10-21 起：宿主设置导航项、模态、会话头徽章三项已整体移除（面板改挂
+`settings.models.provider-card`，产品名由宿主的 Models 行标题 `Antigravity CLI` 承担）；
+面板 header 依旧无图标无产品名。本条目连同被拆控件一并归档，恢复多账号时不必重建它们。
 
 ## 三、恢复步骤（若日后要做多账号轮转）
 
