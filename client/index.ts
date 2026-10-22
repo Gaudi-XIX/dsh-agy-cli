@@ -147,6 +147,24 @@ async function postJson(path: string, body: Record<string, unknown>): Promise<an
 	}
 }
 
+// ---- dispatch reporting (Models page card) ----
+// The host renders `settings.models.provider-card` only for the directory row
+// whose `settingsNs` equals the key registered here, and it wraps every entry in
+// an error boundary that renders an EMPTY element when the card throws. So "the
+// host never dispatched this card" and "the card crashed on first render" are
+// the same pixels, from both sides. Reporting the dispatch itself — from inside
+// the render body, see the call site — is what tells them apart at
+// `/plugins/agy-link/diagnose`. Throttled so re-renders (and StrictMode's double
+// render) cannot flood the endpoint.
+let lastDispatchReport = 0;
+function reportCardDispatch(props?: unknown): void {
+	const now = Date.now();
+	if (now - lastDispatchReport < 5_000) return;
+	lastDispatchReport = now;
+	const names = props !== null && typeof props === 'object' ? Object.keys(props as Record<string, unknown>) : [];
+	void postJson('/plugins/agy-link/card-ping', { props: names });
+}
+
 // ---- shared status polling ----
 // ONE module-level fetch loop serves every mounted consumer (the provider card
 // in the host's Models settings page). Per-component 3s loops used to stack
@@ -830,20 +848,19 @@ export function apply(ctx: ClientContext): void {
 		return locale.bind(NS) as (key: AgyLocaleKey, params?: Record<string, unknown>) => string;
 	};
 	const AgySettingsSection = (props?: unknown): unknown => {
+		// Reported during render, not from an effect, and deliberately so: the
+		// host wraps every slot entry in an error boundary that renders an EMPTY
+		// element on a throw (`SlotErrorBoundary` → a bare anchor div). A card
+		// that crashes on its first render therefore looks exactly like a card
+		// the host never dispatched — an effect would never run in the crashing
+		// case, which is the case worth distinguishing. Reporting at the top of
+		// the body survives both; `reportCardDispatch` de-duplicates re-renders
+		// and StrictMode's double render. See `/plugins/agy-link/diagnose`.
+		reportCardDispatch(props);
 		const t = useAgyTranslation();
 		const { status, refresh } = useAgyStatus();
 const [loadingAction, setLoadingAction] = useState<string | null>(null);
 		const [toast, setToast] = useState<ToastNotice | null>(null);
-
-		// One mount report per mount. The host dispatches this entry with owner
-		// props (`provider`, `configured`, `keyConfigured`), so an empty report
-		// list on the server proves the host never dispatched the entry at all —
-		// the slot registry can be healthy while the directory row that would
-		// dispatch it is missing. See `/plugins/agy-link/diagnose`.
-		useEffect(() => {
-			const names = props !== null && typeof props === 'object' ? Object.keys(props as Record<string, unknown>) : [];
-			void postJson('/plugins/agy-link/card-ping', { props: names });
-		}, []);
 
 		// Cooldown expiry and quota countdowns are Date.now()-derived while the
 		// payload itself does NOT change when they lapse — without a wall-clock
