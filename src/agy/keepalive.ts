@@ -302,7 +302,7 @@ export interface KeepaliveOptions {
   /** Injected for tests; defaults to `runProcess`. */
   run?: ((request: Parameters<typeof runProcess>[0]) => Promise<ProcessResult>) | undefined
   /** Injected for tests; defaults to `readKeyringTokenState`. */
-  readState?: (() => KeyringTokenState | Promise<KeyringTokenState>) | undefined
+  readState?: ((options?: { force?: boolean | undefined }) => KeyringTokenState | Promise<KeyringTokenState>) | undefined
 }
 
 export type KeepaliveReason = 'not-due' | 'no-expiry' | 'no-executable' | 'completed' | 'failed' | 'rejected' | 'not-rotated'
@@ -405,7 +405,11 @@ export async function refreshAgyTokenIfDue(options: KeepaliveOptions = {}): Prom
     }
   }
 
-  const after = await readState()
+  // Forced: `before` (and any earlier caller) just populated the 30 s freshness
+  // window, so a plain read would hand back the very expiry we are trying to
+  // compare against. A renewal is only ever judged on what the keyring says
+  // now, never on a snapshot taken before agy.exe ran.
+  const after = await readState({ force: true })
   const expiresAtMs = after.expiresAtMs ?? before.expiresAtMs
   // A run that left the expiry untouched is a failure for our purposes even
   // though the process exited 0 — agy saw a token it considered valid, or the

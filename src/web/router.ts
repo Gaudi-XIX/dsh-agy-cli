@@ -150,8 +150,8 @@ interface KeyringIdentity {
 // panel open.
 
 /** Identity of the signed-in account, from the shared async keyring read. */
-async function readIdentityFromKeyring(): Promise<KeyringIdentity> {
-  const blob = await readKeyringBlob()
+async function readIdentityFromKeyring(options: { force?: boolean | undefined } = {}): Promise<KeyringIdentity> {
+  const blob = await readKeyringBlob(options)
   return {
     accessToken: blob.accessToken,
     email: blob.email,
@@ -160,15 +160,8 @@ async function readIdentityFromKeyring(): Promise<KeyringIdentity> {
   }
 }
 
-/** Force a fresh keyring read after the credential may have been rotated. */
-function invalidateKeyringCache(): void {
-  // The keep-alive rewrites the credential itself; `refreshAgyTokenIfDue`
-  // re-reads with `force`, so nothing else has to be dropped here. Kept as a
-  // name so call sites read as intent rather than as a cache implementation.
-}
-
-async function readAccessTokenFromKeyring(): Promise<string | null> {
-  return (await readIdentityFromKeyring()).accessToken
+async function readAccessTokenFromKeyring(options: { force?: boolean | undefined } = {}): Promise<string | null> {
+  return (await readIdentityFromKeyring(options)).accessToken
 }
 
 function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, proxyUrl = 'http://127.0.0.1:12450'): Promise<any> {
@@ -342,22 +335,27 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
     // when nothing is due and refuses to loop on a failing keyring, so it can
     // sit on every refresh path (status poll, timer, manual refresh). A lead of
     // 0 means the operator disabled renewal in one place instead of two.
+    let renewalRan = false
     if (quotaConfig !== undefined) {
       const keepaliveCwd = quotaConfig.tokenKeepaliveCwd?.trim()
         || process.env.USERPROFILE?.trim()
         || process.env.HOME?.trim()
-      await refreshAgyTokenIfDue({
+      const renewal = await refreshAgyTokenIfDue({
         executable: quotaConfig.agyPath?.trim() || undefined,
         model: quotaConfig.model,
         leadMs: quotaConfig.tokenKeepaliveLeadMs ?? 0,
         ...(keepaliveCwd === undefined || keepaliveCwd.length === 0 ? {} : { cwd: keepaliveCwd }),
       })
+      // Only a run that actually happened can have replaced the credential. When
+      // nothing was due, the cached token is by definition still valid, and
+      // paying another ~1.2 s keyring spawn here would undo the whole point of
+      // the freshness window.
+      renewalRan = renewal.refreshed === true
     }
     // Read after the renewal attempt, never before: sending a token that was
     // just replaced would guarantee a 401 for this very fetch. Forced fresh —
     // a cached token from before the renewal would be exactly the stale one.
-    invalidateKeyringCache()
-    const liveToken = await readAccessTokenFromKeyring()
+    const liveToken = await readAccessTokenFromKeyring({ force: renewalRan })
     if (!liveToken) {
       lastQuotaError = 'unauthorized'
       return cachedQuotas
@@ -368,10 +366,24 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
     // catalog fallback: its quota numbers are an empty ledger (see the comment
     // on QUOTA_ENDPOINT_DAILY), so falling back to it would reintroduce the
     // fake-100% panel.
-    const [summaryRaw, modelsRaw] = await Promise.all([
-      fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:retrieveUserQuotaSummary`, liveToken).catch(() => null) as Promise<QuotaSummaryResponse | null>,
-      fetchHttpsThroughHttpProxy(`${QUOTA_ENDPOINT_DAILY}/v1internal:fetchAvailableModels`, liveToken).catch(() => null) as Promise<{ models?: Record<string, { displayName?: string; quotaInfo?: QuotaModelEntry }> } | null>,
-    ])
+    // Two endpoints, but the second one is only a fallback. The model catalog is
+    // 132,811 B and ~2.1 s against the summary's 2,388 B / ~1.8 s (measured
+    // 2026-10-23), and it carries no data the panel renders while the summary
+    // reports buckets: the fallback below is the only consumer that turns it
+    // into family totals. Fetching it up front charged every cold panel open a
+    // round trip whose answer had already arrived, so ask for it only when the
+    // summary came back without groups.
+    const summaryRaw = await fetchHttpsThroughHttpProxy(
+      `${QUOTA_ENDPOINT_DAILY}/v1internal:retrieveUserQuotaSummary`,
+      liveToken,
+    ).catch(() => null) as QuotaSummaryResponse | null
+
+    const modelsRaw = Array.isArray(summaryRaw?.groups)
+      ? null
+      : await fetchHttpsThroughHttpProxy(
+        `${QUOTA_ENDPOINT_DAILY}/v1internal:fetchAvailableModels`,
+        liveToken,
+      ).catch(() => null) as { models?: Record<string, { displayName?: string; quotaInfo?: QuotaModelEntry }> } | null
 
     // "Unauthenticated" is the only failure worth surfacing in the UI: it means
     // the OAuth token in the keyring lapsed and a fresh agy.exe run (or a

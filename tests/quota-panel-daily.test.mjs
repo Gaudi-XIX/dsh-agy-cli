@@ -19,6 +19,10 @@ import tls from 'node:tls'
 import { setupWebRoutes } from '../lib/web/router.js'
 
 const seenRequests = []
+// The summary normally carries `groups`, which is the path live traffic takes.
+// Flipping this makes the fixture answer without them so the catalog fallback
+// (the only remaining consumer of the 133 KB model list) can be exercised.
+let summaryWithoutGroups = false
 
 function interceptHttps() {
   const originalRequest = https.request
@@ -59,6 +63,7 @@ function payloadFor(options) {
     apiClient: options.headers?.['X-Goog-Api-Client'],
   })
   if (options.path.includes('retrieveUserQuotaSummary')) {
+    if (summaryWithoutGroups) return {}
     return {
       groups: [
         {
@@ -224,6 +229,10 @@ test('a disabled 5-hour bucket does not masquerade as a full 5-hour bucket', asy
 
 test('a model with no reported fraction is unknown, not full', async () => {
   seenRequests.length = 0
+  // The catalog fallback is the only consumer of the model list: with a summary
+  // that reports groups, the list is not fetched at all and per-model rows are
+  // absent by design. This test covers the case that does fetch it.
+  summaryWithoutGroups = true
   const restore = interceptHttps()
   try {
     const ws = fakeWebServer()
@@ -254,6 +263,52 @@ test('a model with no reported fraction is unknown, not full', async () => {
     // instead of being shipped to the client on every status poll.
     const ids = resp.json.pool.accounts[0].quotas.anthropic.models.map((m) => m.modelId)
     assert.deepEqual(ids, [])
+
+    dispose()
+  } finally {
+    summaryWithoutGroups = false
+    restore()
+  }
+})
+
+// Regression guard for the cold-open cost: the catalog call is 132,811 B and
+// ~2.1 s (measured 2026-10-23) and, while the summary reports groups, nothing
+// on the panel reads its result — it was pure latency on every cold open.
+test('a summary that reports groups is answered without fetching the model catalog', async () => {
+  seenRequests.length = 0
+  const restore = interceptHttps()
+  try {
+    const ws = fakeWebServer()
+    const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' })
+
+    const refresh = ws.routes.get('/plugins/agy-link/pool/refresh-quota')
+    await new Promise((resolve) => {
+      const resp = fakeResponse()
+      resp.res.on('finish', resolve)
+      refresh.handler(fakeRequest('POST', '/plugins/agy-link/pool/refresh-quota'), resp.res)
+    })
+
+    const status = ws.routes.get('/plugins/agy-link/status')
+    const resp = fakeResponse()
+    await new Promise((resolve) => {
+      resp.res.on('finish', resolve)
+      status.handler(fakeRequest('GET', '/plugins/agy-link/status'), resp.res)
+    })
+
+    const paths = seenRequests.map((r) => r.path)
+    assert.ok(
+      paths.some((p) => p.includes('retrieveUserQuotaSummary')),
+      'the summary must still be fetched',
+    )
+    assert.ok(
+      !paths.some((p) => p.includes('fetchAvailableModels')),
+      `the 133 KB catalog must not be fetched when the summary answers: ${paths.join(', ')}`,
+    )
+
+    // Family totals still come from the summary's buckets.
+    const quotas = resp.json.pool.accounts[0].quotas
+    assert.equal(quotas.google.weeklyFraction, 0.008289657533168793)
+    assert.equal(quotas.google.remainingFraction, 0.9950103163719177)
 
     dispose()
   } finally {
