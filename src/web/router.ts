@@ -193,6 +193,11 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
           {
             socket,
             servername: targetUrl.hostname,
+            // A CONNECT that succeeds says nothing about the tunnel: the TLS
+            // handshake beyond it can stall forever, and this promise used to
+            // have no bound for that stage at all. `timeout` here is what keeps
+            // a half-open proxy tunnel from hanging the whole quota chain.
+            timeout: 10000,
           },
           () => {
             const body = JSON.stringify({})
@@ -234,6 +239,9 @@ function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, p
         )
 
         tlsSocket.on('error', (err) => reject(err))
+        tlsSocket.on('timeout', () => {
+          tlsSocket.destroy(new Error('TLS handshake with the quota host timed out after 10000ms'))
+        })
       })
 
       connectReq.on('error', (err) => reject(err))
@@ -253,7 +261,47 @@ let lastQuotaToken: string | undefined
 // "no quota data yet". Google answers 401 UNAUTHENTICATED when the OAuth token
 // in the Windows keyring has lapsed (agy.exe refreshes it on its next run).
 // A silent catch used to turn that into an empty quota card with no hint.
-let lastQuotaError: 'unauthorized' | 'network' | null = null
+let lastQuotaError: 'unauthorized' | 'network' | 'timeout' | null = null
+
+// Serving deadline for the quota paths.
+//
+// Every stage inside `fetchQuotas` has its own timeout, yet the endpoint still
+// managed to hang for minutes: the single-flight promise below is module state,
+// so one run that never settled was handed to every later `/status` and
+// `/refresh-quota` request. The panel then waits forever and only a host restart
+// clears it. A deadline turns that class of failure into "this answer is stale"
+// instead of "this endpoint is dead": the caller always gets an answer, and a
+// run that outlives the deadline stops being the shared one.
+const QUOTA_SERVE_DEADLINE_MS = 12_000
+// A renewal spawn is allowed to hold the fetch only this long. The spawn has its
+// own 45 s budget and keeps running in the background, but the panel must not
+// pay for it: the token is still valid inside the keep-alive lead window, so
+// answering with it is correct, and the next open sees the rotated one.
+const RENEWAL_AWAIT_MS = 8_000
+// Model discovery is a sidebar concern, not a quota one. It gets a short leash
+// and falls back to the built-in catalog.
+const DISCOVERY_AWAIT_MS = 4_000
+
+/**
+ * Resolve with `work`'s value, or with `undefined` if it has not settled within
+ * `ms`. Used only on serving paths, where "no answer" must never mean "no
+ * response": callers fall back to the last good snapshot.
+ */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      work,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), ms)
+      }),
+    ])
+  } catch {
+    return undefined
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 // `refreshQuotas` sits outside `setupWebRoutes` (it is module-level state), but
 // renewal needs the live config. setupWebRoutes installs the current one here
@@ -300,19 +348,31 @@ export function getAttachDiagnostics(): { notes: Record<string, string>; cardPin
 // refresh button) is never handed a snapshot that started before it was
 // pressed — it queues behind the current run, then starts its own.
 let quotaInFlight: Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> | undefined
+let quotaInFlightStartedAt = 0
 
 async function refreshQuotas(force = false): Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> {
   if (quotaInFlight !== undefined) {
-    const shared = quotaInFlight
-    if (!force) return shared
-    await shared.catch(() => undefined)
+    // A run older than the serving deadline is treated as abandoned: the caller
+    // gets a fresh attempt instead of a promise we already know cannot answer in
+    // time. It is not cancelled (its stages have their own timeouts); it simply
+    // stops being the shared answer, so a stall can never wedge the endpoint.
+    const abandoned = Date.now() - quotaInFlightStartedAt > QUOTA_SERVE_DEADLINE_MS
+    if (!abandoned) {
+      const shared = quotaInFlight
+      if (!force) return shared
+      await shared.catch(() => undefined)
+    }
   }
   const run = fetchQuotas(force)
   quotaInFlight = run
+  quotaInFlightStartedAt = Date.now()
   try {
     return await run
   } finally {
-    if (quotaInFlight === run) quotaInFlight = undefined
+    if (quotaInFlight === run) {
+      quotaInFlight = undefined
+      quotaInFlightStartedAt = 0
+    }
   }
 }
 
@@ -340,17 +400,22 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
       const keepaliveCwd = quotaConfig.tokenKeepaliveCwd?.trim()
         || process.env.USERPROFILE?.trim()
         || process.env.HOME?.trim()
-      const renewal = await refreshAgyTokenIfDue({
-        executable: quotaConfig.agyPath?.trim() || undefined,
-        model: quotaConfig.model,
-        leadMs: quotaConfig.tokenKeepaliveLeadMs ?? 0,
-        ...(keepaliveCwd === undefined || keepaliveCwd.length === 0 ? {} : { cwd: keepaliveCwd }),
-      })
+      const renewal = await withDeadline(
+        refreshAgyTokenIfDue({
+          executable: quotaConfig.agyPath?.trim() || undefined,
+          model: quotaConfig.model,
+          leadMs: quotaConfig.tokenKeepaliveLeadMs ?? 0,
+          ...(keepaliveCwd === undefined || keepaliveCwd.length === 0 ? {} : { cwd: keepaliveCwd }),
+        }),
+        RENEWAL_AWAIT_MS,
+      )
       // Only a run that actually happened can have replaced the credential. When
       // nothing was due, the cached token is by definition still valid, and
       // paying another ~1.2 s keyring spawn here would undo the whole point of
-      // the freshness window.
-      renewalRan = renewal.refreshed === true
+      // the freshness window. A renewal that misses its window is not a failed
+      // renewal: it keeps running in the background and the next open sees the
+      // rotated credential.
+      renewalRan = renewal?.refreshed === true
     }
     // Read after the renewal attempt, never before: sending a token that was
     // just replaced would guarantee a 401 for this very fetch. Forced fresh —
@@ -674,13 +739,17 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     // 1. GET /plugins/agy-link/status
     reg('/plugins/agy-link/status', async (_req, res) => {
       const overrides = readAgyRuntimeOverrides() ?? { hiddenModels: [], defaultEffort: undefined, defaultModel: undefined }
-      const quotas = await refreshQuotas(false)
+      // Never let the panel wait on the quota chain indefinitely: a timeout
+      // answers with the last good snapshot and says so in `quotaError`.
+      const quotaAnswer = await withDeadline(refreshQuotas(false), QUOTA_SERVE_DEADLINE_MS)
+      if (quotaAnswer === undefined) lastQuotaError = 'timeout'
+      const quotas = quotaAnswer ?? cachedQuotas
 
       let discovered = [...DEFAULT_CATALOG_MODELS]
       if (modelDiscovery) {
         try {
           const configured = configuredModels(activeConfig)
-          const disc = await modelDiscovery.discover(configured)
+          const disc = await withDeadline(modelDiscovery.discover(configured), DISCOVERY_AWAIT_MS)
           if (disc?.models && disc.models.length > 0) {
             const set = new Set(discovered.map((m) => m.id))
             for (const dm of disc.models) {
@@ -801,7 +870,12 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
 
     // 3. POST /plugins/agy-link/pool/refresh-quota
     reg('/plugins/agy-link/pool/refresh-quota', async (req, res) => {
-      const quotas = await refreshQuotas(true)
+      // The manual button is the one caller that may legitimately wait for a new
+      // number, but not forever: past the deadline it reports the cached
+      // snapshot plus `quotaError: 'timeout'` instead of hanging the panel.
+      const quotaAnswer = await withDeadline(refreshQuotas(true), QUOTA_SERVE_DEADLINE_MS)
+      if (quotaAnswer === undefined) lastQuotaError = 'timeout'
+      const quotas = quotaAnswer ?? cachedQuotas
       const identity = await readIdentityFromKeyring()
       const accountAlias = identity.email
         ? `${identity.name ? `${identity.name} ` : ''}(${identity.email})`
