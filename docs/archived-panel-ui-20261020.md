@@ -1,9 +1,11 @@
 # 归档：面板的多账号 UI 与死控件（2026-10-20）
 
-> **受本文件管辖的现状**：AGY 控制面板（`client/index.ts` 的 `AgySettingsSection`）现只保留
-> 单账号额度卡 + 思考强度 + 模型显示三块。本文件记录被拆掉的 UI 形状、拆分依据、以及
-> **将来要恢复时该接哪些线**。代码本体不删——git 历史里在 `HEAD~` 的 `client/index.ts`，
-> 恢复第一步就是 `git show` 取回。
+> **受本文件管辖的现状**：AGY 控制面板（`client/index.ts`）现只保留单账号额度卡 + 思考强度
+> + 模型显示三块。2026-10-23 起组件入口是注册到宿主 keyed 槽
+> `settings.models.provider-card` 的 provider 卡（`id: 'agy-link-provider-card'`，
+> `key: 'dsh-agy-provider'`），`AgySettingsSection` 这个名字已不存在。本文件记录被拆掉的 UI
+> 形状、拆分依据、以及 **将来要恢复时该接哪些线**。代码本体不删——git 历史里在 `HEAD~` 的
+> `client/index.ts`，恢复第一步就是 `git show` 取回。
 >
 > **挂载点（2026-10-21 用户裁定后变更）**：面板不再注册 `settings.section`（设置导航独立分区）
 > 与 `conversation.session.header.actions`（会话页头部徽标），改为注册宿主 keyed 槽
@@ -39,6 +41,27 @@
 验收（时点：2026-10-23 17:0x）：`npm run build:client` = 8 modules → `dist/client.js` 198,728 B；
 `build-client-smoke` ok；宿主 `/plugins/events` 里 `dsh-agy-provider` 的 rev 与盘上按
 `(mtimeMs, ctimeMs, size)` 实算一致 ⇒ 刷新页面即加载，无需重启宿主。
+
+### 零附、2026-10-23 深夜：卡顿与打不开（两条实测根因）
+
+现象（用户原话）：「刚已经重启了，但是感觉很卡很卡很卡」「打开这个 AGY 的页面，在模型里面很卡，
+点进去是空白的，然后要等很久」＋「第一次打开有一个旋转，写着『什么什么操作失败，请重试』。
+我再去打开就是空白了」。
+
+| # | 根因 | 证据 | 修法 |
+|---|---|---|---|
+| 1 | 每 3 秒轮询 `/plugins/agy-link/status` | `client/index.ts:191` `setInterval(…, 3000)`，订阅者为 0 也不停 | 按用户裁定整段删除定时器，改为 `loadStatusOnce()`：挂载时取一次 + 手动「刷新额度」 |
+| 2 | 同步 spawn PowerShell 读凭据 | `/status` 首字节实测 10,934–22,000 ms；`/diagnose` 同时仅 1–7 ms ⇒ 卡在 `/status` 自己的服务端计算；`src/web/router.ts` 用 `execFileSync('powershell.exe', …, { timeout: 5000 })`，一次 `/status` 要串行跑 2–3 次 | `src/agy/keepalive.ts` 新增 `readKeyringBlob()`：`execFile` 异步 + 30 s 缓存 + in-flight 复用；`readIdentityFromKeyring()` 改 async；`refreshQuotas` 加 `quotaInFlight` 单飞 |
+| 3 | single-flight 写错，后到的调用方立刻 resolve | node 复现：第二次 `await loadStatusOnce()` 立即 settle 且 `status === null` ⇒ 走错误分支显示「操作未完成。请重试」 | `statusInFlight` 改存 Promise 本身，后到者 `return statusInFlight`（同一 run），`statusFetchSeq` 仍丢弃乱序响应 |
+| 4 | 失败态没有重试入口 | `status === null` 分支只有 spinner + 一句文案 | 该分支渲染 `[错误文案][重试]` 按钮；locale 四语言新增 `status.retry`（zh `重试` / en `Retry` / pt-BR `Tentar novamente` / es `Reintentar`） |
+
+验收（时点：2026-10-23 22:xx）：`npx tsc -p tsconfig.json` 通过；`node scripts/run-tests.mjs`
+= **306 pass / 0 fail**；`build-client.mjs` → `dist/client.js` 201,769 B，实算 rev
+`e335049e1319` 与宿主 SSE 图一致；服务端直取该 rev 正文 marker 全 HIT
+（`statusInFlight !== null` / `status.retry` / `loadStatusOnce` HIT，`ensureStatusPolling` /
+`statusPollTick` MISS）。宿主实测 `/status` 首字节从 10–22 s 降到 2,993 ms。
+本轮改动已提交：`fdd1eb4`。
+
 ## 一、为什么拆
 
 用户裁定（2026-10-20）：「关于多账号、主账号的内容全部精简掉……防备着哪天又有多账号轮转的需求，
@@ -136,3 +159,11 @@
 **已知未闭合**：思考强度控件写进 `runtime-overrides.json` 后，只有面板自己读回来显示；
 生成链路的实际强度在 `src/provider/agy.ts:1730` 取 `gemini-* → 'high'` 常量，不读该文件。
 是否要让这个控件真正生效（或拆掉），属方向决策，待用户裁定。
+
+## 五、下一次改这块前必须先读的两条
+
+1. **改 `src/` 必须全量 build**：`npx tsc -p tsconfig.json`（`--noEmit` 不重建 `lib/`），宿主读的是
+   `lib/`。只跑 `--noEmit` 会让测试与运行态继续用旧代码，表现为「改了没用」。
+2. **改客户端只需 `node scripts/build-client.mjs`**，产物 `dist/client.js` 经 desktop profile 的
+   junction 被宿主直读，**刷新页面即生效，不必重启宿主**；`scripts/build-client-smoke.mjs` 断言
+   入口契约（`name`/`inject`/`apply`）。改 `src/`（服务端）则必须重启宿主才进运行态。
