@@ -6,7 +6,7 @@ import type {
   LlmResolvedModelInfo,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import { configuredModels, type Config, type ModelConfig } from './config.js'
+import { configuredModels, normalizeModelId, type Config, type ModelConfig } from './config.js'
 
 const DEFAULT_PROVIDER = 'agy-mock'
 const DEFAULT_MOCK_MODEL = 'agy-mock-model'
@@ -37,8 +37,8 @@ export class MockAdapter extends LlmAdapter {
 
   constructor(config: Config = {}) {
     super()
-    this.model = config.model ?? DEFAULT_MOCK_MODEL
-    this.models = configuredModels({ ...config, model: config.model ?? DEFAULT_MOCK_MODEL })
+    this.model = config.model !== undefined ? normalizeModelId(config.model) : DEFAULT_MOCK_MODEL
+    this.models = configuredModels({ ...config, model: this.model }).map(m => ({ ...m, id: normalizeModelId(m.id) }))
     this.response = config.response ?? DEFAULT_RESPONSE
     this.delayMs = config.delayMs ?? 0
   }

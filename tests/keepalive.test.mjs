@@ -182,9 +182,11 @@ test('keepalive: an argv rejection is reported as rejected, with stderr detail',
 })
 
 test('keepalive: a spawn failure is reported as failed, not rejected', async () => {
+  // Distinct expiry: the previous test remembered a failure for
+  // Date.now()+1_000, and same-millisecond runs would hit the failure dedup.
   const outcome = await refreshAgyTokenIfDue({
     executable: 'C:/fake/agy.exe',
-    readState: fakeKeyring([Date.now() + 1_000]),
+    readState: fakeKeyring([Date.now() + 60_000]),
     run: async () => { throw new Error('Unable to start AGY executable (ENOENT)') },
   })
   assert.equal(outcome.refreshed, false)

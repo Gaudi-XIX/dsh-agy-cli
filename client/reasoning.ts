@@ -5,9 +5,26 @@
 // clearing textContent destroys host-owned nodes and the block goes blank
 // after the turn finishes and React re-renders from the message model.
 //
-// Approach: CSS-only styling + non-destructive disclosure click assist.
-// Thought text (including [agy thinking turn · N tokens] banners) stays in
-// the host's own text nodes.
+// The "show only the newest step, with a scrolling feel" behavior is NOT
+// implemented here. It is the host's own, driven by paragraph structure:
+// ReasoningRow's collapsed summary is `latestCompletedParagraphFirstLine`
+// while the row runs (first line of the newest completed paragraph) and
+// `firstLine` once it settles. The provider therefore emits one
+// blank-line-separated paragraph per step, opening with a `[agy 过程流]`
+// banner — the fold live-rolls to the newest step with zero client work,
+// and settles on the banner.
+//
+// What this file still owns:
+// - CSS-only styling of the think body (scrollable, no DOM surgery).
+// - While a row is running AND the reader has opened it, keep the body
+//   pinned to the newest line (scrollTop = scrollHeight, `tail -f`).
+//   It never opens a row by itself: forcing it open would defeat the
+//   one-line fold the user asked for.
+//
+// Running is read from the host's own `data-state="running"` on the row
+// root (the official carrier — no spinner/class guessing), and the row is
+// never identified by `[data-message-id]`-style attributes the host does
+// not emit.
 
 const REASONING_CSS = `
 /* Hover affordance on thinking disclosure rows */
@@ -44,79 +61,44 @@ div[data-variant="think"] [class*="thinkBody"]::-webkit-scrollbar-track {
 	background: transparent;
 	margin: 4px 0;
 }
-
-/* Style leading banner token sequence without rewriting DOM: host text nodes
-   keep ownership; this only paints the first line if the host wraps it. */
-div[data-variant="think"] [class*="thinkBody"] > span:first-child,
-div[data-variant="think"] [class*="thinkBody"] {
-	font-family: inherit;
-}
 `;
 
 function injectStyles(): void {
-	if (typeof document === 'undefined') return;
-	const styleId = 'dsh-agy-link-reasoning-css';
+	if (typeof document === 'undefined') return
+	const styleId = 'dsh-agy-link-reasoning-css'
 	if (document.getElementById(styleId) === null) {
-		const st = document.createElement('style');
-		st.id = styleId;
-		st.textContent = REASONING_CSS;
-		const host = document.head ?? document.documentElement;
-		if (host) host.appendChild(st);
+		const st = document.createElement('style')
+		st.id = styleId
+		st.textContent = REASONING_CSS
+		const host = document.head ?? document.documentElement
+		if (host) host.appendChild(st)
 	}
+}
+
+function thinkBodyOf(root: HTMLElement): HTMLElement | null {
+	return root.querySelector<HTMLElement>('[class*="thinkBody"]')
 }
 
 /**
- * Try to expand a thinking row once when its body contains real prose
- * (not a bare [agy thinking turn · N tokens] chip). Uses the host's own
- * disclosure control when present — never mutates thinkBody children.
+ * One auto pass: every running think row whose body the reader has opened
+ * gets pinned to its newest line. A collapsed row has no thinkBody mounted
+ * (the host mounts it only when expanded), so the lookup itself is the
+ * "did the reader open it" test — no click synthesis, no per-row bookkeeping.
  *
- * A row the user manually COLLAPSED is recorded in a WeakSet keyed by the
- * row element; React keeps the same element identity across its own
- * re-renders, so the scanner stops re-expanding it (the old data attribute
- * survived only until React rebuilt the node).
+ * The pin only fires when the reader is already at the bottom, so scrolling
+ * up to re-read an earlier step is never yanked back down.
  */
-const userCollapsed = typeof WeakSet !== 'undefined' ? new WeakSet<HTMLElement>() : null
-
-function tryExpandThinkRow(root: HTMLElement): void {
-	if (root.dataset.agyExpanded === 'true') return
-	if (userCollapsed?.has(root) === true) return
-	const body = root.querySelector<HTMLElement>('[class*="thinkBody"]')
-	if (!body) return
-	const text = (body.textContent ?? '').trim()
-	if (text === '') return
-	const bannerOnly = /^\[agy thinking turn(?: · \d+ thinking tokens)?\]\s*$/.test(text)
-	if (bannerOnly) return
-	// Already expanded if body is visible with height.
-	const style = typeof getComputedStyle === 'function' ? getComputedStyle(body) : null
-	if (style && style.display !== 'none' && body.clientHeight > 8) {
-		root.dataset.agyExpanded = 'true'
-		return
-	}
-	const toggle =
-		root.querySelector<HTMLElement>('[data-disclosure-row]') ??
-		root.querySelector<HTMLElement>('[class*="disclosure"]') ??
-		root.querySelector<HTMLElement>('button')
-	if (toggle) {
-		// Record collapse intent BEFORE clicking: the click itself mutates the
-		// DOM (feeding this observer again), and the "already expanded" probe
-		// above is read from a state the click has not settled yet.
-		userCollapsed?.add(root)
-		try {
-			toggle.click()
-			root.dataset.agyExpanded = 'true'
-		} catch {
-			userCollapsed?.delete(root)
-			// host control missing — leave collapsed
-		}
-	}
-}
-
-function scanThinkingRows(): void {
+function followRunningReasoning(): void {
 	if (typeof document === 'undefined') return
 	const rows = document.querySelectorAll<HTMLElement>('div[data-variant="think"]')
 	for (let i = 0; i < rows.length; i++) {
-		const row = rows[i]
-		if (row) tryExpandThinkRow(row)
+		const root = rows[i]
+		if (!root) continue
+		if (root.getAttribute('data-state') !== 'running') continue
+		const body = thinkBodyOf(root)
+		if (body === null) continue
+		if (body.scrollTop + body.clientHeight < body.scrollHeight - 24) continue
+		body.scrollTop = body.scrollHeight
 	}
 }
 
@@ -127,7 +109,7 @@ function scheduleScan(): void {
 	if (scanTimer !== null) return
 	scanTimer = setTimeout(() => {
 		scanTimer = null
-		scanThinkingRows()
+		followRunningReasoning()
 	}, 200)
 }
 
@@ -135,13 +117,13 @@ let activeObserver: MutationObserver | null = null
 let domContentLoadedHandler: (() => void) | null = null
 
 /**
- * Install the auto-expand reasoning overlay. Returns a disposer that
+ * Install the reasoning follow-along overlay. Returns a disposer that
  * disconnects the MutationObserver — wrap it in ctx.effect so a plugin
  * reload cannot stack observers.
  */
-export function installAutoExpandReasoning(): () => void {
+export function installReasoningFollow(): () => void {
 	if (typeof window === 'undefined' || typeof document === 'undefined') return () => {}
-	disposeAutoExpandReasoning()
+	disposeReasoningFollow()
 	injectStyles()
 	const observer = new MutationObserver(() => {
 		scheduleScan()
@@ -150,7 +132,7 @@ export function installAutoExpandReasoning(): () => void {
 	const setupObserver = () => {
 		if (document.body) {
 			observer.observe(document.body, { childList: true, subtree: true })
-			scanThinkingRows()
+			followRunningReasoning()
 		}
 	}
 	if (document.readyState === 'loading') {
@@ -159,11 +141,11 @@ export function installAutoExpandReasoning(): () => void {
 	} else {
 		setupObserver()
 	}
-	return disposeAutoExpandReasoning
+	return disposeReasoningFollow
 }
 
 /** Disconnect the observer and cancel pending work. */
-export function disposeAutoExpandReasoning(): void {
+export function disposeReasoningFollow(): void {
 	if (activeObserver !== null) {
 		activeObserver.disconnect()
 		activeObserver = null

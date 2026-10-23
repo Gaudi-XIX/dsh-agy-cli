@@ -144,7 +144,7 @@ test('AgyAdapter keeps the text a failed turn already streamed and parks the rea
   const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
   assert.equal(text, 'first half of the answer and the rest')
   const reasoning = chunks.filter(chunk => chunk.type === 'reasoning-delta').map(chunk => chunk.text).join('')
-  assert.match(reasoning, /^\[agy finished with error\] API error \(attempt 2\)/)
+  assert.match(reasoning, /^\[agy 过程流\]\n\n\[agy finished with error\] API error \(attempt 2\)/)
   assert.equal(chunks.at(-1)?.type, 'finish')
   assert.equal(chunks.at(-1)?.reason.kind, 'stop')
 })

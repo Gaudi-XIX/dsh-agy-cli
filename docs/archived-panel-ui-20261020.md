@@ -15,6 +15,30 @@
 > 同步移除；第 5 条「重复的产品名」中的「会话头徽章」一项已不存在。
 > 恢复旧形态时，两处注册的写法见本文件 git 历史（`HEAD~1` 之前的 `client/index.ts`）。
 
+## 零、2026-10-23 改版：卡片自带折叠 + 两个 select + 勾选清单
+
+用户三条反馈（2026-10-23 15:54）→ 三处改法，均已落码（`client/index.ts`）：
+
+1. **「点编辑弹出的额度框，再点编辑收不回去」**。根因在宿主：`app.asar` ModelsSection 第
+   532135 行 `renderSlot("settings.models.provider-card", {provider, configured, keyConfigured},
+   {entryKey})` 后面紧跟 532140 的 `open ? renderProviderEditor(…) : null`——卡片是编辑表单的
+   **兄弟**，不在折叠区内，slot props 也没有 open。改法：卡片用 `MutationObserver` 盯自己所在
+   `<li>` 的 childList，把「编辑表单出现/消失在我们后面」当展开信号（`anchor.nextElementSibling`），
+   再叠一个 ▾/▸ 手动开关兜底（`manualOpen` 覆盖 `hostOpen`，宿主状态一变就清空手动值）。
+   ⇒ 点「编辑」展开面板、再点收起；即使宿主 DOM 结构将来变动，手动开关仍能收回。
+2. **「5 小时额度折成两行」**。`renderLine` 的窗口标签原来写死 `width: 52px`，中文放不下。
+   改为 `white-space: nowrap` + 自适应宽度 + `padding-right`。
+3. **「模型 + 思考强度在放开新模型（如 Pro）后会乱」**。旧形态是「每个模型一个药丸按钮
+   （点＝隐藏）＋ 思考强度四段按钮」，模型一多就是一面墙，且看不出当前生效项。改为：
+   模型 `<select>`（值＝`status.defaultModel`，写 `POST /config {key:"defaultModel"}`）、
+   思考强度 `<select>`（auto/low/medium/high，写 `defaultEffort`）、模型显隐改为可滚动
+   勾选清单（写 `hiddenModels`）。样式新增 `.agy-select` / `.agy-checklist` / `.agy-check-item`，
+   并删除随之失效的 `segGroup`/`segBtn`/`segBtnActive` 三个 style 条目（`--agy-seg-*` CSS 变量
+   保留，未来分段控件可直接复用）。
+
+验收（时点：2026-10-23 17:0x）：`npm run build:client` = 8 modules → `dist/client.js` 198,728 B；
+`build-client-smoke` ok；宿主 `/plugins/events` 里 `dsh-agy-provider` 的 rev 与盘上按
+`(mtimeMs, ctimeMs, size)` 实算一致 ⇒ 刷新页面即加载，无需重启宿主。
 ## 一、为什么拆
 
 用户裁定（2026-10-20）：「关于多账号、主账号的内容全部精简掉……防备着哪天又有多账号轮转的需求，

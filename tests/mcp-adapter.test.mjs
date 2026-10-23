@@ -198,9 +198,17 @@ test('bridge mode records each MCP step as a reasoning line, not a replayable to
 
   const reasoning = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'reasoning')
   assert.ok(reasoning, 'the bridged step is recorded as a reasoning annotation')
-  assert.match(reasoning.block.text, /\[dsh read\] ran \{"path":"README\.md"\}/)
+  assert.match(reasoning.block.text, /🛠️ \[read\] 读取: `README\.md`/)
+  // The fold's collapsed summary is the block's FIRST paragraph (the host falls
+  // back to `firstLine` once the row settles) and its running summary is the
+  // LAST completed paragraph — so each step must be its own blank-line
+  // separated paragraph, the banner must come first, and the total must close.
+  assert.match(reasoning.block.text, /^\[agy 过程流\]\n\n/)
+  assert.match(reasoning.block.text, /🛠️ \[read\] 读取: `README\.md`\n\n/)
+  assert.match(reasoning.block.text, /〔共 1 步〕\n$/)
 
   const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
+  assert.equal(text.includes('<details>'), false, 'no details block in text')
   assert.equal(text, 'Reading the file now. Done.')
 
   // The bridge ran the call, so the turn finishes as an ordinary stop.
@@ -308,7 +316,14 @@ test('bridge mode recovers a final response that never streamed as a delta', asy
     tools: [{ name: 'read', description: 'r', parameters: { type: 'object', properties: {} } }],
   })) chunks.push(chunk)
 
+  const reasoning = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'reasoning')
+  assert.ok(reasoning, 'the bridged step is recorded as a reasoning annotation')
+  assert.match(reasoning.block.text, /^\[agy 过程流\]\n\n/)
+  assert.match(reasoning.block.text, /🛠️ \[read\] 读取: `README\.md`\n\n/)
+  assert.match(reasoning.block.text, /〔共 1 步〕\n$/)
+
   const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
+  assert.equal(text.includes('<details>'), false, 'no details block in text')
   assert.equal(text, 'Read README.md and found the deployment notes.')
   const finish = chunks.find(chunk => chunk.type === 'finish')
   assert.deepEqual(finish.reason, { kind: 'stop' })
@@ -343,11 +358,13 @@ test('bridge mode reports a turn that only made tool calls instead of failing em
   // holding one.
   const reasoning = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'reasoning')
   assert.ok(reasoning, 'a tool-only turn is recorded as a reasoning annotation')
-  assert.match(reasoning.block.text, /\[dsh read\] ran /)
+  assert.match(reasoning.block.text, /^\[agy 过程流\]\n\n/)
+  assert.match(reasoning.block.text, /🛠️ \[read\] 读取: `README\.md`\n\n/)
+  assert.match(reasoning.block.text, /〔共 1 步〕\n$/)
   const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
   assert.equal(text, '')
   const textBlock = chunks.find(chunk => chunk.type === 'block-end' && chunk.block?.type === 'text')
-  assert.equal(textBlock, undefined)
+  assert.equal(textBlock, undefined, 'no empty text block emitted')
   const finish = chunks.find(chunk => chunk.type === 'finish')
   assert.deepEqual(finish.reason, { kind: 'stop' })
 })

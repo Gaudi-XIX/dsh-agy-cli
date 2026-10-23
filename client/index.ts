@@ -165,40 +165,44 @@ function reportCardDispatch(props?: unknown): void {
 	void postJson('/plugins/agy-link/card-ping', { props: names });
 }
 
-// ---- shared status polling ----
-// ONE module-level fetch loop serves every mounted consumer (the provider card
-// in the host's Models settings page). Per-component 3s loops used to stack
-// (several full payload fetches per interval), had no overlap
-// guard, and let a slow stale response overwrite a newer one.
+// ---- shared status load (no polling) ----
+// ONE module-level fetch serves every mounted consumer (the provider card in
+// the host's Models settings page). There is deliberately no timer: nothing on
+// screen needs a background refresh. The server answers `/status` by spawning
+// PowerShell (`execFileSync`) to read the Windows keyring, so any poll
+// competes with every other RPC and is the reason the page used to feel stuck.
+// The card fetches once per mount (opening the Models page), the local 30 s
+// tick below only redraws the countdown, and the refresh button fetches again.
 const statusListeners = new Set<(s: StatusPayload) => void>();
-let statusPollTimer: ReturnType<typeof setInterval> | null = null;
 let statusFetchSeq = 0;
+// Mount fetch and the refresh button overlap freely (a stuck request used to
+// let several more start), so entering this gate twice is the bug. A caller that
+// arrives while a fetch is running gets the running promise back instead of
+// `undefined`: returning early made the caller's `await` resolve instantly, so
+// the panel decided the load was over ("failed") while it was still in flight.
+let statusInFlight: Promise<void> | null = null;
 
 function notifyStatus(st: StatusPayload): void {
 	statusCache = st;
 	for (const fn of [...statusListeners]) {
-		try { fn(st); } catch { /* a dead consumer must not kill the loop */ }
+		try { fn(st); } catch { /* a dead consumer must not kill the load */ }
 	}
 }
 
-async function statusPollTick(): Promise<void> {
+async function loadStatusOnce(): Promise<void> {
+	if (statusInFlight !== null) return statusInFlight;
 	const seq = ++statusFetchSeq;
-	const st = await getStatus();
-	// A slow response from an older tick must never overwrite newer data.
-	if (st !== null && seq === statusFetchSeq) notifyStatus(st);
-}
-
-function ensureStatusPolling(): void {
-	if (statusPollTimer !== null) return;
-	void statusPollTick();
-	statusPollTimer = setInterval(() => { void statusPollTick(); }, 3000);
-}
-
-function stopStatusPollingIfIdle(): void {
-	if (statusListeners.size === 0 && statusPollTimer !== null) {
-		clearInterval(statusPollTimer);
-		statusPollTimer = null;
-	}
+	const run = (async (): Promise<void> => {
+		try {
+			const st = await getStatus();
+			// A slow response from an older fetch must never overwrite newer data.
+			if (st !== null && seq === statusFetchSeq) notifyStatus(st);
+		} finally {
+			if (statusInFlight === run) statusInFlight = null;
+		}
+	})();
+	statusInFlight = run;
+	return run;
 }
 
 /**
@@ -207,21 +211,24 @@ function stopStatusPollingIfIdle(): void {
  * transient failure (a failed refresh used to flip the whole panel back to
  * its loading state).
  */
-function useAgyStatus(): { status: StatusPayload | null; refresh: () => Promise<void> } {
+/**
+ * Subscribe a component to the shared status snapshot. Each mount triggers one
+ * fetch (that is what "opening the panel" means), the returned refresh is the
+ * button. A transient failure keeps the last good snapshot instead of flipping
+ * the whole panel back to its loading state.
+ */
+function useAgyStatus(): { status: StatusPayload | null; loading: boolean; refresh: () => Promise<void> } {
 	const [status, setStatus] = useState<StatusPayload | null>(statusCache);
+	const [loading, setLoading] = useState<boolean>(statusCache === null);
 	useEffect(() => {
 		statusListeners.add(setStatus);
-		ensureStatusPolling();
+		void loadStatusOnce().then(() => { setLoading(false); });
 		return () => {
 			statusListeners.delete(setStatus);
-			stopStatusPollingIfIdle();
 		};
 	}, []);
-	const refresh = async (): Promise<void> => {
-		const st = await getStatus();
-		if (st !== null) notifyStatus(st);
-	};
-	return { status, refresh };
+	const refresh = async (): Promise<void> => { await loadStatusOnce(); };
+	return { status, loading, refresh };
 }
 
 /**
@@ -609,6 +616,56 @@ body.dark,
 	margin: 4px 0;
 	color: var(--agy-text-primary);
 }
+.agy-select {
+	appearance: none;
+	-webkit-appearance: none;
+	font: inherit;
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--agy-text-primary);
+	background-color: var(--agy-bg-subbox);
+	border: 1px solid var(--agy-border-box);
+	border-radius: 6px;
+	padding: 4px 20px 4px 8px;
+	max-width: 190px;
+	cursor: pointer;
+	background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+	background-position: calc(100% - 11px) calc(50% + 1px), calc(100% - 7px) calc(50% + 1px);
+	background-size: 4px 4px, 4px 4px;
+	background-repeat: no-repeat;
+}
+.agy-select:hover:not(:disabled) {
+	border-color: var(--agy-border-box);
+	filter: brightness(1.05);
+}
+.agy-select:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+.agy-checklist {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 3px 14px;
+	max-height: 112px;
+	overflow-y: auto;
+	padding: 6px 8px;
+	border-radius: 6px;
+	background: var(--agy-bg-subbox);
+	border: 1px solid var(--agy-border-box);
+}
+.agy-check-item {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 11.5px;
+	color: var(--agy-text-primary);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.agy-check-item input {
+	cursor: pointer;
+	margin: 0;
+}
 `;
 
 const S: Record<string, Record<string, unknown>> = {
@@ -752,60 +809,6 @@ const S: Record<string, Record<string, unknown>> = {
 		fontSize: '11px',
 		fontWeight: 600,
 	},
-	btnSm: {
-		display: 'inline-flex',
-		alignItems: 'center',
-		justifyContent: 'center',
-		padding: '4px 9px',
-		borderRadius: '5px',
-		border: '1px solid var(--agy-border-btn)',
-		background: 'var(--agy-bg-btn)',
-		color: 'var(--agy-text-btn)',
-		cursor: 'pointer',
-		fontSize: '11.5px',
-		fontWeight: 600,
-	},
-	btnSmPrimary: {
-		display: 'inline-flex',
-		alignItems: 'center',
-		justifyContent: 'center',
-		padding: '4px 9px',
-		borderRadius: '5px',
-		border: '1px solid var(--agy-border-btn-primary)',
-		background: 'var(--agy-bg-btn-primary)',
-		color: 'var(--agy-text-btn-primary)',
-		cursor: 'pointer',
-		fontSize: '11.5px',
-		fontWeight: 700,
-	},
-	segGroup: {
-		display: 'inline-flex',
-		background: 'var(--agy-seg-group-bg)',
-		borderRadius: '7px',
-		padding: '3px',
-		border: '1px solid var(--agy-seg-group-border)',
-	},
-	segBtn: {
-		padding: '4px 10px',
-		borderRadius: '4px',
-		border: 'none',
-		background: 'transparent',
-		color: 'var(--agy-seg-btn-text)',
-		cursor: 'pointer',
-		fontSize: '11.5px',
-		fontWeight: 600,
-	},
-	segBtnActive: {
-		padding: '4px 10px',
-		borderRadius: '4px',
-		border: 'none',
-		background: 'var(--agy-seg-btn-active-bg)',
-		color: 'var(--agy-seg-btn-active-text)',
-		cursor: 'pointer',
-		fontSize: '11.5px',
-		fontWeight: 700,
-		boxShadow: '0 2px 4px rgba(37, 99, 235, 0.4)',
-	},
 	input: {
 		flex: '1',
 		padding: '7px 12px',
@@ -858,8 +861,8 @@ export function apply(ctx: ClientContext): void {
 		// and StrictMode's double render. See `/plugins/agy-link/diagnose`.
 		reportCardDispatch(props);
 		const t = useAgyTranslation();
-		const { status, refresh } = useAgyStatus();
-const [loadingAction, setLoadingAction] = useState<string | null>(null);
+		const { status, loading, refresh } = useAgyStatus();
+		const [loadingAction, setLoadingAction] = useState<string | null>(null);
 		const [toast, setToast] = useState<ToastNotice | null>(null);
 
 		// Cooldown expiry and quota countdowns are Date.now()-derived while the
@@ -921,13 +924,29 @@ const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
 		const refreshQuota = async (): Promise<void> => {
 			setLoadingAction('refresh:all');
+			// Only a click that came after this call started is worth fetching.
+			const seq = ++statusFetchSeq;
 			const res = await postJson('/plugins/agy-link/pool/refresh-quota', {});
 			if (res === null || res?.ok === false) {
 				setLoadingAction(null);
 				actionFailed();
 				return;
 			}
-			await refresh();
+			// The RPC already answered with the freshly fetched pool, so adopt it
+			// (the click owns the sequence number; a concurrent mount fetch is
+			// discarded) instead of asking `/status` again — that second round trip
+			// re-reads the keyring and refetches the quotas just sent, and it is the
+			// slow one the user feels. `/status` is still asked for everything the
+			// pool does not carry (auth phase, catalog, overrides).
+			const pool = (res as any)?.pool as StatusPayload['pool'] | undefined;
+			if (pool !== undefined && pool !== null && statusCache !== null) {
+				statusCache = { ...statusCache, pool };
+				for (const fn of [...statusListeners]) {
+					try { fn(statusCache); } catch { /* a dead consumer must not kill the load */ }
+				}
+			}
+			const st = await getStatus();
+			if (st !== null && seq === statusFetchSeq) notifyStatus(st);
 			setLoadingAction(null);
 			showToast(t('quota.refreshed'), 'success');
 		};
@@ -1024,7 +1043,19 @@ const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
 			const renderLine = (windowName: string, percent: number, c: { bar: string; text: string; bg: string; border: string }, resetStr: string) => {
 				return h('div', { style: { display: 'flex', alignItems: 'center', fontSize: '11.5px', margin: '4px 0' } },
-					h('span', { style: { width: '52px', color: 'var(--agy-text-window-label)', fontSize: '11px', fontWeight: 700, flexShrink: 0 } }, windowName),
+					h('span', {
+						style: {
+							color: 'var(--agy-text-window-label)',
+							fontSize: '11px',
+							fontWeight: 700,
+							flexShrink: 0,
+							// "5 小时额度" wrapped onto two lines inside the fixed
+							// 52px column and pushed the bar off-centre; the label
+							// sizes itself and never breaks mid-word now.
+							whiteSpace: 'nowrap',
+							paddingRight: '6px',
+						},
+					}, windowName),
 					h('div', { style: S.progressBarBg },
 						h('div', {
 							className: 'agy-progress-fill',
@@ -1100,27 +1131,9 @@ const [loadingAction, setLoadingAction] = useState<string | null>(null);
 		const googleModels = account?.quotas.google?.models ?? [];
 		const quotaCard = account
 			? h('div', { className: 'agy-card-hover', style: S.card },
-				h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
-					h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-						h('span', {
-							className: 'agy-pulse-dot',
-							style: { background: '#10b981', boxShadow: '0 0 8px #10b981aa' },
-						}),
-						// One identity line: the alias the server builds already carries
-						// name + email, so the old separate email badge was a repeat.
-						h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' } }, account.alias || t('quota.accountUnknown')),
-					),
-					h('div', { style: { display: 'flex', gap: '5px', alignItems: 'center' } },
-						h('button', {
-							type: 'button',
-							className: 'agy-btn',
-							style: { ...S.btnSm, gap: '4px' },
-							title: t('header.refreshQuota'),
-							disabled: isBusy,
-							onClick: () => void refreshQuota(),
-						}, loadingAction === 'refresh:all' ? [renderSpinner(), t('header.refreshing')] : [uiIcon('refresh', 11), ` ${t('header.refreshQuota')}`]),
-					),
-				),
+				// No identity header and no second refresh button here: the status
+				// line above already carries account, state, clock and refresh, so
+				// this card is quota data only.
 				h('div', { style: S.quotaBox },
 					renderQuotaBar('Gemini', 'google', account),
 					googleModels.length > 0 ? h('div', {
@@ -1147,9 +1160,24 @@ const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
 
 		if (status === null) {
-			return h('div', { style: { ...S.container, minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+			// While the first `/status` is still running there is nothing to draw
+			// yet; once it has answered (or failed) an empty snapshot must not
+			// masquerade as "loading" forever. A failed load gets an actual retry
+			// button — the old copy told the user to retry while offering nothing
+			// to press, so the second open looked like a blank card.
+			return h('div', { style: { ...S.container, minHeight: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' } },
 				h('style', null, GLOBAL_CSS),
-				h('span', { style: S.muted }, [renderSpinner(), t('status.loading')]),
+				loading
+					? h('span', { style: S.muted }, [renderSpinner(), t('status.loading')])
+					: [
+						h('span', { key: 'msg', style: S.muted }, t('api.genericError')),
+						h('button', {
+							key: 'retry',
+							type: 'button',
+							style: S.btn,
+							onClick: () => { setLoading(true); void loadStatusOnce().then(() => { setLoading(false); }); },
+						}, t('status.retry')),
+					],
 			);
 		}
 
@@ -1192,84 +1220,151 @@ const [loadingAction, setLoadingAction] = useState<string | null>(null);
 			}, `${expired ? '⚠ ' : ''}${text}`);
 		})();
 
-		return h('div', { style: S.container },
+		// One status line, not three stacked blocks. The host Models page already
+		// prints the provider title ("Antigravity CLI") directly above this card,
+		// so the identity + credential clock + readiness all live on the line but
+		// one: account → state → "goes stale in N minutes" → refresh. Everything
+		// below this line is quota data only.
+		const accountAlias = account?.alias?.trim() ? account.alias : t('quota.accountUnknown');
+
+		// --- Collapse model -----------------------------------------------------
+		// The host renders this card as a sibling of the provider editor and only
+		// mounts that editor while the row is expanded (app.asar ModelsSection:
+		// `renderSlot('settings.models.provider-card', {…})`, then
+		// `open ? renderProviderEditor(…) : null`). The slot props carry no
+		// "expanded" flag, so the editor's presence in the DOM is the only signal
+		// available — and mirroring it is what makes 编辑 behave as the toggle for
+		// this card too: expanding the row opens the panel, collapsing it closes
+		// the panel. `manualOpen` lets the chevron override until the host state
+		// changes again.
+		const cardRef = useRef<HTMLDivElement | null>(null);
+		const [hostOpen, setHostOpen] = useState<boolean | null>(null);
+		const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+		useEffect(() => {
+			const root = cardRef.current;
+			if (root === null) return;
+			const row = root.closest('li');
+			const parent = root.parentElement;
+			// Walk to the element whose NEXT sibling is the editor: our own root
+			// when the slot renders it inline, otherwise the wrapper the slot core
+			// put around it.
+			const anchor = parent !== null && parent !== row ? parent : root;
+			let previous: boolean | null = null;
+			const probe = () => {
+				const open = anchor.nextElementSibling !== null;
+				if (open === previous) return;
+				previous = open;
+				setHostOpen(open);
+				setManualOpen(null);
+			};
+			probe();
+			const observer = new MutationObserver(probe);
+			observer.observe(row ?? (parent ?? root), { childList: true });
+			return () => observer.disconnect();
+		}, []);
+		const expanded = manualOpen ?? hostOpen ?? true;
+
+		// --- Side-by-side fields ------------------------------------------------
+		// Model and effort are "how the next turn runs". Both used to be pill
+		// clouds with one button per option, so opening up another model family
+		// (Pro, etc.) turned this block into a wall of pills that said nothing
+		// about which one was actually in effect. Two native selects stay one line
+		// tall for any catalog size; visibility is a scrollable checklist.
+		const defaultModelId = status?.defaultModel ?? '';
+		const defaultEffortId = status?.defaultEffort ?? '';
+		const catalogModelIds = new Set(catalogModels.map((m) => m.id));
+		const modelSelect = h('select', {
+			className: 'agy-select',
+			value: defaultModelId,
+			disabled: loadingAction === 'config:defaultModel' || catalogModels.length === 0,
+			title: defaultModelId,
+			onChange: (event: any) => void setCfg('defaultModel', String(event?.target?.value ?? '')),
+		}, [
+			// Keep the configured model selectable even when the catalog snapshot
+			// has not caught up (fresh login, empty quota answer): without this the
+			// select would silently display the first catalog entry instead.
+			defaultModelId !== '' && !catalogModelIds.has(defaultModelId)
+				? h('option', { key: '__current', value: defaultModelId }, defaultModelId)
+				: null,
+			catalogModels.length === 0
+				? h('option', { key: '__empty', value: defaultModelId }, defaultModelId === '' ? t('models.empty') : defaultModelId)
+				: null,
+			catalogModels.map((m) => h('option', { key: m.id, value: m.id }, m.name)),
+		]);
+		const effortSelect = h('select', {
+			className: 'agy-select',
+			value: defaultEffortId,
+			disabled: loadingAction === 'config:defaultEffort',
+			onChange: (event: any) => void setCfg('defaultEffort', String(event?.target?.value ?? '')),
+		}, [
+			h('option', { key: 'auto', value: '' }, t('effort.auto')),
+			h('option', { key: 'low', value: 'low' }, t('effort.low')),
+			h('option', { key: 'medium', value: 'medium' }, t('effort.medium')),
+			h('option', { key: 'high', value: 'high' }, t('effort.high')),
+		]);
+		const visibilityList = catalogModels.length === 0
+			? h('span', { style: S.muted }, t('models.empty'))
+			: h('div', { className: 'agy-checklist' },
+				catalogModels.map((m) => h('label', { key: m.id, className: 'agy-check-item', title: m.id },
+					h('input', {
+						type: 'checkbox',
+						checked: !hiddenModelSet.has(m.id),
+						disabled: loadingAction === 'config:hiddenModels',
+						onChange: () => void toggleModelHidden(m.id, !hiddenModelSet.has(m.id)),
+					}),
+					h('span', null, m.name),
+				)),
+			);
+		const settingsBlock = h('div', { style: { marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--agy-border-divider)' } },
+			h('div', { style: { display: 'flex', gap: '18px', alignItems: 'center', flexWrap: 'wrap' } },
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 } },
+					h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px', flexShrink: 0 } }, t('models.default')),
+					modelSelect,
+				),
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 } },
+					h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('effort.label')),
+					effortSelect,
+				),
+			),
+			h('div', { style: { marginTop: '10px' } },
+				h('span', {
+					style: { display: 'block', color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px', marginBottom: '6px', cursor: 'help' },
+					title: t('models.hint'),
+				}, t('models.label')),
+				visibilityList,
+			),
+		);
+
+		return h('div', { ref: cardRef, style: S.container },
 			h('style', null, GLOBAL_CSS),
 			h('div', { style: S.headerCard },
-				// No icon + "Antigravity" here: the host Models settings page
-				// already names this provider row ("Antigravity CLI"), so the
-				// panel body repeating the product name was the duplicate the
-				// account card did not need.
-				h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
+				h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', minWidth: 0 } },
+					h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' }, title: accountAlias }, accountAlias),
 					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? t('status.ready') : t('status.needsAuth')),
 					tokenLine,
+				),
+				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 } },
 					h('button', {
 						type: 'button',
 						className: 'agy-btn',
-						style: { ...S.btn, gap: '4px' },
+						style: { ...S.btn, padding: '4px 7px', gap: '0', minWidth: '24px', justifyContent: 'center' },
+						title: expanded ? t('panel.collapse') : t('panel.expand'),
+						'aria-expanded': expanded ? 'true' : 'false',
+						onClick: () => setManualOpen(!expanded),
+					}, expanded ? '▾' : '▸'),
+					h('button', {
+						type: 'button',
+						className: 'agy-btn',
+						style: { ...S.btn, gap: '4px', flexShrink: 0 },
 						disabled: isBusy,
 						onClick: () => void refreshQuota(),
 					}, loadingAction === 'refresh:all' ? [renderSpinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`]),
 				),
 			),
 			renderToastBanner(),
-			expiredBanner,
-			quotaCard,
-			h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--agy-border-divider)' } },
-				h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-					// No 权限模式 row here. It used to offer plan / accept-edits / skip,
-					// but the server answers `permissionMode: 'dsh-owned'` as a constant
-					// and POST /config has no branch for that key — so no button ever
-					// rendered as active and clicking did nothing at all. Permissions
-					// belong to the DSH session (docs/dsh-provider-contract.md: the
-					// provider never passes --dangerously-skip-permissions), which is
-					// why wiring it was not an option either. Shape + restore notes:
-					// docs/archived-panel-ui-20261020.md.
-					h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('effort.label')),
-						h('div', { style: S.segGroup },
-							h('button', {
-								type: 'button',
-								style: status?.defaultEffort === '' ? S.segBtnActive : S.segBtn,
-								onClick: () => void setCfg('defaultEffort', ''),
-							}, t('effort.auto')),
-							h('button', {
-								type: 'button',
-								style: status?.defaultEffort === 'low' ? S.segBtnActive : S.segBtn,
-								onClick: () => void setCfg('defaultEffort', 'low'),
-							}, t('effort.low')),
-							h('button', {
-								type: 'button',
-								style: status?.defaultEffort === 'medium' ? S.segBtnActive : S.segBtn,
-								onClick: () => void setCfg('defaultEffort', 'medium'),
-							}, t('effort.medium')),
-							h('button', {
-								type: 'button',
-								style: status?.defaultEffort === 'high' ? S.segBtnActive : S.segBtn,
-								onClick: () => void setCfg('defaultEffort', 'high'),
-							}, t('effort.high')),
-						),
-					),
-					h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-						h('span', { style: { color: 'var(--agy-text-primary)', fontWeight: 600, fontSize: '12.5px' } }, t('models.label')),
-						catalogModels.length === 0
-							? h('span', { style: S.muted }, t('models.empty'))
-							: h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } },
-								catalogModels.map((m) => {
-									const isHidden = hiddenModelSet.has(m.id);
-									return h('button', {
-										type: 'button',
-										key: m.id,
-										title: m.id,
-										disabled: loadingAction === 'config:hiddenModels',
-										style: isHidden ? { ...S.segBtn, opacity: 0.45, textDecoration: 'line-through' } : S.segBtnActive,
-										onClick: () => void toggleModelHidden(m.id, !isHidden),
-									}, m.name);
-								}),
-							),
-						h('span', { style: S.muted }, t('models.hint')),
-					),
-				),
-			),
+			expanded
+				? h('div', { style: { display: 'contents' } }, expiredBanner, quotaCard, settingsBlock)
+				: null,
 		);
 	};
 

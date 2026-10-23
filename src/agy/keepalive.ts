@@ -44,7 +44,7 @@
  * would only ever spin agy for nothing. The check that keeps running in the
  * lead window is a write comparison, not a process launch.
  */
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { buildAgyArgs, resolveAgyExecutable, runProcess, type ProcessResult } from './process.js'
 
 /** Windows Credential Manager target AGY stores its OAuth blob under. */
@@ -105,8 +105,17 @@ export interface KeyringTokenState {
   expiresAtMs?: number | undefined
 }
 
-/** Read the expiry of AGY's keyring credential. Never throws. */
-export function readKeyringTokenState(): KeyringTokenState {
+/** One decoded read of the Credential Manager blob. */
+export interface KeyringBlob {
+  accessToken: string | null
+  email?: string | undefined
+  name?: string | undefined
+  /** Epoch ms from `token.expiry`; undefined when the blob has no readable expiry. */
+  expiresAtMs?: number | undefined
+}
+
+/** macOS/Linux read path: untouched, never part of the Windows hot path. */
+function readKeyringTokenStateSyncImpl(): KeyringTokenState {
   if (process.platform !== 'win32') return {}
   try {
     const b64 = execFileSync(
@@ -135,6 +144,121 @@ export function readKeyringTokenState(): KeyringTokenState {
   } catch {
     return {}
   }
+}
+
+/**
+ * Synchronous expiry read. Non-Windows only: on Windows every `execFileSync`
+ * spawn blocks the host's event loop for 0.2–3 s (measured 2026-10-23), which is
+ * what made `/status` take 10–22 s. Windows callers must use the async
+ * `readKeyringTokenState()` / `readKeyringBlob()` instead.
+ */
+export function readKeyringTokenStateSync(): KeyringTokenState {
+  return readKeyringTokenStateSyncImpl()
+}
+
+function decodeKeyringBlob(b64: string): KeyringBlob {
+  const parsed = JSON.parse(Buffer.from(b64, 'base64').toString('utf8')) as {
+    token?: { access_token?: unknown; expiry?: unknown; expires_in?: unknown }
+    id_token?: unknown
+  }
+  const accessToken = typeof parsed?.token?.access_token === 'string' ? parsed.token.access_token : null
+  // `expiry` is the field agy.exe itself compares against before rotating the
+  // token, so it is the one reading the panel should trust: no id_token
+  // decoding, no guess from `expires_in`.
+  const rawExpiry = parsed?.token?.expiry
+  const parsedExpiry = typeof rawExpiry === 'string' ? Date.parse(rawExpiry) : Number.NaN
+
+  let email: string | undefined
+  let name: string | undefined
+  const idToken = parsed?.id_token
+  if (typeof idToken === 'string') {
+    try {
+      const p1 = idToken.split('.')[1]
+      if (p1) {
+        const payload = JSON.parse(Buffer.from(p1, 'base64').toString('utf8')) as { email?: unknown; name?: unknown }
+        email = typeof payload?.email === 'string' ? payload.email : undefined
+        name = typeof payload?.name === 'string' ? payload.name : undefined
+      }
+    } catch {}
+  }
+
+  return {
+    accessToken,
+    email,
+    name,
+    ...(Number.isFinite(parsedExpiry) ? { expiresAtMs: parsedExpiry } : {}),
+  }
+}
+
+// ---- async keyring reads (the only Windows path the web router may use) ----
+// Why: `readIdentityFromKeyring` used to spawn Windows PowerShell synchronously
+// and `/status` called it 2–3 times per request, so every settings RPC queued
+// behind a blocked event loop. Reads are async now, single-flighted, and
+// cached. The cache is a "last known value" (answers immediately even when
+// stale) plus a 30 s freshness window: a renewal done by keepalive or by a
+// normal message shows up without the panel paying another spawn.
+const KEYRING_FRESH_MS = 30_000
+let cachedBlob: KeyringBlob | undefined
+let cachedBlobAt = 0
+let blobInFlight: Promise<KeyringBlob> | undefined
+
+function blobIsFresh(now: number): boolean {
+  return cachedBlob !== undefined && now - cachedBlobAt < KEYRING_FRESH_MS
+}
+
+async function readKeyringBlobUncached(): Promise<KeyringBlob> {
+  if (process.platform !== 'win32') return { accessToken: null }
+  return await new Promise<KeyringBlob>((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `& { ${WIN_CRED_SCRIPT} }`, AGY_KEYRING_TARGET],
+      { encoding: 'utf8', timeout: 8000, windowsHide: true },
+      (error, stdout) => {
+        const b64 = typeof stdout === 'string' ? stdout.trim() : ''
+        // A spawn failure or an unreadable blob must not be cached as "signed
+        // out": the caller falls back to the last known value instead.
+        if (error !== null || b64.length === 0) {
+          resolve({ accessToken: null })
+          return
+        }
+        try {
+          resolve(decodeKeyringBlob(b64))
+        } catch {
+          resolve({ accessToken: null })
+        }
+      },
+    )
+  })
+}
+
+/**
+ * Current keyring contents. Never throws and never blocks the event loop.
+ * `force` bypasses the freshness window (used after a renewal). A concurrent
+ * read joins the one already running unless the caller forced.
+ */
+export async function readKeyringBlob(options: { force?: boolean | undefined } = {}): Promise<KeyringBlob> {
+  const now = Date.now()
+  if (options.force !== true && blobIsFresh(now)) return cachedBlob as KeyringBlob
+  if (blobInFlight !== undefined && options.force !== true) return blobInFlight
+  const run = readKeyringBlobUncached().then((blob) => {
+    if (blob.accessToken !== null) {
+      cachedBlob = blob
+      cachedBlobAt = Date.now()
+    }
+    return blob
+  })
+  blobInFlight = run
+  try {
+    return await run
+  } finally {
+    if (blobInFlight === run) blobInFlight = undefined
+  }
+}
+
+/** Expiry-only view of `readKeyringBlob`, for the keep-alive decision. */
+export async function readKeyringTokenState(options: { force?: boolean | undefined } = {}): Promise<KeyringTokenState> {
+  const blob = await readKeyringBlob(options)
+  return blob.expiresAtMs === undefined ? {} : { expiresAtMs: blob.expiresAtMs }
 }
 
 /**
@@ -178,7 +302,7 @@ export interface KeepaliveOptions {
   /** Injected for tests; defaults to `runProcess`. */
   run?: ((request: Parameters<typeof runProcess>[0]) => Promise<ProcessResult>) | undefined
   /** Injected for tests; defaults to `readKeyringTokenState`. */
-  readState?: (() => KeyringTokenState) | undefined
+  readState?: (() => KeyringTokenState | Promise<KeyringTokenState>) | undefined
 }
 
 export type KeepaliveReason = 'not-due' | 'no-expiry' | 'no-executable' | 'completed' | 'failed' | 'rejected' | 'not-rotated'
@@ -228,7 +352,7 @@ export async function refreshAgyTokenIfDue(options: KeepaliveOptions = {}): Prom
   const readState = options.readState ?? readKeyringTokenState
   const leadMs = options.leadMs ?? DEFAULT_KEEPALIVE_LEAD_MS
 
-  const before = readState()
+  const before = await readState()
   if (before.expiresAtMs === undefined) return { refreshed: false, reason: 'no-expiry' }
 
   const remainingMs = before.expiresAtMs - Date.now()
@@ -281,7 +405,7 @@ export async function refreshAgyTokenIfDue(options: KeepaliveOptions = {}): Prom
     }
   }
 
-  const after = readState()
+  const after = await readState()
   const expiresAtMs = after.expiresAtMs ?? before.expiresAtMs
   // A run that left the expiry untouched is a failure for our purposes even
   // though the process exited 0 — agy saw a token it considered valid, or the

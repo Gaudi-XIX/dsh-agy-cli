@@ -260,7 +260,7 @@ export function createConfigSchema(defaults: {
   const defaultToolPolicy = defaults.toolPolicy ?? 'reject'
 
   const schemaBase = z.object({
-    enabled: z.boolean().default(defaultEnabled).description('Enable AGY provider'),
+    enabled: z.boolean().default(defaultEnabled).description('Enable AGY provider').volatile(),
     // The route is fixed by this plugin and is not a user-facing setting.
     provider: z.string().default('agy').description('Provider route id').hidden(),
     model: z.string().default(DEFAULT_MODEL).description('Default model id (base, without -high/-medium/-low suffix)'),
@@ -313,12 +313,14 @@ export function createConfigSchema(defaults: {
     delayMs: z.number().min(0).max(60_000).default(0).description('Mock delay ms').hidden(),
   })
 
-  const schema = (z as any).transform(schemaBase, (data: any) => ({
-    ...data,
-    model: typeof data.model === 'string' ? (data.model as string).replace(/-(?:low|medium|high)$/i, '') : data.model,
-    models: Array.isArray(data.models) ? (data.models as any[]).map((m: any) => ({ ...m, id: typeof m.id === 'string' ? (m.id as string).replace(/-(?:low|medium|high)$/i, '') : m.id })) : data.models,
-    visibleModels: Array.isArray(data.visibleModels) ? (data.visibleModels as any[]).map((v: any) => typeof v === 'string' ? (v as string).replace(/-(?:low|medium|high)$/i, '') : v) : data.visibleModels,
-  }))
+  // Field-level `.volatile()` (used on `enabled` so the host Models settings
+  // page can project this Config into a namespace) is rejected by schemastery
+  // when the schema is wrapped in z.transform — the wrapper puts the object at
+  // a wildcard path (`$.*.enabled`) which the volatile placement rules treat as
+  // non-fixed. The suffix normalization that used to live here moved to the
+  // consumers: agy.ts:1164-1167 already normalizes model/models/visibleModels
+  // via normalizeModelId(), which covers every value this transform touched.
+  const schema = schemaBase
   const localized = (schema as any).i18n({
     'zh-CN': {
       enabled: { $description: '是否启用 AGY 提供方' },

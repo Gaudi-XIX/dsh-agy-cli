@@ -2,17 +2,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import http from 'node:http'
 import https from 'node:https'
 import tls from 'node:tls'
-import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config as ConfigType } from '../provider/config.js'
-import { configuredModels } from '../provider/config.js'
+import { configuredModels, normalizeModelId } from '../provider/config.js'
 import type { AgyModelDiscovery } from '../agy/models.js'
 import type { DshWebServerLike } from '../mcp/endpoint.js'
 import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides, type AgyRuntimeOverrides } from '../agy/overrides.js'
-import { lastKeepaliveOutcome, refreshAgyTokenIfDue } from '../agy/keepalive.js'
+import { lastKeepaliveOutcome, readKeyringBlob, refreshAgyTokenIfDue } from '../agy/keepalive.js'
 
 interface QuotaModelEntry {
   remainingFraction?: number
@@ -132,47 +131,6 @@ function updateCordisPatch(visibleModels?: string[], defaultModel?: string): voi
   } catch {}
 }
 
-const WIN_CRED_SCRIPT = `
-param($target)
-$sig = @'
-using System;
-using System.Runtime.InteropServices;
-public class WinCredHost {
-  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-  public static extern bool CredRead(string target, int type, int flags, out IntPtr credential);
-  [DllImport("advapi32.dll", SetLastError=true)]
-  public static extern void CredFree(IntPtr cred);
-  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-  public struct CREDENTIAL {
-    public int Flags;
-    public int Type;
-    public string TargetName;
-    public string Comment;
-    public long LastWritten;
-    public int CredentialBlobSize;
-    public IntPtr CredentialBlob;
-    public int Persist;
-    public int AttributeCount;
-    public IntPtr Attributes;
-    public string TargetAlias;
-    public string UserName;
-  }
-  public static string Read(string target) {
-    IntPtr ptr;
-    if (CredRead(target, 1, 0, out ptr)) {
-      CREDENTIAL c = (CREDENTIAL)Marshal.PtrToStructure(ptr, typeof(CREDENTIAL));
-      byte[] b = new byte[c.CredentialBlobSize];
-      Marshal.Copy(c.CredentialBlob, b, 0, c.CredentialBlobSize);
-      CredFree(ptr);
-      return System.Convert.ToBase64String(b);
-    }
-    return null;
-  }
-}
-'@
-Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue
-[Console]::Out.Write([WinCredHost]::Read($target))
-`
 
 interface KeyringIdentity {
   accessToken: string | null
@@ -182,48 +140,35 @@ interface KeyringIdentity {
   expiresAtMs?: number | undefined
 }
 
-function readIdentityFromKeyring(): KeyringIdentity {
-  if (process.platform !== 'win32') return { accessToken: null }
-  try {
-    const b64 = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `& { ${WIN_CRED_SCRIPT} }`, 'gemini:antigravity'],
-      { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] },
-    ).trim()
-    if (!b64) return { accessToken: null }
-    const jsonStr = Buffer.from(b64, 'base64').toString('utf8')
-    const parsed = JSON.parse(jsonStr)
-    const accessToken = parsed?.token?.access_token ?? null
-    // `expiry` is the field agy.exe itself compares against before rotating the
-    // token, so it is the one reading the panel should trust: no id_token
-    // decoding, no guess from `expires_in`.
-    const rawExpiry = parsed?.token?.expiry
-    const parsedExpiry = typeof rawExpiry === 'string' ? Date.parse(rawExpiry) : Number.NaN
-    const expiresAtMs = Number.isFinite(parsedExpiry) ? parsedExpiry : undefined
+// Why the async read matters: a keyring read used to be `execFileSync`, so each
+// one blocked the host's event loop for 0.2–3 s while Windows PowerShell
+// started. `/status` read it up to three times per request and the panel used to
+// poll, which is what made the Models page blank for 10–22 s (measured
+// 2026-10-23). `readKeyringBlob` in `../agy/keepalive.js` now owns the spawn:
+// async `execFile`, single-flight, and a 30 s freshness window — a renewal done
+// by anything else shows up within one window instead of costing a spawn per
+// panel open.
 
-    let email: string | undefined
-    let name: string | undefined
-    const idToken = parsed?.id_token || parsed?.token?.id_token
-    if (typeof idToken === 'string') {
-      try {
-        const parts = idToken.split('.')
-        const p1 = parts[1]
-        if (p1) {
-          const payload = JSON.parse(Buffer.from(p1, 'base64').toString('utf8'))
-          email = typeof payload?.email === 'string' ? payload.email : undefined
-          name = typeof payload?.name === 'string' ? payload.name : undefined
-        }
-      } catch {}
-    }
-
-    return { accessToken, email, name, expiresAtMs }
-  } catch {
-    return { accessToken: null }
+/** Identity of the signed-in account, from the shared async keyring read. */
+async function readIdentityFromKeyring(): Promise<KeyringIdentity> {
+  const blob = await readKeyringBlob()
+  return {
+    accessToken: blob.accessToken,
+    email: blob.email,
+    name: blob.name,
+    expiresAtMs: blob.expiresAtMs,
   }
 }
 
-function readAccessTokenFromKeyring(): string | null {
-  return readIdentityFromKeyring().accessToken
+/** Force a fresh keyring read after the credential may have been rotated. */
+function invalidateKeyringCache(): void {
+  // The keep-alive rewrites the credential itself; `refreshAgyTokenIfDue`
+  // re-reads with `force`, so nothing else has to be dropped here. Kept as a
+  // name so call sites read as intent rather than as a cache implementation.
+}
+
+async function readAccessTokenFromKeyring(): Promise<string | null> {
+  return (await readIdentityFromKeyring()).accessToken
 }
 
 function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, proxyUrl = 'http://127.0.0.1:12450'): Promise<any> {
@@ -355,15 +300,39 @@ export function getAttachDiagnostics(): { notes: Record<string, string>; cardPin
   return { notes: Object.fromEntries(bootNotes), cardPings: [...cardPings] }
 }
 
+// The 30 s TTL used to be checked only *after* a refresh finished, so every
+// concurrent request ran the whole chain anyway: the panel's poll and each
+// settings/model write piled two HTTPS round-trips onto the same quota endpoint.
+// Single-flight collapses them onto one in-flight promise. `force` (the manual
+// refresh button) is never handed a snapshot that started before it was
+// pressed — it queues behind the current run, then starts its own.
+let quotaInFlight: Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> | undefined
+
 async function refreshQuotas(force = false): Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> {
+  if (quotaInFlight !== undefined) {
+    const shared = quotaInFlight
+    if (!force) return shared
+    await shared.catch(() => undefined)
+  }
+  const run = fetchQuotas(force)
+  quotaInFlight = run
+  try {
+    return await run
+  } finally {
+    if (quotaInFlight === run) quotaInFlight = undefined
+  }
+}
+
+async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'anthropic' | 'openai', FamilyQuotaInfo>>> {
   const now = Date.now()
   const cacheFresh = !force && now - lastQuotaFetchTime < 30_000 && Object.keys(cachedQuotas).length > 0
   if (cacheFresh) {
     // A cached snapshot is only valid while the credential it describes is
     // still in the keyring unchanged. That is how a renewal done by anything
     // else (the timer, or this plugin's own keep-alive) shows up on the panel
-    // without waiting out the 30 s window.
-    if (readAccessTokenFromKeyring() === lastQuotaToken) return cachedQuotas
+    // without waiting out the 30 s window. The read is async + cached, so this
+    // costs a PowerShell spawn at most once per freshness window.
+    if ((await readAccessTokenFromKeyring()) === lastQuotaToken) return cachedQuotas
     lastQuotaFetchTime = 0
   }
 
@@ -385,8 +354,10 @@ async function refreshQuotas(force = false): Promise<Partial<Record<'google' | '
       })
     }
     // Read after the renewal attempt, never before: sending a token that was
-    // just replaced would guarantee a 401 for this very fetch.
-    const liveToken = readAccessTokenFromKeyring()
+    // just replaced would guarantee a 401 for this very fetch. Forced fresh —
+    // a cached token from before the renewal would be exactly the stale one.
+    invalidateKeyringCache()
+    const liveToken = await readAccessTokenFromKeyring()
     if (!liveToken) {
       lastQuotaError = 'unauthorized'
       return cachedQuotas
@@ -684,10 +655,10 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         hidden = discovered.map((m) => m.id).filter((id) => !activeConfig.visibleModels!.includes(id))
       }
 
-      const defaultModel = overrides.defaultModel ?? activeConfig.model ?? 'gemini-3.8-flash'
+      const defaultModel = overrides.defaultModel ?? (activeConfig.model ? normalizeModelId(activeConfig.model) : 'gemini-3.8-flash')
       const defaultEffort = overrides.defaultEffort ?? 'high'
 
-      const identity = readIdentityFromKeyring()
+      const identity = await readIdentityFromKeyring()
       const accountAlias = identity.email
         ? `${identity.name ? `${identity.name} ` : ''}(${identity.email})`
         : '本机主账号 (gemini:antigravity)'
@@ -789,7 +760,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     // 3. POST /plugins/agy-link/pool/refresh-quota
     reg('/plugins/agy-link/pool/refresh-quota', async (req, res) => {
       const quotas = await refreshQuotas(true)
-      const identity = readIdentityFromKeyring()
+      const identity = await readIdentityFromKeyring()
       const accountAlias = identity.email
         ? `${identity.name ? `${identity.name} ` : ''}(${identity.email})`
         : '本机主账号 (gemini:antigravity)'

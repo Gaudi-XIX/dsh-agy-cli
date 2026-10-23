@@ -7,8 +7,13 @@ import {
   ConfigSchema as ExportedConfigSchema,
 } from '../lib/index.js'
 
+// Since the volatile mount fix, `enabled` resolves to a Volatile reference
+// (host hot-writes it at runtime); unwrap it for plain assertions.
+const readEnabled = config => (config.enabled && typeof config.enabled.get === 'function' ? config.enabled.get() : config.enabled)
+
 test('Config applies safe M7 defaults and rejects invalid concurrency values', () => {
   const config = Config({})
+  assert.equal(readEnabled(config), false)
   assert.equal(config.minimumAgyVersion, '1.1.15')
   assert.equal(config.maxConcurrent, 4)
   assert.equal(config.maxQueue, 32)
@@ -77,10 +82,14 @@ test('Config accepts only bounded transient retry policy overrides', () => {
   assert.ok(!AGY_RETRYABLE_CODES.includes('AGY_INPUT_TOO_LARGE'))
 })
 
-test('Config normalizes model ids by stripping -high/-medium/-low suffix', () => {
-  assert.equal(Config({ model: 'gemini-3.7-flash-high' }).model, 'gemini-3.7-flash')
-  assert.equal(Config({ model: 'gemini-3.7-flash-medium' }).model, 'gemini-3.7-flash')
-  assert.equal(Config({ model: 'GEMINI-3.7-FLASH-LOW' }).model, 'GEMINI-3.7-FLASH')
+// Suffix normalization moved to the consumption side (agy.ts/mock.ts/router.ts):
+// the schema keeps the raw id, adapters call normalizeModelId(). See
+// tests 'Config filters visible models and maps effort suffix'.
+test('consumers normalize model ids by stripping -high/-medium/-low suffix', async () => {
+  const { normalizeModelId } = await import('../lib/provider/config.js')
+  assert.equal(normalizeModelId('gemini-3.7-flash-high'), 'gemini-3.7-flash')
+  assert.equal(normalizeModelId('gemini-3.7-flash-medium'), 'gemini-3.7-flash')
+  assert.equal(normalizeModelId('GEMINI-3.7-FLASH-LOW'), 'GEMINI-3.7-FLASH')
 })
 
 test('Config filters visible models and maps effort suffix', async () => {
@@ -108,8 +117,8 @@ test('Config provides zh-CN/en i18n descriptions for settings panel', () => {
 test('Config hides YAML-only fields and exposes the settings editor note', () => {
   const schema = Config
   const serialized = schema.toJSON()
-  const transformed = serialized.refs[String(serialized.uid)]
-  const root = serialized.refs[String(transformed.inner)]
+  // Without a transform wrapper the uid entry IS the root object schema.
+  const root = serialized.refs[String(serialized.uid)]
   const fieldMeta = key => serialized.refs[String(root.dict[key])].meta
 
   assert.equal(schema.meta.comment, '其余字段在 cordis.patch.yml 中，请直接编辑对应段。 (dsh-agy-provider)')
@@ -155,13 +164,17 @@ test('Config accepts optional purpose-specific route overrides', () => {
 })
 
 test('Config accepts explicit Agent capability presets and workspace roots', () => {
-  assert.deepEqual(Config({
+  const config = Config({
     agentPreset: 'workspace-write',
     workspaceRoot: 'C:\\workspace',
-  }), {
+  })
+  // `enabled` resolves to a Volatile reference (hot-writable flag); unwrap it.
+  assert.equal(readEnabled(config), false)
+  const rest = { ...config, enabled: undefined }
+  assert.deepEqual(rest, {
     // visibleModels present since 0.9.0
 
-    enabled: false,
+    enabled: undefined, // Volatile reference, asserted via readEnabled above
     provider: 'agy',
     model: 'gemini-3.1-pro',
     models: [],
@@ -276,17 +289,17 @@ test('cordis.patch.yml defines DSH-owned bundle defaults while library defaults 
 
   // Verify library defaults are disabled and reject
   const libraryDefault = Config({})
-  assert.equal(libraryDefault.enabled, false)
+  assert.equal(readEnabled(libraryDefault), false)
   assert.equal(libraryDefault.toolPolicy, 'reject')
   assert.equal(libraryDefault.agent, agentMatch?.[1])
 })
 
 test('public Config remains safe while BundleConfig exposes ready defaults', () => {
-  assert.equal(ExportedConfig({}).enabled, false)
+  assert.equal(readEnabled(ExportedConfig({})), false)
   assert.equal(ExportedConfig({}).toolPolicy, 'reject')
-  assert.equal(ExportedBundleConfig({}).enabled, true)
+  assert.equal(readEnabled(ExportedBundleConfig({})), true)
   assert.equal(ExportedBundleConfig({}).toolPolicy, 'dsh-owned')
-  assert.equal(ExportedConfigSchema({}).enabled, false)
+  assert.equal(readEnabled(ExportedConfigSchema({})), false)
   assert.equal(ExportedConfigSchema({}).toolPolicy, 'reject')
 })
 
