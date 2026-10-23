@@ -602,12 +602,23 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     // dispatched the entry (a directory/namespace problem) rather than the card
     // rendering nothing (a card problem). Read-only; safe to poll.
     reg('/plugins/agy-link/diagnose', (_req, res) => {
-      const llm = (ctx as unknown as {
-        llm?: {
-          listProviders?: () => Array<{ id: string }>
-          listConfigurableProviders?: () => Array<{ provider: string; displayName: string; settingsNs: string; settingsPath: string[] }>
-        }
-      }).llm
+      // The host turns any throwing handler into a bare 400 with an empty body.
+      // For a *diagnostic* endpoint that is the worst possible outcome: the one
+      // thing it exists to prevent is a failure nobody can read. So this handler
+      // never throws — it reads each service defensively and reports every
+      // problem inside the JSON.
+      let llm: {
+        listProviders?: () => Array<{ id: string }>
+        listConfigurableProviders?: () => Array<{ provider: string; displayName: string; settingsNs: string; settingsPath: string[] }>
+      } | undefined
+      let llmError: string | null = null
+      try {
+        llm = (ctx as unknown as { llm?: typeof llm }).llm
+      } catch (error) {
+        // Cordis throws on property access when a declared service is not
+        // currently mounted. That is exactly the state worth reporting here.
+        llmError = error instanceof Error ? error.message : String(error)
+      }
       const readOrNull = <T>(fn: () => T): T | string => {
         try {
           return fn()
@@ -615,19 +626,38 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
           return error instanceof Error ? error.message : String(error)
         }
       }
-      const configurable = readOrNull(() => (llm?.listConfigurableProviders?.() ?? [])
-        .map((entry) => ({ provider: entry.provider, displayName: entry.displayName, settingsNs: entry.settingsNs })))
+      const providers = llmError !== null
+        ? `unavailable: ${llmError}`
+        : readOrNull(() => (llm?.listProviders?.() ?? []).map((provider) => provider.id))
+      const configurable = llmError !== null
+        ? `unavailable: ${llmError}`
+        : readOrNull(() => (llm?.listConfigurableProviders?.() ?? [])
+          .map((entry) => ({ provider: entry.provider, displayName: entry.displayName, settingsNs: entry.settingsNs })))
       const diagnostics = getAttachDiagnostics()
-      sendJson(res, 200, {
+      const body = {
         cardSlot: 'settings.models.provider-card',
         cardKey: 'dsh-agy-provider',
         ...diagnostics,
-        providers: readOrNull(() => (llm?.listProviders?.() ?? []).map((provider) => provider.id)),
+        llmError,
+        providers,
         configurable,
         rowCarriesCardKey: Array.isArray(configurable)
           ? configurable.some((entry) => entry.settingsNs === 'dsh-agy-provider')
           : null,
-      })
+      }
+      try {
+        sendJson(res, 200, body)
+      } catch (error) {
+        // A body that cannot be serialized must still say so.
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({
+          cardSlot: body.cardSlot,
+          cardKey: body.cardKey,
+          notes: diagnostics.notes,
+          serializeError: error instanceof Error ? error.message : String(error),
+          rowCarriesCardKey: null,
+        }))
+      }
     })
 
     // The browser half reports every mount of the card here. A dispatch that
