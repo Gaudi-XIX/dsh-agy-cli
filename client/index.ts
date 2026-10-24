@@ -881,6 +881,51 @@ export function apply(ctx: ClientContext): void {
 			// by the FIRST toast's leftover timer.
 			if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
 		}, []);
+		// --- Collapse model -----------------------------------------------------
+		// The host renders this card as a sibling of the provider editor and only
+		// mounts that editor while the row is expanded (app.asar ModelsSection:
+		// `renderSlot('settings.models.provider-card', {…})`, then
+		// `open ? renderProviderEditor(…) : null`). The slot props carry no
+		// "expanded" flag, so the editor's presence in the DOM is the only signal
+		// available — and mirroring it is what makes 编辑 behave as the toggle for
+		// this card too: expanding the row opens the panel, collapsing it closes
+		// the panel. `manualOpen` lets the chevron override until the host state
+		// changes again.
+		//
+		// Declared here, above the `status === null` early return, on purpose: a
+		// hook that only runs once `/status` has answered changes this component's
+		// hook order between the loading render and the loaded render, and React
+		// answers that with "Rendered more hooks than during the previous render"
+		// — the card painted the spinner, then threw on the re-render and the host
+		// boundary replaced it with an empty element (the "only a title, nothing
+		// else" card).
+		const cardRef = useRef<HTMLDivElement | null>(null);
+		const [hostOpen, setHostOpen] = useState<boolean | null>(null);
+		const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+		useEffect(() => {
+			const root = cardRef.current;
+			if (root === null) return;
+			const row = root.closest('li');
+			const parent = root.parentElement;
+			// Walk to the element whose NEXT sibling is the editor: our own root
+			// when the slot renders it inline, otherwise the wrapper the slot core
+			// put around it.
+			const anchor = parent !== null && parent !== row ? parent : root;
+			let previous: boolean | null = null;
+			const probe = () => {
+				const open = anchor.nextElementSibling !== null;
+				if (open === previous) return;
+				previous = open;
+				setHostOpen(open);
+				setManualOpen(null);
+			};
+			probe();
+			const observer = new MutationObserver(probe);
+			observer.observe(row ?? (parent ?? root), { childList: true });
+			return () => observer.disconnect();
+		}, []);
+		const expanded = manualOpen ?? hostOpen ?? true;
+
 		const showToast = (text: string, type: ToastNotice['type'] = 'info') => {
 			setToast({ text, type, id: Date.now() });
 			if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
@@ -1226,43 +1271,6 @@ export function apply(ctx: ClientContext): void {
 		// one: account → state → "goes stale in N minutes" → refresh. Everything
 		// below this line is quota data only.
 		const accountAlias = account?.alias?.trim() ? account.alias : t('quota.accountUnknown');
-
-		// --- Collapse model -----------------------------------------------------
-		// The host renders this card as a sibling of the provider editor and only
-		// mounts that editor while the row is expanded (app.asar ModelsSection:
-		// `renderSlot('settings.models.provider-card', {…})`, then
-		// `open ? renderProviderEditor(…) : null`). The slot props carry no
-		// "expanded" flag, so the editor's presence in the DOM is the only signal
-		// available — and mirroring it is what makes 编辑 behave as the toggle for
-		// this card too: expanding the row opens the panel, collapsing it closes
-		// the panel. `manualOpen` lets the chevron override until the host state
-		// changes again.
-		const cardRef = useRef<HTMLDivElement | null>(null);
-		const [hostOpen, setHostOpen] = useState<boolean | null>(null);
-		const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-		useEffect(() => {
-			const root = cardRef.current;
-			if (root === null) return;
-			const row = root.closest('li');
-			const parent = root.parentElement;
-			// Walk to the element whose NEXT sibling is the editor: our own root
-			// when the slot renders it inline, otherwise the wrapper the slot core
-			// put around it.
-			const anchor = parent !== null && parent !== row ? parent : root;
-			let previous: boolean | null = null;
-			const probe = () => {
-				const open = anchor.nextElementSibling !== null;
-				if (open === previous) return;
-				previous = open;
-				setHostOpen(open);
-				setManualOpen(null);
-			};
-			probe();
-			const observer = new MutationObserver(probe);
-			observer.observe(row ?? (parent ?? root), { childList: true });
-			return () => observer.disconnect();
-		}, []);
-		const expanded = manualOpen ?? hostOpen ?? true;
 
 		// --- Side-by-side fields ------------------------------------------------
 		// Model and effort are "how the next turn runs". Both used to be pill
