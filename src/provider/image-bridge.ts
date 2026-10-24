@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   AttachmentStore,
@@ -14,6 +14,18 @@ export const IMAGE_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'imag
 export const DEFAULT_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 export const DEFAULT_IMAGE_MAX_COUNT = 4
 export type AgyImageMediaType = typeof IMAGE_MEDIA_TYPES[number]
+
+/**
+ * Images carried by the turn being answered are staged into a per-request temp
+ * directory and counted against `DEFAULT_IMAGE_MAX_COUNT`. Images from earlier
+ * turns are not: the request only accepts a handful of new ones, and rewriting
+ * every historical attachment on every turn is pure cost. They are materialized
+ * once into this stable cache instead, so their placeholder can still be opened
+ * on demand by the image-view Agent (or by the user in Explorer) long after the
+ * turn that uploaded them is over.
+ */
+export const IMAGE_HISTORY_CACHE_DIR = join(homedir(), '.dsh', 'agy-link', 'image-cache')
+const IMAGE_HISTORY_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 
 export type AgyImageBridgeErrorCode =
   | 'IMAGE_ATTACHMENT_UNAVAILABLE'
@@ -36,17 +48,25 @@ export interface PreparedAgyPrompts {
   fullPrompt: string
   /** Precomputed only when image placeholders are present; text-only keeps the old lazy path. */
   turnPrompt: string | undefined
+  /** Temp directory holding this turn's images; removed as soon as the turn ends. */
   imageDirectory: string | undefined
+  /** Stable cache holding earlier turns' images; never removed by a turn. */
+  imageCacheDirectory: string | undefined
   /** Exact staged files used to validate the dedicated image Agent's internal view_file events. */
   imagePaths: readonly string[]
+  /** True when this request replaced at least one image block with a placeholder. */
+  bridgeActive: boolean
   cleanup: () => Promise<void>
 }
 
 interface StagedImage {
-  path: string
+  /** Materialized file, or undefined when an earlier turn's image could not be cached. */
+  path: string | undefined
   mediaType: AgyImageMediaType
   width: number
   height: number
+  /** Earlier-turn images are cached, not staged, and their placeholder says so. */
+  history: boolean
 }
 
 export interface ImageBridgeOptions {
@@ -82,7 +102,13 @@ function mediaTypeOf(value: string): value is AgyImageMediaType {
 }
 
 function placeholderFor(image: StagedImage): string {
-  return `[IMAGE_ATTACHMENT file=${image.path} media_type=${image.mediaType} width=${image.width} height=${image.height}]`
+  const meta = `media_type=${image.mediaType} width=${image.width} height=${image.height}`
+  if (image.path === undefined) {
+    return `[IMAGE_ATTACHMENT ${meta} earlier_turn=unavailable]`
+  }
+  return image.history
+    ? `[IMAGE_ATTACHMENT file=${image.path} ${meta} earlier_turn=cached]`
+    : `[IMAGE_ATTACHMENT file=${image.path} ${meta}]`
 }
 
 function replaceImageBlocks(content: readonly ContentBlock[], images: ReadonlyMap<string, StagedImage>): ContentBlock[] {
@@ -148,6 +174,8 @@ async function stageImages(
   const maxBytes = options.maxBytes ?? DEFAULT_IMAGE_MAX_BYTES
   const maxCount = options.maxCount ?? DEFAULT_IMAGE_MAX_COUNT
   const uniqueRefs = [...new Map(refs.map(ref => [imageKey(ref), ref])).values()]
+  // Only the turn being answered is staged, so this budget is per message, not
+  // per conversation: earlier images are reference-only placeholders.
   if (uniqueRefs.length > maxCount) {
     throw new AgyImageBridgeError(
       `Agy image bridge accepts at most ${maxCount} images per request`,
@@ -177,6 +205,7 @@ async function stageImages(
         mediaType: validation.mediaType,
         width: stored.ref.width,
         height: stored.ref.height,
+        history: false,
       })
     }
 
@@ -198,30 +227,102 @@ async function stageImages(
   }
 }
 
+function cacheFileName(ref: ImageAttachmentRef, mediaType: AgyImageMediaType): string {
+  return `${String(ref.attachmentId).replace(/[^A-Za-z0-9._-]/g, '_')}${EXTENSIONS[mediaType]}`
+}
+
+let cachePruned = false
+
+/** Best-effort age-based pruning; a stale cache file costs disk, never correctness. */
+async function pruneImageHistoryCache(): Promise<void> {
+  if (cachePruned) return
+  cachePruned = true
+  try {
+    const entries = await readdir(IMAGE_HISTORY_CACHE_DIR)
+    const now = Date.now()
+    for (const entry of entries) {
+      const path = join(IMAGE_HISTORY_CACHE_DIR, entry)
+      const info = await stat(path).catch(() => undefined)
+      if (info !== undefined && info.isFile() && now - info.mtimeMs > IMAGE_HISTORY_CACHE_MAX_AGE_MS) {
+        await rm(path, { force: true }).catch(() => undefined)
+      }
+    }
+  } catch {
+    // No cache directory yet, or it is unreadable: the bridge still works, it
+    // just has nothing to reuse.
+  }
+}
+
 /**
- * Prepare text prompts for the experimental file bridge. The default path
- * intentionally delegates to the existing serializer and remains text-only.
+ * Materialize earlier turns' images into the stable cache. A failure here is not
+ * fatal on purpose: one unreadable attachment must not resurrect the very
+ * problem this path exists to fix, so it degrades to a placeholder that says
+ * `earlier_turn=unavailable` instead of failing the whole request.
+ */
+async function cacheHistoryImages(
+  refs: readonly ImageAttachmentRef[],
+  options: ImageBridgeOptions,
+): Promise<Map<string, StagedImage>> {
+  const images = new Map<string, StagedImage>()
+  const store = options.attachmentStore
+  await pruneImageHistoryCache()
+  for (const ref of refs) {
+    const key = imageKey(ref)
+    if (!mediaTypeOf(ref.mediaType)) continue
+    const mediaType = ref.mediaType
+    const width = ref.width ?? 0
+    const height = ref.height ?? 0
+    if (store === undefined) {
+      images.set(key, { path: undefined, mediaType, width, height, history: true })
+      continue
+    }
+    const path = join(IMAGE_HISTORY_CACHE_DIR, cacheFileName(ref, mediaType))
+    try {
+      await mkdir(IMAGE_HISTORY_CACHE_DIR, { recursive: true })
+      if ((await stat(path).catch(() => undefined)) === undefined) {
+        const stored = await store.readImage(ref, options.signal)
+        await writeFile(path, stored.data, { flag: 'w', mode: 0o600 })
+      }
+      images.set(key, { path, mediaType, width, height, history: true })
+    } catch {
+      images.set(key, { path: undefined, mediaType, width, height, history: true })
+    }
+  }
+  return images
+}
+
+function lastAssistantIndex(messages: readonly RequestMessage[]): number {
+  let index = -1
+  messages.forEach((message, at) => {
+    if (message.role === 'assistant') index = at
+  })
+  return index
+}
+
+/**
+ * Prepare text prompts for the experimental file bridge.
+ *
+ * Only the turn being answered is staged: the place budget belongs to one
+ * message, and a conversation accumulates images forever, so counting the whole
+ * replayed history used to kill every later turn once a fifth image existed.
+ * Earlier turns keep a placeholder that still points at a real file under
+ * `IMAGE_HISTORY_CACHE_DIR`, so nothing is thrown away — the image-view Agent
+ * can open it the moment the model actually needs it, one turn or fifty turns
+ * later, and the user can open the same path in Explorer.
  */
 export async function prepareAgyPrompts(
   options: Pick<GenerateOptions, 'messages' | 'system'>,
   bridgeOptions: ImageBridgeOptions,
 ): Promise<PreparedAgyPrompts> {
-  const refs = imageRefsOf(options.messages.flatMap(message => message.content))
-  if (refs.length === 0) {
+  const anyImage = imageRefsOf(options.messages.flatMap(message => message.content))
+  if (anyImage.length === 0 || !bridgeOptions.enabled) {
     return {
       fullPrompt: serializeAgyPrompt(options),
       turnPrompt: undefined,
       imageDirectory: undefined,
+      imageCacheDirectory: undefined,
       imagePaths: [],
-      cleanup: async () => undefined,
-    }
-  }
-  if (!bridgeOptions.enabled) {
-    return {
-      fullPrompt: serializeAgyPrompt(options),
-      turnPrompt: undefined,
-      imageDirectory: undefined,
-      imagePaths: [],
+      bridgeActive: false,
       cleanup: async () => undefined,
     }
   }
@@ -232,9 +333,25 @@ export async function prepareAgyPrompts(
     )
   }
 
-  const staged = await stageImages(refs, bridgeOptions)
+  // Everything after the last assistant message is the turn being answered;
+  // `serializeAgyTurnPrompt` slices at exactly the same boundary.
+  const turnStart = lastAssistantIndex(options.messages) + 1
+  const currentRefs: ImageAttachmentRef[] = []
+  const historyRefs: ImageAttachmentRef[] = []
+  options.messages.forEach((message, index) => {
+    const bucket = index >= turnStart ? currentRefs : historyRefs
+    for (const ref of imageRefsOf(message.content)) bucket.push(ref)
+  })
+
+  const staged = currentRefs.length === 0
+    ? { directory: undefined as string | undefined, images: new Map<string, StagedImage>(), cleanup: async (): Promise<void> => undefined }
+    : await stageImages(currentRefs, bridgeOptions)
+  const history = historyRefs.length === 0
+    ? new Map<string, StagedImage>()
+    : await cacheHistoryImages(historyRefs, bridgeOptions)
+  const images = new Map<string, StagedImage>([...history, ...staged.images])
   try {
-    const messages = replaceMessageImages(options.messages, staged.images)
+    const messages = replaceMessageImages(options.messages, images)
     return {
       fullPrompt: serializeAgyPrompt({
         ...(options.system === undefined ? {} : { system: options.system }),
@@ -242,7 +359,9 @@ export async function prepareAgyPrompts(
       }),
       turnPrompt: serializeAgyTurnPrompt({ messages }),
       imageDirectory: staged.directory,
-      imagePaths: [...staged.images.values()].map(image => image.path),
+      imageCacheDirectory: historyRefs.length === 0 ? undefined : IMAGE_HISTORY_CACHE_DIR,
+      imagePaths: [...images.values()].flatMap(image => (image.path === undefined ? [] : [image.path])),
+      bridgeActive: true,
       cleanup: staged.cleanup,
     }
   } catch (error) {

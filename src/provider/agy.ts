@@ -342,12 +342,17 @@ function samePath(left: string, right: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
+function isInsideDirectory(directory: string, selected: string): boolean {
+  const rel = relative(resolve(directory), selected)
+  return !rel.startsWith('..') && !isAbsolute(rel)
+}
+
 function isExpectedImagePath(candidate: string, prepared: PreparedAgyPrompts): boolean {
-  if (!isAbsolute(candidate) || prepared.imageDirectory === undefined) return false
-  const directory = resolve(prepared.imageDirectory)
+  if (!isAbsolute(candidate) || !prepared.bridgeActive) return false
   const selected = resolve(candidate)
-  const rel = relative(directory, selected)
-  if (rel.startsWith('..') || isAbsolute(rel)) return false
+  const allowed = [prepared.imageDirectory, prepared.imageCacheDirectory].some(directory =>
+    directory !== undefined && isInsideDirectory(directory, selected))
+  if (!allowed) return false
   return prepared.imagePaths.some(expected => samePath(expected, selected))
 }
 
@@ -357,7 +362,7 @@ function isAllowedImageToolEvent(
   imageRuntime: AgyAgentRuntime | undefined,
 ): boolean {
   if (
-    prepared.imageDirectory === undefined
+    !prepared.bridgeActive
     || imageRuntime?.agentPreset !== 'image-view'
     || imageRuntime.agent !== 'dsh-agy-image-view'
   ) return false
@@ -1905,7 +1910,7 @@ export class AgyAdapter extends LlmAdapter {
         sessionKey,
         dshContextSnapshot,
         toolSchemaCount,
-        prepared.imageDirectory !== undefined,
+        prepared.bridgeActive,
         useToolBridge,
       )) {
         let persistentRepairAttempts = 0
@@ -2093,8 +2098,9 @@ export class AgyAdapter extends LlmAdapter {
     const addDirs = [
       ...(this.addDirs ?? []),
       ...(prepared.imageDirectory === undefined ? [] : [prepared.imageDirectory]),
+      ...(prepared.imageCacheDirectory === undefined ? [] : [prepared.imageCacheDirectory]),
     ]
-    const imageRuntime = prepared.imageDirectory === undefined ? undefined : this.imageAgent
+    const imageRuntime = prepared.bridgeActive ? this.imageAgent : undefined
     const requestMode = imageRuntime?.mode ?? this.mode
     const requestDisableSlashCommands = imageRuntime?.disableSlashCommands ?? this.disableSlashCommands
     const queue = new AsyncQueue<AgyJsonEvent>()
