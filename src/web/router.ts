@@ -598,6 +598,7 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
  */
 const DEFAULT_CATALOG_MODELS = [
   { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
+  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro' },
 ]
 
 /** Quota families the panel renders. Same reasoning as above; see the doc. */
