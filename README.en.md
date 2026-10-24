@@ -6,13 +6,13 @@
 [![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-provider)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Gaudi-XIX/dsh-agy-provider)](https://github.com/Gaudi-XIX/dsh-agy-provider)
 
-Transform the locally authenticated **Google Antigravity CLI (AGY)** into a native, top-tier model provider for [DeepSeek Harness (DSH)](https://github.com/darkings/dsh).
+Integrates the locally authenticated **Google Antigravity CLI (AGY)** as a native model provider for [DeepSeek Harness (DSH)](https://github.com/darkings/dsh).
 
 ---
 
 ## Architectural Core: DSH Governs the Harness, AGY Powers Compliant Compute
 
-Unlike typical community Anti-gravity plugins, `dsh-agy-provider` establishes a strict, non-negotiable separation of responsibilities:
+Unlike common community Anti-gravity plugins, `dsh-agy-provider` establishes a strict division of responsibilities and control boundaries:
 
 > **The Harness (workspace sandboxing, approval policies, tool execution, context budgeting, and long-term memory) is 100% owned and executed by DSH;**  
 > **The AGY CLI is stripped of all tool permissions and demoted to a pure, compliant inference and quota provider.**
@@ -45,51 +45,61 @@ Unlike typical community Anti-gravity plugins, `dsh-agy-provider` establishes a 
 
 ---
 
-## Fundamental Distinctions from Peer Anti-Gravity Solutions
+## Technical Comparison with Peer DSH AGY Quota Plugins
 
-### 1. Absolute Compliance & Security by Design
+Compared to other DSH plugins that utilize AGY quota, this project differs fundamentally across three architectural dimensions:
 
-* **Zero-Reverse Engineering / No Stolen Tokens**:  
-  Peer plugins frequently rely on reverse-engineering internal Google Cloud Code RPCs, extracting and persisting private OAuth tokens, or running unauthorized local HTTP proxies. This plugin stores **zero credentials** and forges no network requests; all authentication and generation are 100% delegated to the user's legitimately installed, official `agy.exe` binary.
-* **Never Bypass Security Gates (`dsh-owned` Safety Loop)**:  
-  Many plugins inject `--dangerously-skip-permissions` into the CLI background processes to bypass confirmation prompts, allowing arbitrary shell execution without isolation. We strictly forbid privilege escalation flags. All terminal runs, file modifications, and network operations are held to DSH's native sandbox (`sandboxPolicy`) and approval presets (`read-only`, `workspace-write`, `danger-full-access`).
-* **Fail-Closed Structural Invariants**:  
-  Hardcoded 56 KiB prompt-budget ceilings, strict schema allowlisting, and prototype-pollution defenses ensure no prompt injection or payload tampering can break containment.
+### 1. Credential & Protocol Trust Boundary: Process Delegation vs. Reverse-Engineered Private RPC Proxy
 
-### 2. Orchestrated Tail-Stream Delivery
-
-* **Eliminating Stream Rollback (`CORTEX_STEP_STATUS_CANCELED`)**:  
-  The native `agy.exe` was designed for terminal interactive typing. Its I/O pipes are fragile: an early stdin EOF leads the CLI to interpret the turn as canceled, rolling back all previously streamed tokens. Through `stdinMode: hold` and output-driven adaptive idle watchdogs, we guarantee zero stream rollback.
-* **Structured Thought Folding & Tail-End Settlement**:  
-  Our stream state machine folds messy internal thoughts and intermediate tool commands in real time, settling and delivering clean, structured, and deterministic final answers at the tail of the turn.
-* **Partial Output Recovery**:  
-  Even under network drops or upstream proxy flakes, streamed text is safely salvaged and presented with diagnostic rationale notes rather than dropped.
+* **Peer Plugin Technical Path**:  
+  Extract and persist OAuth tokens within the DSH process, forge client headers, and make direct HTTP requests to Google Cloud Code private RPC endpoints, frequently accompanied by multi-account rotation mechanisms for quota scheduling.
+* **Our Technical Path**:  
+  Zero token extraction, zero token storage, and zero forged network traffic. All model generation is strictly delegated to the user's legitimately installed, official `agy.exe` binary. DSH communicates with the local process exclusively through standard `stream-json` IPC pipes.
+* **Advantages**:
+  - **Zero Risk of Account Bans or Abuse Flags**: Network transport (TLS, IP address, protocol fingerprints) and client authentication are handled entirely by the official binary. There is no risk of accounts being banned due to reverse-engineered private APIs or forged client fingerprints.
+  - **Clean Credential Boundary**: The plugin maintains zero credential stores and exposes zero credential leak surface.
+* **Trade-offs (Costs)**:
+  - **Inability to Support Multi-Account Pooling**: Strictly bound to the single authenticated local OS account, without in-memory account cycling or concurrent rotation. Quotas are strictly governed by official single-account limits.
+  - **Strict Host Environment Prerequisite**: Requires a pre-installed, officially authenticated CLI binary on the host machine.
 
 ---
 
-## Paradigm Shifts in Capabilities vs. Native AGY
+### 2. Execution & Sandbox Authority: DSH-Exclusive Authority vs. Bypassed Permissions
 
-| Capability Dimension | Native Anti-gravity CLI (Terminal TUI) | Enhanced by `dsh-agy-provider` |
-| :--- | :--- | :--- |
-| **Ecosystem Reach** | Isolated terminal sandbox, limited to built-in commands | **Full DSH Harness Universe**: Extensible MCP tools, Memory River, multi-agent teams |
-| **Multimodal Vision** | **Hard 4-Image Cap**: Exceeding 4 images crashes the entire session permanently | **Self-Healing Long-Horizon Multimodal**: Turn-budgeted staging (current turn ≤ 4 images) + content-addressed disk caching + historical placeholder recovery |
-| **Quota & Governance**| Black-box guesswork: deceived by prod 100% synthetic views, silent token expiry | **True Quota Transparency & Silent Keepalive**: Daily dual-window tracking with minute-level countdowns; automated keyring keepalive token rotation |
-| **Model UX** | Hardcoded suffixes like `gemini-3.8-flash-high` cluttering menus | **Decoupled Base & Reasoning Effort**: Independent base model select (Flash 3.8 / Pro 3.1) and reasoning effort select (Auto/Low/Med/High) |
+* **Peer Plugin Technical Path**:  
+  To simplify execution, some wrapper plugins inject `--dangerously-skip-permissions` into child processes, running commands unconstrained outside the sandbox; others allow internal CLI tool loops to overlap with DSH's tool loop, creating race conditions.
+* **Our Technical Path**:  
+  Injecting privilege escalation flags is strictly forbidden. The AGY CLI is restricted to pure model inference. Generated tool invocation intents are intercepted at the pipe layer, returning full execution control (100%) to DSH's ToolRuntime, strictly adhering to DSH's sandbox policy (`read-only` / `workspace-write` / `danger-full-access`) and user approval gates.
+* **Advantages**:
+  - **Strict Sandbox Integrity**: All file operations, shell commands, and network calls execute under DSH host governance; the model cannot bypass the sandbox through the underlying CLI.
+  - **Single Execution Loop**: Eliminates dual-loop race conditions between CLI internal tool mechanisms and DSH's host tool system.
+* **Trade-offs (Costs)**:
+  - **Inter-Process IPC Latency**: Each tool execution step must traverse process boundaries (intent capture -> DSH host execution -> formatted input frame replay). Multi-step tool chains exhibit higher end-to-end latency than pure in-memory direct API bindings.
 
 ---
 
-## Technical Trade-offs & Limitations
+### 3. Stream Pipeline & Lifecycle Control: State-Machine Orchestration vs. Raw Stream Passthrough
 
-Choosing strict DSH harness ownership and pipe orchestration requires accepting explicit engineering trade-offs:
+* **Peer Plugin Technical Path**:  
+  Raw stdout from child processes is passed directly outward. Because the AGY CLI stdin lifecycle is not managed, an early EOF on stdin causes the CLI to misinterpret the turn as canceled (`CORTEX_STEP_STATUS_CANCELED`), rolling back and clearing previously streamed tokens; outputs also intermingle raw thought traces with final answers.
+* **Our Technical Path**:  
+  Employs `stdinMode: hold` to actively maintain the stdin pipe open until an explicit completion frame is emitted by the CLI. An output state-machine intercepts the stream, folding thoughts in real time and settling a clean, deterministic tail-stream answer at turn completion. Streamed text is safely preserved even upon unexpected pipe disconnects.
+* **Advantages**:
+  - **Eliminates Stream Rollback**: Completely resolves the issue of tokens being rolled back due to premature stdin closure.
+  - **Structured Output Delivery**: Intermediate reasoning traces and final delivery text are cleanly stratified, preventing raw logs from polluting conversation history.
+* **Trade-offs (Costs)**:
+  - **Increased Pre-Roll Latency (TTFT)**: Each turn incurs process spawn, CLI startup handshakes, and state-machine pre-processing overhead, introducing a 1–2 second delay before the first token appears compared to raw HTTP streaming.
+  - **Sensitivity to Closed-Source Binary Changes**: The external state machine tightly couples with the CLI's `stream-json` line format. Upstream schema or error payload modifications require maintenance updates.
 
-1. **Dual Event Loop Impedance & IPC Latency**:  
-   DSH owns its own Tool Loop, while AGY has an internal agent loop. Intercepting and mapping tool calls across process pipes incurs higher end-to-end latency per tool call compared to direct in-memory API bindings.
-2. **Double-Accounting Context Friction**:  
-   DSH maintains global memory compaction, while `agy.exe` maintains its internal conversation store. Replaying full history requires strict frame budgeting (e.g. 56 KiB cap and tool section eviction) to avoid pipe choke-points.
-3. **Pre-roll Latency (TTFT)**:  
-   Process spawn, CLI self-checks, and thought-folding state machines add 1–2 seconds of pre-roll delay before the first token lands compared to bare HTTP streaming.
-4. **No Multi-Account Pooling Arbitrage**:  
-   We strictly adhere to the single authorized Windows Credential Manager account, with no support for unauthorized account-pool rotations.
+---
+
+### Summary of Architectural Trade-offs
+
+| Engineering Trade-offs / Concessions | Architectural Gains / Advantages |
+| :--- | :--- |
+| **No multi-account pool cycling** (bounded by single-account quota) | **Zero account ban risk** (100% compliant official authentication and network fingerprint) |
+| **Inter-process IPC latency** (cross-boundary tool call overhead) | **Guaranteed sandbox integrity** (DSH exclusively owns ToolRuntime and approval gates) |
+| **Higher initial latency (TTFT) & state-machine maintenance** | **Zero stream rollback** (structured tail-stream delivery and partial text recovery) |
 
 ---
 
@@ -133,13 +143,13 @@ npx @deepseek-ai/dsh plugin --profile desktop add dsh-agy-provider@0.10.0
 
 ---
 
-## Diagnostics & Verification
+## Diagnostics & Testing
 
 ```powershell
-# Run profile diagnostic inspection without consuming model quota
+# Run profile diagnostic inspection without consuming quota
 npx dsh-agy-provider doctor --profile desktop --json
 
-# Run test suite (all 317 tests passing)
+# Run automated test suite
 npm test
 ```
 
