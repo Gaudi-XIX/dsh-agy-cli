@@ -37,7 +37,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/darkings/dsh-agy-provider.git"
+    "url": "git+https://github.com/Gaudi-XIX/dsh-agy-provider.git"
   },
   "dsh": {
     "bundle": {

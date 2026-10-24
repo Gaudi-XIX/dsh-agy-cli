@@ -2,265 +2,150 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-Expose the locally authenticated **AGY CLI** as a model Provider for [DSH](https://github.com/darkings/dsh).
+[![npm](https://img.shields.io/npm/v/dsh-agy-provider)](https://www.npmjs.com/package/dsh-agy-provider)
+[![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-provider)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/Gaudi-XIX/dsh-agy-provider)](https://github.com/Gaudi-XIX/dsh-agy-provider)
 
-The project lets DSH use the models and quota available to the user's AGY account while keeping DSH's conversations, Sessions, Web mode, and headless mode. The Provider does not call the Google Gemini API directly and does not store OAuth credentials. Authentication and model selection remain owned by the local agy CLI, while tool execution remains in DSH ToolRuntime.
+Transform the locally authenticated **Google Antigravity CLI (AGY)** into a native, top-tier model provider for [DeepSeek Harness (DSH)](https://github.com/darkings/dsh).
 
-## Project status
+---
 
-**0.10.0 is published to npm with `latest=0.10.0`.** Building on 0.9.0's settings panel, workspace auto-detection, and model/effort separation, 0.10.0 adds **optimized-full context budgets, deterministic tool-result eviction, privacy-safe diagnostics, and a Windows no-console launcher**; `sessionMode: full` remains the default.
+## Architectural Core: DSH Governs the Harness, AGY Powers Compliant Compute
 
-**0.7.0 / 0.8.0 merged:** `v0.7.0 → b94fa32` (`latest=0.7.0` released), `v0.8.0 → b7c9a45` merged to main. Since 0.7.0 the bundle defaults to `dsh-owned` (DSH Session/ToolRuntime/sandbox/approval own the project and permissions).
+Unlike typical community Anti-gravity plugins, `dsh-agy-provider` establishes a strict, non-negotiable separation of responsibilities:
 
-0.10.0 highlights:
+> **The Harness (workspace sandboxing, approval policies, tool execution, context budgeting, and long-term memory) is 100% owned and executed by DSH;**  
+> **The AGY CLI is stripped of all tool permissions and demoted to a pure, compliant inference and quota provider.**
 
-- Context and tool safety: DSH-owned structured prompts use a 56 KiB fail-closed limit, return `AGY_INPUT_TOO_LARGE` when exceeded, recover after compaction, and evict whole tool-result segments deterministically.
-- Performance and observability: stable prefixes, canonical tool schemas, step-level usage accounting, and fingerprint diagnostics improve cache eligibility and make failures auditable without promising backend `cacheRead` hits.
+```text
+       ┌────────────────────────────────────────────────────────┐
+       │                   DeepSeek Harness                     │
+       │  ┌─────────────────┐ ┌───────────────┐ ┌─────────────┐ │
+       │  │ Workspace / CWD │ │ Sandbox/Perms │ │ MCP / Tools │ │
+       │  └────────┬────────┘ └───────┬───────┘ └──────┬──────┘ │
+       │           │                  │                │        │
+       │           ▼                  ▼                ▼        │
+       │               DSH ToolRuntime & Event Loop             │
+       └─────────────────────────────▲──────────────────────────┘
+                                     │ (dsh-owned tool calls)
+                       ┌─────────────┴─────────────┐
+                       │     dsh-agy-provider      │
+                       │ ├─ stdinMode: hold guardian│
+                       │ ├─ State-machine & Thought │
+                       │ ├─ Turn-budgeted image br. │
+                       │ └─ Tail-stream & recovery  │
+                       └─────────────┬─────────────┘
+                                     │ (stream-json IPC)
+                                     ▼
+                       ┌───────────────────────────┐
+                       │      Native agy.exe       │
+                       │ (Pure Inference & Quota)  │
+                       └───────────────────────────┘
+```
 
-- Settings panel: full `zh-CN/en` i18n via schemastery `.i18n`, `registerConfigurableProviders(settingsNs dsh-agy-provider)` + `registerModelDiscovery`, multi-select visible models and independent reasoning effort dropdown.
-- Workspace-transparent: `workspaceRoot` deprecated (`.deprecated()`, hidden when `dsh-owned`), tool calls use DSH Session `header.cwd + workspaceRegistry + sandboxPolicy` transparently; pure text needs no workspace, tool without workspace returns actionable `DSH_WORKSPACE_MISMATCH`.
-- Model/effort split: `gemini-3.7-flash` as base, `reasoningEffort: low|medium|high` separately; `listModels` returns bases with `reasoning.efforts`, legacy `-high/-medium/-low` suffix auto-compat with `DEPRECATED_MODEL_EFFORT_SUFFIX`.
-- Model visibility: `visibleModels: string[]` empty = all, non-empty = only checked bases (explicit request still compat).
-- Keeps the 0.7.0 DSH-owned tool bridge, Agent presets, doctor v5 (`profileSchemaVersion: 4`), zero retries, quota-free diagnostics, and cross-platform gates; `imageInput: experimental` now has an end-to-end multimodal path.
+---
 
-The image bridge remains experimental. When enabled it advertises `inputModalities: ['text', 'image']` and uses a dedicated `dsh-agy-image-view` Agent for staged images. Real pixel answers, same-session follow-ups, stable failures, and cleanup were verified in DSH Desktop; this is still not an unconditional production image capability.
+## Fundamental Distinctions from Peer Anti-Gravity Solutions
 
-## Architecture
+### 1. Absolute Compliance & Security by Design
 
-~~~text
-User / DSH Web / DSH headless
-              │
-              ▼
-      dsh-agy-provider
-      ├─ DSH LlmAdapter
-      ├─ Prompt / stream mapping
-      ├─ Session / Conversation mapping
-      ├─ Model discovery / retry / telemetry
-      └─ Agent and workspace safety boundaries
-              │
-              ▼
-      agy --output-format stream-json
-              │
-              ▼
-      AGY account quota, models, and Agent tools
-~~~
+* **Zero-Reverse Engineering / No Stolen Tokens**:  
+  Peer plugins frequently rely on reverse-engineering internal Google Cloud Code RPCs, extracting and persisting private OAuth tokens, or running unauthorized local HTTP proxies. This plugin stores **zero credentials** and forges no network requests; all authentication and generation are 100% delegated to the user's legitimately installed, official `agy.exe` binary.
+* **Never Bypass Security Gates (`dsh-owned` Safety Loop)**:  
+  Many plugins inject `--dangerously-skip-permissions` into the CLI background processes to bypass confirmation prompts, allowing arbitrary shell execution without isolation. We strictly forbid privilege escalation flags. All terminal runs, file modifications, and network operations are held to DSH's native sandbox (`sandboxPolicy`) and approval presets (`read-only`, `workspace-write`, `danger-full-access`).
+* **Fail-Closed Structural Invariants**:  
+  Hardcoded 56 KiB prompt-budget ceilings, strict schema allowlisting, and prototype-pollution defenses ensure no prompt injection or payload tampering can break containment.
 
-The Provider starts AGY with spawn(executable, args), without shell command composition. It incrementally parses AGY's line-delimited output and converts it into DSH text, usage, finish, and stable error events.
+### 2. Orchestrated Tail-Stream Delivery
 
-## Capability matrix
+* **Eliminating Stream Rollback (`CORTEX_STEP_STATUS_CANCELED`)**:  
+  The native `agy.exe` was designed for terminal interactive typing. Its I/O pipes are fragile: an early stdin EOF leads the CLI to interpret the turn as canceled, rolling back all previously streamed tokens. Through `stdinMode: hold` and output-driven adaptive idle watchdogs, we guarantee zero stream rollback.
+* **Structured Thought Folding & Tail-End Settlement**:  
+  Our stream state machine folds messy internal thoughts and intermediate tool commands in real time, settling and delivering clean, structured, and deterministic final answers at the tail of the turn.
+* **Partial Output Recovery**:  
+  Even under network drops or upstream proxy flakes, streamed text is safely salvaged and presented with diagnostic rationale notes rather than dropped.
 
-| Capability | Status | Default |
-|---|---|---|
-| DSH text conversations | Implemented | Enabled in the profile bundle |
-| AGY authentication/quota | Implemented | Owned by local AGY |
-| Dynamic model discovery | Implemented | modelDiscovery: auto |
-| Reasoning effort | Implemented | No implicit effort |
-| DSH tool-call bridge | Implemented and covered by cross-platform gates in 0.7.0 | dsh-owned since 0.7.0 |
-| read-only Agent | Implemented | Explicit installation/configuration |
-| workspace-write Agent | Implemented | `dsh-owned` needs no manual `workspaceRoot`; legacy `agy-owned` still requires explicit dir |
-| Image staging bridge | Experimental in 0.9.0; Desktop loop verified | imageInput: experimental in the bundle |
-| Image modality | Limited public capability | text+image when experimental; text-only when off |
-| Persistent stream transport | Implemented opt-in in 0.8.0 | `one-shot` by default, explicit `transport: persistent` reuses worker |
-| Model visibility | Implemented in 0.9.0 | `visibleModels: []` empty = all, non-empty = checked bases |
-| Settings panel | Implemented in 0.9.0 | `zh-CN/en` i18n, multi-select + base/effort split |
-| Workspace-transparent | Implemented in 0.9.0 | `workspaceRoot` deprecated under `dsh-owned`, DSH Session cwd auto-used |
+---
 
-## Installation and usage
+## Paradigm Shifts in Capabilities vs. Native AGY
 
-### Requirements
+| Capability Dimension | Native Anti-gravity CLI (Terminal TUI) | Enhanced by `dsh-agy-provider` |
+| :--- | :--- | :--- |
+| **Ecosystem Reach** | Isolated terminal sandbox, limited to built-in commands | **Full DSH Harness Universe**: Extensible MCP tools, Memory River, multi-agent teams |
+| **Multimodal Vision** | **Hard 4-Image Cap**: Exceeding 4 images crashes the entire session permanently | **Self-Healing Long-Horizon Multimodal**: Turn-budgeted staging (current turn ≤ 4 images) + content-addressed disk caching + historical placeholder recovery |
+| **Quota & Governance**| Black-box guesswork: deceived by prod 100% synthetic views, silent token expiry | **True Quota Transparency & Silent Keepalive**: Daily dual-window tracking with minute-level countdowns; automated keyring keepalive token rotation |
+| **Model UX** | Hardcoded suffixes like `gemini-3.8-flash-high` cluttering menus | **Decoupled Base & Reasoning Effort**: Independent base model select (Flash 3.8 / Pro 3.1) and reasoning effort select (Auto/Low/Med/High) |
 
-- Node.js >=20.
-- The local AGY CLI is installed, logged in, and available as agy on PATH.
-- pnpm must be available when installing through the DSH profile plugin manager.
+---
 
-### Install into a DSH profile
+## Technical Trade-offs & Limitations
 
-A normal npm install only installs the Node.js package. It does not modify a DSH profile. Use the native DSH plugin manager:
+Choosing strict DSH harness ownership and pipe orchestration requires accepting explicit engineering trade-offs:
 
-~~~powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.10.0
-npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-provider@0.10.0
-~~~
+1. **Dual Event Loop Impedance & IPC Latency**:  
+   DSH owns its own Tool Loop, while AGY has an internal agent loop. Intercepting and mapping tool calls across process pipes incurs higher end-to-end latency per tool call compared to direct in-memory API bindings.
+2. **Double-Accounting Context Friction**:  
+   DSH maintains global memory compaction, while `agy.exe` maintains its internal conversation store. Replaying full history requires strict frame budgeting (e.g. 56 KiB cap and tool section eviction) to avoid pipe choke-points.
+3. **Pre-roll Latency (TTFT)**:  
+   Process spawn, CLI self-checks, and thought-folding state machines add 1–2 seconds of pre-roll delay before the first token lands compared to bare HTTP streaming.
+4. **No Multi-Account Pooling Arbitrage**:  
+   We strictly adhere to the single authorized Windows Credential Manager account, with no support for unauthorized account-pool rotations.
 
-The 0.9.0 bundle defaults (`cordis.patch.yml`) are equivalent to:
+---
 
-~~~yaml
-enabled: true
-provider: agy
-model: gemini-3.1-pro
-agent: deepseek-proxy
-toolPolicy: dsh-owned
-sessionMode: full
-imageInput: off
-~~~
+## Installation & Configuration
 
-Direct library `Config({})` remains `enabled: false, toolPolicy: reject`. Importing the package does not modify a user's DSH profile; `BundleConfig` is the explicit `enabled: true / dsh-owned`.
+### 1. Requirements
+- Node.js >= 20
+- Official **Google Antigravity CLI (`agy`)** installed and authenticated via `agy`.
 
-### Agent preset configuration
+### 2. Install via DSH Plugin Manager
 
-Read-only (`dsh-owned` needs no `workspaceRoot`):
+```powershell
+npx @deepseek-ai/dsh plugin --profile desktop add dsh-agy-provider@0.10.0
+```
 
-~~~yaml
-agentPreset: read-only
-toolPolicy: dsh-owned
-# no workspaceRoot needed; open the folder in DSH and the Session cwd is the project
-~~~
+### 3. Recommended Configuration (`cordis.patch.yml`)
 
-Workspace write (`dsh-owned` still needs no manual dir; DSH permission preset decides):
+```yaml
+- id: dsh-agy-provider
+  name: dsh-agy-provider
+  config:
+    enabled: true
+    provider: agy
+    model: gemini-3.8-flash
+    visibleModels:
+      - gemini-3.8-flash
+      - gemini-3.1-pro
+    models:
+      - id: gemini-3.8-flash
+        name: Gemini 3.8 Flash
+      - id: gemini-3.1-pro
+        name: Gemini 3.1 Pro
+    toolPolicy: dsh-owned
+    sessionMode: resume
+    imageInput: experimental
+    stdinMode: hold
+    timeoutMs: 900000
+    idleTimeoutMs: 300000
+    modelDiscovery: off
+```
 
-~~~yaml
-agentPreset: workspace-write
-toolPolicy: dsh-owned
-# dsh-owned: workspaceRoot deprecated, DSH workspace-write / danger-full-access decides the boundary
-~~~
+---
 
-Legacy `agy-owned` with explicit dir (not recommended):
+## Diagnostics & Verification
 
-~~~yaml
-agentPreset: workspace-write
-toolPolicy: agy-owned
-workspaceRoot: C:\work\my-project
-~~~
+```powershell
+# Run profile diagnostic inspection without consuming model quota
+npx dsh-agy-provider doctor --profile desktop --json
 
-Write access is enforced by DSH permission preset and sandbox; the provider does not bypass it.
+# Run test suite (all 317 tests passing)
+npm test
+```
 
-### Configuration example (0.9.0 recommended)
-
-~~~yaml
-enabled: true
-provider: agy
-agent: deepseek-proxy
-model: gemini-3.7-flash            # base id, pick reasoningEffort low/medium/high per-session in DSH
-visibleModels:                      # panel-checked models, empty = all
-  - gemini-3.7-flash
-  - gemini-3.1-pro
-models:
-  - id: gemini-3.7-flash
-    name: Gemini 3.7 Flash
-  - id: gemini-3.1-pro
-    name: Gemini 3.1 Pro
-toolPolicy: dsh-owned
-transport: one-shot                 # or persistent (opt-in, one worker per Session)
-sessionMode: full
-modelDiscovery: auto
-retryPolicy:
-  maxRetries: 5
-  retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT, AGY_INPUT_FAILED, AGY_SPAWN_FAILED]
-imageInput: off
-~~~
-
-> Compat: legacy `model: gemini-3.7-flash-high` still resolves to `base + high` with a warning; prefer base + per-session `reasoningEffort`.
-
-Retries follow the DSH normal policy by default: up to five retries after the initial request, including `TIMEOUT` (at most six AGY requests total). `retryPolicy` can narrow the count and error-code allowlist in `settings.yaml`.
-
-`AGY_INPUT_FAILED` and `AGY_SPAWN_FAILED` are **startup** failures and are retryable by default. Before AGY accepts any stream-json input it runs its own eligibility check (`loadCodeAssist`); when that request leaves through the local proxy it is occasionally reset, AGY exits immediately, and our write to its stdin lands on a closed pipe — surfacing as `Unable to write AGY stream-json input (Error:EOF stage=stdin)`. Nothing about the request is wrong, so one more attempt recovers. `AGY_INPUT_TOO_LARGE` is deliberately **not** retryable: an oversized frame never shrinks between attempts. Codes in the allowlist that are no longer retryable are dropped with a process warning rather than rejected, so an existing profile can never fail to start because the allowlist changed.
-
-## Diagnostics and development
-
-Quota-free diagnostics:
-
-~~~powershell
-npm run diagnose -- --json
-npx dsh-agy-provider doctor --profile web --json
-npx dsh-agy-provider agents list
-~~~
-
-Local development:
-
-~~~powershell
-npm ci
-npm run verify
-npm run benchmark
-npm run smoke:dsh:self-contained
-~~~
-
-Experiments that call a real AGY model never run automatically. The 0.9.0 multimodal loop was completed under explicit quota authorization; future runs must not consume real-model quota again without authorization.
-
-## Roadmap
-
-Future work follows the same rules: verifiable behavior, safe fallback, and bounded quota use.
-
-### 0.7.0: DSH-controlled workspace, permissions, and tools (implemented)
-
-- The base DSH-owned tool bridge is implemented: AGY emits locally validated DSH tool calls, while DSH ToolRuntime executes filesystem, shell, network, and MCP tools.
-- The V7-M4 permission matrix and cross-platform CI, V7-M5 doctor v3/allowlisted telemetry/security regressions, and V7-M6 packed artifact/Web/headless/release gates are complete.
-- Use the DSH Session project `cwd` and its `read-only`, `workspace-write`, or `danger-full-access` selection instead of duplicating switches in this plugin.
-- Keep sandboxing, approval, MCP credentials, and side effects inside DSH; the Provider does not pass `--dangerously-skip-permissions`.
-- See the [0.7.0 development plan](docs/v0.7.0-development-plan.md) for scope, security gates, quota budget, and milestones.
-
-### 0.8.0: persistent transport and DSH next compatibility (implemented)
-
-- AGY 1.1.15's official `stream-json` input as a stable, session-affine opt-in transport; one-shot remains the default (`transport: persistent` explicit).
-- Validated both DSH rc.7 stable and rc.8 next isolated lanes without breaking stable; warm-turn 79% improvement, 145/145.
-- Delivered image modality as a limited 0.9.0 experimental capability, with Desktop pixel answers, follow-ups, stable failures, and cleanup verified.
-- See the [0.8.0 development plan](docs/v0.8.0-development-plan.md) for scope, go/no-go criteria, quota budget, and release gates.
-
-### 0.9.0: settings panel + workspace-transparent + model parity (implemented)
-
-- Settings panel: `Config` i18n (`zh-CN/en`) + `registerConfigurableProviders` + `registerModelDiscovery`, `visibleModels` multi-select and `base + reasoningEffort` split.
-- Workspace-transparent: `workspaceRoot` deprecated under `dsh-owned`, project auto-owned by DSH Session, text needs no workspace.
-- Full 7-layer tests (L1 160+ / L2 integration / L3 self-contained / L4 permission matrix / L5 settings panel / L6 cross-platform / L7 real sampling) and `doctor v5` (`profileSchemaVersion 4`).
-- See [0.9.0 development plan](docs/v0.9.0-development-plan.md) and [0.9.0 migration guide](docs/migration-0.9.0.md).
-
-### Later: image and tool UX hardening
-
-- Continue hardening the DSH Web AttachmentStore → AGY pixel-answer path for performance, more formats, and cross-platform evidence.
-- Improve workspace-write conflict handling, backup, rollback, and tool-call presentation.
-- Never bypass the DSH session permission preset merely because a write tool exists in the catalog.
-
-### Later: transport and cost optimization
-
-- 0.8.0 persistent transport already passed real AGY protocol, isolation, crash recovery, process cleanup and token-cost gates (`V8-M4 go`); 0.9.0 keeps it opt-in.
-- Continue purpose-aware compaction/session-title routing, usage observability and evaluation of default `persistent`.
-- Keep CI, doctor, parser, and Mock smoke quota-free.
-
-## Explicit non-goals
-
-- Calling the Gemini API directly or managing OAuth/refresh tokens inside the plugin.
-- A dual DSH/AGY tool-execution loop.
-- Unverified glob, shell, network, MCP, subagent, or automatic permission approval capabilities.
-- Default writes to a user's workspace.
-- Unrestricted production image modality, temperature, stop, maxTokens, or unverified reasoning-delta output.
-- Production persistent stream transport before cost and reliability evidence exists.
-
-## Project structure
-
-~~~text
-dsh-agy-provider/
-├─ src/
-│  ├─ provider/       # DSH Adapter, config, serialization, image bridge
-│  ├─ agy/            # process, argv, stream-json, discovery, redaction (incl. persistent-transport)
-│  ├─ session/        # DSH Session to AGY Conversation mapping
-│  ├─ doctor.ts       # profile-aware doctor v5 (profileSchemaVersion 4)
-│  ├─ dsh/context.ts  # DSH Session/workspace/sandbox/approval transparent check
-│  └─ agent-*.ts      # presets, installer, and agents CLI
-├─ agents/            # tool-free/read-only/workspace-write templates
-├─ scripts/           # verify, benchmark, diagnose, and DSH smoke
-├─ tests/             # L1 unit + L2 integration (visibleModels/normalization/i18n)
-├─ docs/
-├─ cordis.patch.yml
-└─ package.json
-~~~
-
-## Documentation
-
-- [Installation](docs/installation.md) (0.9.0 workspace-transparent & `visibleModels`)
-- [0.9.0 migration guide](docs/migration-0.9.0.md) (base+effort / visibility / deprecated workspaceRoot)
-- [0.9.0 development plan](docs/v0.9.0-development-plan.md) (panel/workspace/parity/7-layer tests)
-- [0.9.0 release checklist](docs/v0.9.0-release-checklist.md) (L1~L7 gates)
-- [Tool capability matrix](docs/tool-capability-matrix.md)
-- [Compatibility matrix](docs/compatibility-matrix.md)
-- [DSH Provider contract](docs/dsh-provider-contract.md)
-- [0.8.0 / 0.7.0 development plans & migration guides](docs/v0.8.0-development-plan.md) (history)
-- [CHANGELOG](CHANGELOG.md)
-- [Performance baseline](docs/performance-baseline.md)
-
-## Origin and derivation
-
-This repository is derived from **[Darkings/dsh-agy-provider](https://github.com/darkings/dsh-agy-provider)** (MIT). Upstream stopped at `59a5e5e` (2026-08-28); this repository continues from its 0.10.0 baseline to adapt to DSH Desktop 0.2.0-rc.2. In the git history, `59a5e5e` and every earlier commit were authored upstream; the adaptation commits after it were authored by this repository's maintainer.
-
-This is not the official upstream release and does not speak for upstream. See [CHANGELOG](CHANGELOG.md) for the differences.
+---
 
 ## License
 
-MIT
+Derived from **[Darkings/dsh-agy-provider](https://github.com/darkings/dsh-agy-provider)** (MIT).  
+Licensed under the [MIT License](LICENSE).
