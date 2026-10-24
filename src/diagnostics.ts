@@ -17,6 +17,7 @@ import { redactText } from './agy/redact.js'
 import {
   Config as ConfigSchema,
   configuredModels,
+  readConfigFlag,
   DEFAULT_AGENT,
   type Config,
   type ModelConfig,
@@ -227,7 +228,7 @@ export async function diagnoseProvider(
     plugin: {
       name: metadata.name ?? 'dsh-agy-provider',
       version: options.pluginVersion ?? metadata.version ?? null,
-      enabled: config.enabled === true,
+      enabled: readConfigFlag(config.enabled),
     },
     node: {
       version: nodeVersion,
@@ -248,7 +249,7 @@ export async function diagnoseProvider(
         ? 'agy-owned'
         : config.toolPolicy === 'dsh-owned' ? 'dsh-owned' : 'reject',
       sessionMode: config.sessionMode === 'resume' ? 'resume' : 'full',
-      enabled: config.enabled === true,
+      enabled: readConfigFlag(config.enabled),
       transport: (config as any).transport ?? 'one-shot',
       persistentIdleTtlMs: (config as any).persistentIdleTtlMs ?? 30000,
       persistentReadyTimeoutMs: (config as any).persistentReadyTimeoutMs ?? 10000,

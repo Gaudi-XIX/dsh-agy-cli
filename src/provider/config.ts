@@ -435,6 +435,38 @@ export function configuredModels(config: Pick<Config, 'model' | 'models'> = {}):
   return catalog
 }
 
+/**
+ * Read a boolean config field that may have been projected as a volatile live
+ * reference.
+ *
+ * `enabled` carries `.volatile()` so the host's SettingsForms can project this
+ * Config into the `dsh-agy-provider` settings namespace — without at least one
+ * volatile field the Models page does not render our row at all. The cost is
+ * that the host hands the plugin a *reference* object (`{ get() }`, written
+ * through a symbol key) instead of the plain boolean the profile declares, so
+ * `config.enabled === true` is false no matter what the user configured.
+ *
+ * That comparison used to gate `apply()`: the directory and the HTTP routes
+ * were registered (they run before the gate) while the provider adapter never
+ * was, i.e. the plugin was half-mounted and `/plugins/agy-link/status` reported
+ * `enabled: {}`. Read the flag through here instead of comparing directly.
+ */
+export function readConfigFlag(value: unknown): boolean {
+  if (value === true) return true
+  if (value === false || value === undefined || value === null) return false
+  if (typeof value === 'object') {
+    const get = (value as { get?: unknown }).get
+    if (typeof get === 'function') {
+      try {
+        return (get as () => unknown).call(value) === true
+      } catch {
+        return false
+      }
+    }
+  }
+  return false
+}
+
 /** Normalize a possibly suffixed model id to its base (strip -low/-medium/-high). */
 export function normalizeModelId(id: string): string {
   return id.replace(/-(?:low|medium|high)$/i, '')

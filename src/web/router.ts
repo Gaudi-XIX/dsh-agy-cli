@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config as ConfigType } from '../provider/config.js'
-import { configuredModels, normalizeModelId } from '../provider/config.js'
+import { configuredModels, normalizeModelId, readConfigFlag } from '../provider/config.js'
 import type { AgyModelDiscovery } from '../agy/models.js'
 import type { DshWebServerLike } from '../mcp/endpoint.js'
 import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides, type AgyRuntimeOverrides } from '../agy/overrides.js'
@@ -778,7 +778,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         plugin: 'dsh-agy-provider',
         bin: activeConfig.agyPath || 'F:\\AgentData\\antigravity\\cli\\agy.exe',
         version: CLOUD_CODE_API_VERSION,
-        enabled: activeConfig.enabled ?? true,
+        enabled: readConfigFlag(activeConfig.enabled),
         permissionMode: 'dsh-owned',
         workspaceRoot: '',
         defaultModel,

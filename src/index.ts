@@ -19,7 +19,7 @@ import type { ModelConfig, ToolPolicy } from './provider/config.js'
 import { MockAdapter } from './provider/mock.js'
 import { AgyModelDiscovery } from './agy/models.js'
 import { appendAgyDiagnosticRecord, AGY_DIAGNOSTIC_LOG_PATH } from './agy/log.js'
-import { configuredModels } from './provider/config.js'
+import { configuredModels, readConfigFlag } from './provider/config.js'
 import { SessionRegistry } from './session/store.js'
 import { FileSessionStore, resolveSessionStorePath } from './session/file-store.js'
 import type { DshContextLookup } from './dsh/context.js'
@@ -233,7 +233,7 @@ export function apply(ctx: Context, config: ConfigType): void {
 
   // Settings are resolved before the enabled check, so disabled profiles can
   // still be edited from the configuration surface.
-  if (activeConfig.enabled !== true) return
+  if (!readConfigFlag(activeConfig.enabled)) return
   const provider = activeConfig.provider ?? 'agy'
   if (provider === 'agy-mock') {
     ctx.llm.registerAdapter([provider], new MockAdapter(activeConfig))

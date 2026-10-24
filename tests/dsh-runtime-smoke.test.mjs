@@ -81,3 +81,29 @@ test('AGY Provider loads when the optional AttachmentStore is not installed', as
   assert.equal(models[0]?.id, 'gemini-test')
   await root.fiber.dispose()
 })
+
+test('a volatile `enabled` reference still mounts the provider adapter', async () => {
+  // `enabled` is declared `.volatile()` so the host Models page can project this
+  // Config into a settings namespace; the host then hands the plugin a live
+  // reference object instead of the plain boolean. Comparing it with `=== true`
+  // silently took the "disabled" branch and left the plugin half-mounted: the
+  // provider directory and the HTTP routes registered, the adapter did not.
+  const root = new Context()
+  await root.plugin(LlmRuntime)
+  await root.plugin({
+    name: 'dsh-agy-provider-volatile-enabled-smoke',
+    inject: ['llm'],
+    apply(ctx) {
+      apply(ctx, {
+        enabled: { get: () => true },
+        provider: 'agy-mock',
+        model: 'agy-mock-volatile',
+        response: 'ok',
+      })
+    },
+  })
+
+  const models = await root.llm.listModels('agy-mock')
+  assert.deepEqual(models.map(model => model.id), ['agy-mock-volatile'])
+  await root.fiber.dispose()
+})

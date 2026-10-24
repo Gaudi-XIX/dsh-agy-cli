@@ -317,3 +317,16 @@ test('package manifest exposes the doctor CLI with npm-normalized bin metadata',
   assert.ok(packageJson.files.includes('bin/**/*.js'))
   assert.ok(packageJson.files.includes('agents/**/*.md'))
 })
+
+test('readConfigFlag reads plain booleans and volatile references alike', async () => {
+  const { readConfigFlag } = await import('../lib/provider/config.js')
+  assert.equal(readConfigFlag(true), true)
+  assert.equal(readConfigFlag(false), false)
+  assert.equal(readConfigFlag(undefined), false)
+  assert.equal(readConfigFlag(null), false)
+  assert.equal(readConfigFlag({ get: () => true }), true)
+  assert.equal(readConfigFlag({ get: () => false }), false)
+  // A reference whose getter throws must read as "off", never as "on": a broken
+  // settings projection must not be able to enable a provider by accident.
+  assert.equal(readConfigFlag({ get: () => { throw new Error('boom') } }), false)
+})
