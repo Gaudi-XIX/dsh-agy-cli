@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.11.0] - 2026-10-25
+
+### Fixed
+
+全源码安全与健壮性审查（两批；第一批 3 P1 / 5 P2 / 8 P3，第二批 3 P1 / 3 P2 / 6 P3；两条安全发现先在构建产物上复现再修）：
+
+- **MCP 桥**：会话无法解析 agent 时（subagent 路由 / sessionController 未挂载），`NEVER_PROJECTED_TOOLS` 与 allowlist 形同虚设、任意工具名直通 `tools.execute`——两道与 agent 无关的桥面闸门先行拦截；晚绑定 lookup 不再让 cordis 未挂载异常把每个 MCP 请求打成 500。
+- **MCP 端点**：session 句柄在首个 await 前快照，堵住跨会话竞态；IPv6/通配 host 归一为 127.0.0.1；JSON-RPC parse/invalid 响应按规范回 `id: null`。
+- **面板路由**：readBody 补 error 监听（断连 POST 曾可能成为宿主未捕获异常）并加 1 MiB 上限；全部面板路由 loopback-only；`updateCordisPatch` 修复模型 id 注入面（`$` 序列 / YAML 行注入 / `\Z` 字面量 / 非原子写 / 吞错四连），写入改 temp+rename 且失败上报面板；配额缓存路径的 keyring 失败不再误报为 timeout；模型发现失败进 `catalog.lastError`；`/auth` 回真实凭据状态。
+- **适配器（persistent 通道）**：对齐 one-shot 的回合收尾——失败轮的占位响应不再被当正文投影（已流文本保留、AGY 原因进 reasoning 注释），纯文本空回合按 `EMPTY_RESPONSE` 失败而非静默成功。
+- **tool-protocol**：模型提供的工具参数携带自有 `__proto__`/`constructor`/`prototype` 键时经开放 schema 直达工具执行器（`Object.assign` 合并语义下为原型写入）——schema 匹配前递归拒绝；`canonicalizeJson` 拷贝跳过危险键；`valuesEqual`/`uniqueItems` 改键序无关比较。
+- **redact**：JSON 引号键值对（`"token": "v"`）此前完全不命中；裸 `sk-` token 与 URL userinfo 补兜底。
+- **image-bridge**：历史消息中一张非白名单 mediaType 的图片曾使该会话后续每轮 `IMAGE_STAGING_FAILED`；现与不可读附件同样降级为 `earlier_turn=unavailable` 占位。
+- **persistent/experimental 传输**：无换行超长 stdout 行在字节阀之下无界累积内存，现按 maxFrameBytes 截断；`writeFrame` 在 worker 中途销毁时不再永挂于永不发出的 drain。
+- **parser**：实例 `maxLineLength` 大于模块默认时不再被第二道硬编码闸静默钳制。
+- **models**：非字面 `id` 的表头行不再成为假模型条目。
+- **其他**：session file-store 临时名加 pid/时间戳；doctor stderr 字节计数改增量；agent 安装器对内容一致的 `--apply` 不再报 `applied`。
+
+### Changed
+
+- README：凭据边界表述精确化（保活/面板读 blob 判过期与身份，轮换完全由官方二进制完成）；新增两个附加面的诚实披露节；新增与 `dsh-zcode-provider` 的「harness 归属光谱」对照与选型口径。
+
 ## [0.10.0] - 2026-08-24
 
 ### Added
