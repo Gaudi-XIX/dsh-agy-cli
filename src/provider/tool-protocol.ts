@@ -156,6 +156,34 @@ function isSafeObjectKey(value: string): boolean {
   return !DANGEROUS_KEYS.has(value)
 }
 
+/**
+ * Reject a model-supplied JSON value that carries an own dangerous key at any
+ * depth. The schema guard cannot be relied on for this: an object schema
+ * without `additionalProperties: false` admits every extra property, and the
+ * arguments travel into the host tool executor where an `Object.assign`-style
+ * merge turns an own `__proto__` key into a prototype write. This runs before
+ * any schema matching, so a payload that fails here never reaches a tool.
+ */
+function assertNoDangerousKeys(value: unknown, path: string): void {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      assertNoDangerousKeys(value[index], `${path}[${index}]`)
+    }
+    return
+  }
+  if (!isRecord(value)) return
+  for (const [key, child] of Object.entries(value)) {
+    if (!isSafeObjectKey(key)) {
+      throw new ToolProtocolError(
+        TOOL_PROTOCOL_ARGUMENTS_INVALID_CODE,
+        'dangerous key',
+        { toolName: path, issue: 'unexpected-property', path: key },
+      )
+    }
+    assertNoDangerousKeys(child, `${path}.${key}`)
+  }
+}
+
 function deepFreeze<T>(value: T): T {
   if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value
   Object.freeze(value)
@@ -193,6 +221,11 @@ function canonicalizeJson(value: unknown): unknown {
   if (!isRecord(value)) return value
   const output: JsonRecord = {}
   for (const key of Object.keys(value).sort()) {
+    // A dangerous own key must never be copied with plain assignment: that
+    // walks the setter ([[Set]]) and rewrites the output's prototype. Schema
+    // values come from config, arguments are pre-screened, and this copy is
+    // the last line of defence for both.
+    if (!isSafeObjectKey(key)) continue
     output[key] = canonicalizeJson(value[key])
   }
   return output
@@ -481,7 +514,9 @@ export function createStructuredToolProtocol(tools: readonly ToolSchema[]): Stru
 
 function valuesEqual(left: unknown, right: unknown): boolean {
   try {
-    return JSON.stringify(left) === JSON.stringify(right)
+    // Key-order-insensitive comparison: a model may emit the same object with
+    // a different key order, and an enum/const match must not hinge on it.
+    return JSON.stringify(canonicalizeJson(left)) === JSON.stringify(canonicalizeJson(right))
   } catch {
     return false
   }
@@ -526,7 +561,7 @@ function matchesSchema(value: unknown, schema: JsonRecord): boolean {
   if (Array.isArray(value)) {
     if (typeof schema.minItems === 'number' && value.length < schema.minItems) return false
     if (typeof schema.maxItems === 'number' && value.length > schema.maxItems) return false
-    if (schema.uniqueItems === true && new Set(value.map(item => JSON.stringify(item))).size !== value.length) return false
+    if (schema.uniqueItems === true && new Set(value.map(item => JSON.stringify(canonicalizeJson(item)))).size !== value.length) return false
     if (isRecord(schema.items) && value.some(item => !matchesSchema(item, schema.items as JsonRecord))) return false
   }
   if (isRecord(value)) {
@@ -838,6 +873,7 @@ export function parseStructuredEnvelope(
   if (argumentBytes > TOOL_PROTOCOL_LIMITS.maxArgumentsBytes) {
     throw new ToolProtocolError(TOOL_PROTOCOL_RESPONSE_LIMIT_CODE, 'arguments bytes')
   }
+  assertNoDangerousKeys(value.arguments, tool.name)
   const parameters = sanitizeSchema(tool.parameters, 0, `tool ${tool.name}.parameters`) as JsonRecord
   let argumentsValue = value.arguments
   const compatibility = compatibilityArgumentsOf(tool.name, argumentsValue, parameters)

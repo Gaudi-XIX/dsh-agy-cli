@@ -528,6 +528,16 @@ class PersistentAgyWorker {
 
   private handleStdout(chunk: string): void {
     this.stdoutBuffer += chunk
+    // Same runaway-line guard as the persistent transport: the byte valve only
+    // runs on completed lines, so an unsplit endless line would grow freely.
+    if (this.stdoutBuffer.length > this.options.maxFrameBytes) {
+      this.failActiveAndReset(new PersistentTransportError(
+        'Persistent AGY emitted a stdout line beyond the frame limit',
+        'OUTPUT_LIMIT',
+      ))
+      this.stdoutBuffer = ''
+      return
+    }
     let newlineIndex = this.stdoutBuffer.indexOf('\n')
     while (newlineIndex >= 0) {
       const rawLine = this.stdoutBuffer.slice(0, newlineIndex)

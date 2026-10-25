@@ -647,6 +647,17 @@ class PersistentAgyWorker {
 
   private handleStdout(chunk: string): void {
     this.stdoutBuffer += chunk
+    // A runaway child can emit one endless line with no newline; without this
+    // check the un-split buffer grows past maxOutputBytes unchecked (the byte
+    // valve only runs on completed lines).
+    if (this.stdoutBuffer.length > this.options.maxFrameBytes) {
+      this.failActiveAndReset(new PersistentTransportError(
+        'Persistent AGY emitted a stdout line beyond the frame limit',
+        'OUTPUT_LIMIT',
+      ))
+      this.stdoutBuffer = ''
+      return
+    }
     let newlineIndex = this.stdoutBuffer.indexOf('\n')
     while (newlineIndex >= 0) {
       const rawLine = this.stdoutBuffer.slice(0, newlineIndex)
@@ -798,12 +809,21 @@ class PersistentAgyWorker {
         cleanup()
         reject(error)
       }
+      // A worker torn down mid-drain ends stdin; Node never emits 'drain' on
+      // an ended stream, so without a close listener this promise would hang
+      // forever and leak its callers.
+      const onClose = (): void => {
+        cleanup()
+        reject(new PersistentTransportError('Persistent AGY worker stdin closed during write', 'WORKER_STOPPED'))
+      }
       const cleanup = (): void => {
         stdin.removeListener('drain', onDrain)
         stdin.removeListener('error', onError)
+        stdin.removeListener('close', onClose)
       }
       stdin.once('drain', onDrain)
       stdin.once('error', onError)
+      stdin.once('close', onClose)
     })
   }
 

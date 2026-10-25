@@ -20,11 +20,17 @@ function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
   if (ms === 0) return Promise.resolve()
   if (signal?.aborted) return Promise.reject(abortError())
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms)
     const onAbort = (): void => {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       reject(abortError())
     }
+    // The happy path must release its listener too: without this, every timed
+    // mock stream leaves one 'abort' listener attached until the signal dies.
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
     signal?.addEventListener('abort', onAbort, { once: true })
   })
 }

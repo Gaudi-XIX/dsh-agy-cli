@@ -119,8 +119,15 @@ function diagnosticLine(value: string): string {
 }
 
 /** Parse one complete NDJSON line and require only the stable event envelope. */
-export function parseAgyJsonLine(rawLine: string, lineNumber = 1): AgyJsonEvent {
-  if (rawLine.length > DEFAULT_MAX_LINE_LENGTH) {
+export function parseAgyJsonLine(
+  rawLine: string,
+  lineNumber = 1,
+  maxLineLength: number = DEFAULT_MAX_LINE_LENGTH,
+): AgyJsonEvent {
+  // The instance-configured limit travels with the call: an AgyStreamParser
+  // constructed with a larger maxLineLength must not be silently clamped back
+  // to the module default by this second gate.
+  if (rawLine.length > maxLineLength) {
     throw new AgyParserError(
       `AGY event line ${lineNumber} exceeds the maximum length`,
       'LINE_TOO_LONG',
@@ -200,7 +207,7 @@ export class AgyStreamParser {
       )
     }
     if (line.trim().length === 0) return []
-    return [parseAgyJsonLine(line, this.lineNumber)]
+    return [parseAgyJsonLine(line, this.lineNumber, this.maxLineLength)]
   }
 }
 

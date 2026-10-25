@@ -122,7 +122,12 @@ export function parseAgyModels(output: string): ModelConfig[] {
     if (!MODEL_ID_PATTERN.test(id) || seen.has(id)) continue
     const baseId = normalizeModelId(id)
     if (baseSeen.has(baseId.toLowerCase())) continue
-    if (id.toLowerCase() === 'id' && /display|name/i.test(display)) continue
+    // Header rows: "ID\tDisplay Name" and any case/column-naming variant of it
+    // must not become a phantom catalog entry. A real model id carries a dot
+    // or a digit-bearing version segment; a header word like MODEL does not.
+    const headerRow = /display|name/i.test(display)
+      && (id.toLowerCase() === 'id' || !/[.\d]/.test(id))
+    if (headerRow) continue
     if (display.length > MAX_MODEL_DISPLAY_LENGTH || /[\u0000-\u001f\u007f]/.test(display)) continue
     seen.add(id)
     baseSeen.add(baseId.toLowerCase())

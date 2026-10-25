@@ -578,14 +578,19 @@ function compactSerializedHistory(
     // conversation) has no protocol to protect and arrives as one oversized
     // dump, so section-level eviction cannot help. Clipping every retained
     // section to what remains of the budget still yields a usable answer over
-    // the newest content, which beats AGY_INPUT_TOO_LARGE.
+    // the newest content, which beats AGY_INPUT_TOO_LARGE. With several
+    // sections retained this only builds an n×-budget intermediate string
+    // that the headroom pass below re-clamps anyway, so it runs for the
+    // single-section shape it was written for and defers the rest.
     const historyBudget = Math.max(128, maxPromptBytes - byteLength(protocol) - 2)
-    compactedPrompt = joinHistorySections(
-      [...selected].sort((left, right) => left - right)
-        .map(index => clampSectionToBytes(sectionAt(index), historyBudget)),
-      protocol,
-      protocolBeforeHistory,
-    )
+    if (selected.size <= 1) {
+      compactedPrompt = joinHistorySections(
+        [...selected].sort((left, right) => left - right)
+          .map(index => clampSectionToBytes(sectionAt(index), historyBudget)),
+        protocol,
+        protocolBeforeHistory,
+      )
+    }
   }
   if ((overflowed() || withinHeadroom()) && !protocolBeforeHistory) {
     // A main turn that eviction cannot bring comfortably under the limit. Every

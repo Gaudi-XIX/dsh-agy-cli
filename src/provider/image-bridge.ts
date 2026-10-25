@@ -11,6 +11,8 @@ import type { ContentBlock, GenerateOptions, RequestMessage } from '@deepseek-ai
 import { serializeAgyPrompt, serializeAgyTurnPrompt } from './serialize.js'
 
 export const IMAGE_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
+/** Placeholder media type for a history image of an unsupported kind. */
+export const FALLBACK_IMAGE_MEDIA_TYPE: AgyImageMediaType = 'image/png'
 export const DEFAULT_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 export const DEFAULT_IMAGE_MAX_COUNT = 4
 export type AgyImageMediaType = typeof IMAGE_MEDIA_TYPES[number]
@@ -268,7 +270,14 @@ async function cacheHistoryImages(
   await pruneImageHistoryCache()
   for (const ref of refs) {
     const key = imageKey(ref)
-    if (!mediaTypeOf(ref.mediaType)) continue
+    if (!mediaTypeOf(ref.mediaType)) {
+      // An unsupported media type degrades to the same unavailable placeholder
+      // as an unreadable attachment: omitting the entry would make
+      // replaceImageBlocks throw IMAGE_STAGING_FAILED for every later turn of
+      // this conversation ("one unreadable attachment must not be fatal").
+      images.set(key, { path: undefined, mediaType: FALLBACK_IMAGE_MEDIA_TYPE, width: ref.width ?? 0, height: ref.height ?? 0, history: true })
+      continue
+    }
     const mediaType = ref.mediaType
     const width = ref.width ?? 0
     const height = ref.height ?? 0
