@@ -19,3 +19,6 @@ native/windows-launcher/obj/
 # /findings.md
 # /progress.md
 # /task_plan.md
+
+# pnpm-lock is stray local-install artifact; npm package-lock.json is the canonical lock
+pnpm-lock.yaml
