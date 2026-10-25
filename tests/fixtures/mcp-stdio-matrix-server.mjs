@@ -20,7 +20,7 @@ function handle(message) {
     response(message.id, {
       protocolVersion: message.params?.protocolVersion ?? '2025-06-18',
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: 'dsh-agy-provider-matrix', version: '0.1.0' },
+      serverInfo: { name: 'dsh-agy-cli-matrix', version: '0.1.0' },
     })
     return
   }

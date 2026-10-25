@@ -39,7 +39,7 @@ import { homedir } from 'node:os'
 export const AGY_MCP_SERVER_NAME = 'dsh'
 
 /** Marks an entry as owned by this plugin so cleanup never touches foreign servers. */
-const OWNER_TAG = 'dsh-agy-provider'
+const OWNER_TAG = 'dsh-agy-cli'
 
 export interface AgyMcpEntry {
   readonly url: string
@@ -149,11 +149,11 @@ function entryFor(entry: AgyMcpEntry): Record<string, unknown> {
 
 async function writeConfig(path: string, root: Record<string, unknown>): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
-  const backup = `${path}.dsh-agy-provider.bak`
+  const backup = `${path}.dsh-agy-cli.bak`
   if (existsSync(path) && !existsSync(backup)) {
     await writeFile(backup, await readFile(path), { encoding: 'utf8' })
   }
-  const temporary = `${path}.dsh-agy-provider.tmp`
+  const temporary = `${path}.dsh-agy-cli.tmp`
   await writeFile(temporary, `${JSON.stringify(root, null, 2)}\n`, { encoding: 'utf8' })
   await rename(temporary, path)
 }

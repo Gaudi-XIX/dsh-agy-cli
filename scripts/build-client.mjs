@@ -23,7 +23,7 @@ import ts from 'typescript';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = resolve(root, 'client/index.ts');
 const outFile = resolve(root, 'dist/client.js');
-const MODULE_ID = 'dsh-agy-provider';
+const MODULE_ID = 'dsh-agy-cli';
 const FORMAT = ts.ScriptTarget.ES2022;
 const EXTERNALS = [ /^@deepseek-ai\//, /^react$/, /^react-dom$/, /^react\/jsx-runtime$/ ];
 

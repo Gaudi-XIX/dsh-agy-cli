@@ -226,7 +226,7 @@ export async function diagnoseProvider(
     ok: errors.length === 0,
     quotaUsed: false,
     plugin: {
-      name: metadata.name ?? 'dsh-agy-provider',
+      name: metadata.name ?? 'dsh-agy-cli',
       version: options.pluginVersion ?? metadata.version ?? null,
       enabled: readConfigFlag(config.enabled),
     },

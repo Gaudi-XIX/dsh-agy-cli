@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0] - 2026-10-26
+
+### Changed
+
+- **接续版更名**：`dsh-agy-provider` → `dsh-agy-cli`。原作者 darkings 自 2026-08-28 停更，本仓库自 2026-10-12 起接续维护；插件名、settingsNs、面板路由前缀（`/plugins/agy-cli/*`）与 npm 包名同步更替，**模型路由 id 保持 `agy` 不变**，原版用户迁移无需改模型配置。运行数据目录由 `~/.dsh/agy-link/` 迁至 `~/.dsh/agy-cli/`（runtime-overrides.json 可手动搬移）。
+- README 重写：加入 25 家插件 × 6 维度的市场调研地图、三条 provider 路线的取舍对比、与 dsh-agy-safe / dsh-antigravity-acp 的诚实差距清单与接续声明。
+- LICENSE 增补接续声明（原作者版权保留，MIT 不变）。
+
 ## [0.11.0] - 2026-10-25
 
 ### Fixed

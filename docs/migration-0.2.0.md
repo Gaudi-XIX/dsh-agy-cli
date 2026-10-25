@@ -20,7 +20,7 @@
 ## 升级建议
 
 ```powershell
-npm install dsh-agy-provider@0.2.0
+npm install dsh-agy-cli@0.2.0
 npm run diagnose -- --json
 ```
 

@@ -7,15 +7,15 @@
 先在目标 DSH profile 安装 0.8.0：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.8.0
-npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-provider@0.8.0
+npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.8.0
+npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-cli@0.8.0
 ```
 
 启动前只读检查：
 
 ```powershell
-npx dsh-agy-provider doctor --profile web --json
-npx @deepseek-ai/dsh --profile web --dump-config | Select-String dsh-agy-provider
+npx dsh-agy-cli doctor --profile web --json
+npx @deepseek-ai/dsh --profile web --dump-config | Select-String dsh-agy-cli
 ```
 
 期望 bundle 配置（0.8.0 保持 0.7.0 默认，新增 transport 显式 opt-in）：
@@ -43,8 +43,8 @@ imageInput: off
 ## 回滚
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.7.0
-npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-provider@0.7.0
+npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.7.0
+npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-cli@0.7.0
 ```
 
 回滚后删除 `transport` 相关覆盖，重新运行对应版本 doctor。

@@ -71,7 +71,7 @@ declare global {
  * When the local asset is missing the source block simply stays visible.
  */
 const CDN_URLS = [
-	'/plugins/agy-link/mermaid.min.js',
+	'/plugins/agy-cli/mermaid.min.js',
 ]
 
 let loadPromise: Promise<MermaidApi | null> | null = null

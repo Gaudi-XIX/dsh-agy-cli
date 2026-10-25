@@ -18,7 +18,7 @@ AGY 的 Google 凭据存放在 Windows 凭据管理器 `gemini:antigravity`（bl
 - 关闭 stdin 的那次运行：日志出现 `silent auth` → `Starting conversation update stream` → 立刻 `CLI store manager shutting down`，**`streamGenerateContent` 计数为 0**，即上游生成调用一次都没发生。
 - 续期失败（网络/鉴权墙）不会每分钟重试：同一个 `expiry` 只尝试一次，直到凭据真的变化。
 - **续期命令不能带 `--input-format stream-json`**：agy 会以退出码 2 拒绝，stderr 为 `--input-format stream-json reads prompts from stdin, so a prompt given on the command line would be ignored`。首版正是踩了这个（`-p "."` 与 stream-json 同时给），进程 2.4 秒就退出、凭据一个字节没动，而调用方只看「进程有没有抛错」，于是把失败当成成功。现在 argv 只有 `-p . --model <id> --effort low --disable-slash-commands`，stdin 序列化帧也一并去掉（没有 stream-json 就没有读帧的人）。
-- 失败必须可见：`refreshAgyTokenIfDue` 会检查退出码，把结果分成 `completed` / `not-rotated`（退出 0 但 keyring 没动）/ `rejected`（参数被拒）/ `failed`（起不来），stderr 首行进 `detail`；`GET /plugins/agy-link/status` 的 `auth` 里带 `keepaliveLastReason` 与 `keepaliveLastDetail`，面板过期时若续期是坏的，直接显示「自动续期失败」并把原因放进悬停提示。
+- 失败必须可见：`refreshAgyTokenIfDue` 会检查退出码，把结果分成 `completed` / `not-rotated`（退出 0 但 keyring 没动）/ `rejected`（参数被拒）/ `failed`（起不来），stderr 首行进 `detail`；`GET /plugins/agy-cli/status` 的 `auth` 里带 `keepaliveLastReason` 与 `keepaliveLastDetail`，面板过期时若续期是坏的，直接显示「自动续期失败」并把原因放进悬停提示。
 
 面板头部会显示「凭据 N 分钟后过期」，最后 5 分钟转黄、过期转红并提示「正在自动续期」。这是判断续期是否真的在工作的一手读数——如果红线长时间停在那里，先看悬停提示里的失败原因，再手动跑一次 `agy -p .` 对照。
 
@@ -32,16 +32,16 @@ AGY 的 Google 凭据存放在 Windows 凭据管理器 `gemini:antigravity`（bl
 
 ## 安装到 DSH profile
 
-不要只在业务项目目录执行 `npm install dsh-agy-provider`。DSH Web 使用独立的 profile 依赖目录，必须通过 DSH 的 plugin 命令安装：
+不要只在业务项目目录执行 `npm install dsh-agy-cli`。DSH Web 使用独立的 profile 依赖目录，必须通过 DSH 的 plugin 命令安装：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.10.0
+npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.10.0
 ```
 
 该命令会将包加入 `web` profile 的依赖和 `dsh.profile.bundles`。验证是否已加载：
 
 ```powershell
-npx @deepseek-ai/dsh --profile web --dump-config | Select-String dsh-agy-provider
+npx @deepseek-ai/dsh --profile web --dump-config | Select-String dsh-agy-cli
 ```
 
 然后重启 DSH Web：
@@ -67,13 +67,13 @@ imageInput: off
 如果只需要在普通 Node.js 项目中导入 Provider，而不是让 DSH Web 加载 bundle，才使用：
 
 ```powershell
-npm install dsh-agy-provider@0.10.0
+npm install dsh-agy-cli@0.10.0
 ```
 
 ## 从 GitHub 安装源码包
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add github:darkings/dsh-agy-provider
+npx @deepseek-ai/dsh plugin --profile web add github:darkings/dsh-agy-cli
 ```
 
 ## 版本与发布状态
@@ -161,7 +161,7 @@ modelDiscoveryTimeoutMs: 10000
 
 `sessionMode: full` 为默认（每轮完整 history）；`transport: persistent` 仅显式启用才起 worker。
 
-以下是仅在 profile 的 `cordis.patch.yml` 中 `dsh-agy-provider` 段编辑的高级字段，设置面板会隐藏它们：
+以下是仅在 profile 的 `cordis.patch.yml` 中 `dsh-agy-cli` 段编辑的高级字段，设置面板会隐藏它们：
 
 | 字段 | 默认值 | 作用 |
 |---|---:|---|
@@ -175,12 +175,12 @@ modelDiscoveryTimeoutMs: 10000
 
 ## 设置面板与中英切换
 
-DSH Web 的设置面板由 `Config` schema 的 `title/description` 与 `ctx.llm.registerConfigurableProviders(settingsNs dsh-agy-provider)` + `registerModelDiscovery` 驱动：
+DSH Web 的设置面板由 `Config` schema 的 `title/description` 与 `ctx.llm.registerConfigurableProviders(settingsNs dsh-agy-cli)` + `registerModelDiscovery` 驱动：
 
 - 模型列表为多选勾选框，勾选结果写回 `visibleModels`；未勾选不在选择器出现，但显式请求仍兼容。
 - 推理强度为独立下拉（`reasoningEffort: low/medium/high`），`listModels` 仅返回 base 并带 `reasoning.efforts`。
 - 每个字段通过 `schemastery .i18n({'zh-CN':{},en:{}})` 提供双语，DSH 按当前 locale 自动切换；英文为 fallback。
-- **AGY 管理面板的位置**：插件客户端注册宿主 keyed 槽 `settings.models.provider-card`（`key: 'dsh-agy-provider'`，即 Node 半 `settingsNs` 的同一字符串），额度/思考强度/模型显隐三块渲染在「设置 → 模型」里 Antigravity CLI 那一行的卡片扩展区。它**不在**设置导航里单开分区，**不在**会话页头部挂徽标——这是 2026-10-21 用户裁定的形态，历史形态与被拆控件的恢复步骤见 [archived-panel-ui-20261020.md](archived-panel-ui-20261020.md)。
+- **AGY 管理面板的位置**：插件客户端注册宿主 keyed 槽 `settings.models.provider-card`（`key: 'dsh-agy-cli'`，即 Node 半 `settingsNs` 的同一字符串），额度/思考强度/模型显隐三块渲染在「设置 → 模型」里 Antigravity CLI 那一行的卡片扩展区。它**不在**设置导航里单开分区，**不在**会话页头部挂徽标——这是 2026-10-21 用户裁定的形态，历史形态与被拆控件的恢复步骤见 [archived-panel-ui-20261020.md](archived-panel-ui-20261020.md)。
 
 ## 诊断
 
@@ -199,13 +199,13 @@ npm run diagnose -- --json
 从 npm 安装产物运行 profile-aware doctor：
 
 ```powershell
-npx dsh-agy-provider doctor --profile web --json
+npx dsh-agy-cli doctor --profile web --json
 ```
 
 如果 DSH CLI 不在 profile 或 PATH 中，显式传入 DSH JavaScript entry：
 
 ```powershell
-npx dsh-agy-provider doctor --profile web --dsh-bin C:\path\to\node_modules\@deepseek-ai\dsh\lib\bin.js --json
+npx dsh-agy-cli doctor --profile web --dsh-bin C:\path\to\node_modules\@deepseek-ai\dsh\lib\bin.js --json
 ```
 
 可用以下环境变量覆盖检查目标。`AGY_MODELS` 必须是 JSON 数组：
@@ -233,8 +233,8 @@ Windows 上 AGY 是 console-subsystem 可执行文件。为避免新 Session 的
 ```powershell
 npm run build
 npm pack
-npx @deepseek-ai/dsh plugin --profile web remove dsh-agy-provider
-npx @deepseek-ai/dsh plugin --profile web add file:C:/Users/Jie/Projects/dsh-agy-provider/dsh-agy-provider-0.9.0.tgz
+npx @deepseek-ai/dsh plugin --profile web remove dsh-agy-cli
+npx @deepseek-ai/dsh plugin --profile web add file:C:/Users/Jie/Projects/dsh-agy-cli/dsh-agy-cli-0.9.0.tgz
 ```
 
 复测时先打开项目文件夹，再创建新 Session。若仍失败，F12 的 `llm/stream` Preview 应保留具体 code：启动失败为 `AGY_SPAWN_FAILED`，stdin 写入失败为 `AGY_INPUT_FAILED`，输入帧超过上限为 `AGY_INPUT_TOO_LARGE`，工具响应协议错误为 `TOOL_PROTOCOL_*`，工作区不匹配为 `DSH_WORKSPACE_MISMATCH`；不应再无信息地落成 `AGY_REQUEST`。

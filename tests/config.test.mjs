@@ -121,7 +121,7 @@ test('Config hides YAML-only fields and exposes the settings editor note', () =>
   const root = serialized.refs[String(serialized.uid)]
   const fieldMeta = key => serialized.refs[String(root.dict[key])].meta
 
-  assert.equal(schema.meta.comment, '其余字段在 cordis.patch.yml 中，请直接编辑对应段。 (dsh-agy-provider)')
+  assert.equal(schema.meta.comment, '其余字段在 cordis.patch.yml 中，请直接编辑对应段。 (dsh-agy-cli)')
   assert.equal(fieldMeta('model').hidden, undefined)
   assert.equal(fieldMeta('visibleModels').hidden, undefined)
   assert.equal(fieldMeta('provider').hidden, true)
@@ -274,7 +274,7 @@ test('cordis.patch.yml defines DSH-owned bundle defaults while library defaults 
   const agentMatch = patchContent.match(/agent:\s*([^\s]+)/)
   const sessionModeMatch = patchContent.match(/sessionMode:\s*([^\s]+)/)
 
-  assert.equal(idMatch?.[1], 'dsh-agy-provider')
+  assert.equal(idMatch?.[1], 'dsh-agy-cli')
   assert.equal(enabledMatch?.[1], 'true')
   assert.equal(toolPolicyMatch?.[1], 'dsh-owned')
   assert.equal(providerMatch?.[1], 'agy')
@@ -312,7 +312,7 @@ test('package manifest exposes the doctor CLI with npm-normalized bin metadata',
   ))
 
   assert.deepEqual(packageJson.bin, {
-    'dsh-agy-provider': 'bin/dsh-agy-provider.js',
+    'dsh-agy-cli': 'bin/dsh-agy-cli.js',
   })
   assert.ok(packageJson.files.includes('bin/**/*.js'))
   assert.ok(packageJson.files.includes('agents/**/*.md'))

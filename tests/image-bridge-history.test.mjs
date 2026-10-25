@@ -163,6 +163,6 @@ test('the per-request budget still applies to the turn being answered', async ()
 })
 
 test('the cache lives outside the per-turn temp directory', () => {
-  assert.equal(IMAGE_HISTORY_CACHE_DIR.includes(`${sep}agy-link${sep}`), true)
+  assert.equal(IMAGE_HISTORY_CACHE_DIR.includes(`${sep}agy-cli${sep}`), true)
   assert.equal(existsSync(join(IMAGE_HISTORY_CACHE_DIR, 'unrelated-sentinel')), false)
 })

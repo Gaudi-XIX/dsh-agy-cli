@@ -1,4 +1,4 @@
-// dsh-agy-link client half (browser). Integrated into native DSH settings, sidebar footer, and header.
+// dsh-agy-cli client half (browser). Integrated into native DSH settings, sidebar footer, and header.
 import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-client-locale/client';
 import type { AccountPoolData, FamilyQuotaInfo, ManagedAccount, ModelQuotaInfo } from '../common/pool-types.ts';
@@ -28,7 +28,7 @@ const win = globalThis as unknown as {
 	removeEventListener?: (type: string, listener: (ev: any) => void, useCapture?: boolean) => void;
 };
 
-export const name = 'dsh-agy-provider-client';
+export const name = 'dsh-agy-cli-client';
 // Cordis inject entries are hard dependencies: accessing a service not listed
 // here throws ("cannot get property X without inject"). locale must be declared
 // for ctx.locale to be readable (issue #24). dsh-web-app ships dsh-client-locale.
@@ -113,7 +113,7 @@ async function getStatus(): Promise<StatusPayload | null> {
 		if (typeof AbortSignal !== 'undefined' && typeof (AbortSignal as { timeout?: unknown }).timeout === 'function') {
 			init.signal = (AbortSignal as { timeout: (ms: number) => unknown }).timeout(5000);
 		}
-		const res = await win.fetch?.(base + '/plugins/agy-link/status', init);
+		const res = await win.fetch?.(base + '/plugins/agy-cli/status', init);
 		if (!res || !res.ok) return null;
 		const payload = (await res.json()) as StatusPayload;
 		statusCache = payload;
@@ -154,7 +154,7 @@ async function postJson(path: string, body: Record<string, unknown>): Promise<an
 // host never dispatched this card" and "the card crashed on first render" are
 // the same pixels, from both sides. Reporting the dispatch itself — from inside
 // the render body, see the call site — is what tells them apart at
-// `/plugins/agy-link/diagnose`. Throttled so re-renders (and StrictMode's double
+// `/plugins/agy-cli/diagnose`. Throttled so re-renders (and StrictMode's double
 // render) cannot flood the endpoint.
 let lastDispatchReport = 0;
 function reportCardDispatch(props?: unknown): void {
@@ -162,7 +162,7 @@ function reportCardDispatch(props?: unknown): void {
 	if (now - lastDispatchReport < 5_000) return;
 	lastDispatchReport = now;
 	const names = props !== null && typeof props === 'object' ? Object.keys(props as Record<string, unknown>) : [];
-	void postJson('/plugins/agy-link/card-ping', { props: names });
+	void postJson('/plugins/agy-cli/card-ping', { props: names });
 }
 
 // ---- shared status load (no polling) ----
@@ -844,7 +844,7 @@ export function apply(ctx: ClientContext): void {
 		const disposePtBRDictionary = locale.register(NS, 'pt-BR', ptBR);
 		const disposeEsDictionary = locale.register(NS, 'es', es);
 		return () => { disposeEsDictionary(); disposePtBRDictionary(); disposeEn(); disposeZh(); disposeEs(); disposePtBR(); };
-	}, 'agy-link: locale dictionaries');
+	}, 'agy-cli: locale dictionaries');
 	const useAgyTranslation = () => {
 		const [, rerender] = useState(0);
 		useEffect(() => locale.subscribe(() => rerender((revision) => revision + 1)), []);
@@ -858,7 +858,7 @@ export function apply(ctx: ClientContext): void {
 		// the host never dispatched — an effect would never run in the crashing
 		// case, which is the case worth distinguishing. Reporting at the top of
 		// the body survives both; `reportCardDispatch` de-duplicates re-renders
-		// and StrictMode's double render. See `/plugins/agy-link/diagnose`.
+		// and StrictMode's double render. See `/plugins/agy-cli/diagnose`.
 		reportCardDispatch(props);
 		const t = useAgyTranslation();
 		const { status, loading, refresh } = useAgyStatus();
@@ -941,7 +941,7 @@ export function apply(ctx: ClientContext): void {
 
 		const setCfg = async (key: string, value: unknown): Promise<void> => {
 			setLoadingAction(`config:${key}`);
-			const res = await postJson('/plugins/agy-link/config', { key, value });
+			const res = await postJson('/plugins/agy-cli/config', { key, value });
 			if (res === null || res?.ok === false) {
 				setLoadingAction(null);
 				actionFailed();
@@ -971,7 +971,7 @@ export function apply(ctx: ClientContext): void {
 			setLoadingAction('refresh:all');
 			// Only a click that came after this call started is worth fetching.
 			const seq = ++statusFetchSeq;
-			const res = await postJson('/plugins/agy-link/pool/refresh-quota', {});
+			const res = await postJson('/plugins/agy-cli/pool/refresh-quota', {});
 			if (res === null || res?.ok === false) {
 				setLoadingAction(null);
 				actionFailed();
@@ -1144,7 +1144,7 @@ export function apply(ctx: ClientContext): void {
 		// account (the keyring identity), so there is no active/primary notion,
 		// no per-account proxy override, and nothing to add or remove. The whole
 		// multi-account UI (add flow, 设为主用, 代理, 删除, 号池调度, 清除冷却) was
-		// wired to /plugins/agy-link/pool/* routes this plugin never registered —
+		// wired to /plugins/agy-cli/pool/* routes this plugin never registered —
 		// every one of those buttons could only ever fail with a generic error.
 		// Shapes + restore procedure: docs/archived-panel-ui-20261020.md.
 		const account = accounts[0];
@@ -1378,7 +1378,7 @@ export function apply(ctx: ClientContext): void {
 
 	// Antigravity's management surface lives INSIDE the host's Models settings
 	// page: the provider row this plugin declares (`settingsNs:
-	// 'dsh-agy-provider'` in src/index.ts) is the only entry point. The Models
+	// 'dsh-agy-cli'` in src/index.ts) is the only entry point. The Models
 	// section dispatches `settings.models.provider-card` on every card that
 	// renders a directory row with `entryKey = row.entry.settingsNs`, and the
 	// slot core renders the entry whose registered `key` equals that entryKey
@@ -1393,8 +1393,8 @@ export function apply(ctx: ClientContext): void {
 		const dispose = ctx.slots.register(
 			{
 				name: 'settings.models.provider-card',
-				key: 'dsh-agy-provider',
-				id: 'agy-link-provider-card',
+				key: 'dsh-agy-cli',
+				id: 'agy-cli-provider-card',
 			},
 			AgySettingsSection,
 		);

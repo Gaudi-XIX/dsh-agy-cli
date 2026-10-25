@@ -71,7 +71,7 @@ const QUOTA_EXHAUSTED_KEYWORDS = [
 
 credits 失败计数：`CREDITS_DISABLE_THRESHOLD = 3` 次后 `CREDITS_COOLDOWN_MS = 5h` 禁用该 authKey（`recordCreditsFailure` / `isCreditsDisabled`）。
 
-**对照我方**（`F:\defws\dsh-agy-provider`，供修复定位）：
+**对照我方**（`F:\defws\dsh-agy-cli`，供修复定位）：
 - `src\provider\config.ts:141` `AGY_RETRYABLE_CODES = ['EMPTY_RESPONSE','RATE_LIMIT','SERVER','TIMEOUT','TRANSPORT','AGY_INPUT_FAILED','AGY_SPAWN_FAILED']`（无 `QUOTA_EXCEEDED`）。
 - `src\agy\errors.ts:20 classifyAgyFailure(detail, fallback)` 判定顺序：context-window → `(?:quota|credit|balance|billing|budget|usage limit|limit (?:exceeded|reached))` → `QUOTA_EXCEEDED_CODE` → `(?:rate limit|too many requests|throttl|\b429\b)` → `'RATE_LIMIT'` → `"retryable": true` → `'TRANSPORT'`。
 ⇒ 现场文案 `Individual quota reached. Please upgrade your subscription… Resets in 96h12m27s. … code 429` 命中第一个 quota 正则，判成 `QUOTA_EXCEEDED`（不重试、fail-closed），而 AGY 自身在同一条错误里标了 `retryable: true`。**这就是「整轮直接失败、零退避」的直接机制。**
@@ -136,7 +136,7 @@ const [data, userQuotaData, quotaSummary] = await Promise.all([
 `resolveAntigravityQuotaGroups` 优先用 `rawGroups`（summary 原形），否则从扁平 quotas 找 `gemini_session`/`gemini_weekly`/`claude_gpt_session`/`claude_gpt_weekly` 四个键重组；四个聚合键缺失时回退到该族任一模型桶（`fallbackGeminiSession` / `fallbackClaudeSession`）。
 每组两行：`5 hour` 与 `Weekly`，各带百分比条与 `Resets in <countdown>`；窗口缺失时渲染 `"<label>: unavailable from upstream"`——**明示未知，而不是显示 0 或 100**。
 
-对照我方面板（`F:\defws\dsh-agy-provider\src\web` 的 `calcFamily`）：读 prod summary 时看到 Gemini 满额、3p 归零，对「未知」只降级成 `—`，且完全不提示「读到的池 ≠ 实际消耗的池」。
+对照我方面板（`F:\defws\dsh-agy-cli\src\web` 的 `calcFamily`）：读 prod summary 时看到 Gemini 满额、3p 归零，对「未知」只降级成 `—`，且完全不提示「读到的池 ≠ 实际消耗的池」。
 
 ## 6. credits 注入（可选旁路，非必需）
 

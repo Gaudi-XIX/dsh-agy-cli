@@ -19,7 +19,7 @@
    `error: Eligibility check failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal/fetchUserInfo": EOF`
    ——资格检查被代理掐断（Google 经代理约 25% 被掐）后 AGY 自杀，fork 写 stdin 撞已关管道。
 
-## 已落地（fork `F:\defws\dsh-agy-provider`，HEAD `39cd5ae`，258/258 绿，tsc 0 error）
+## 已落地（fork `F:\defws\dsh-agy-cli`，HEAD `39cd5ae`，258/258 绿，tsc 0 error）
 
 | 提交 | 内容 |
 |---|---|
@@ -38,7 +38,7 @@
 
 ## 遗留
 
-- **`39cd5ae` 未 push**（用户 m02649：推送他自己说）。fork 远程 `https://github.com/Gaudi-XIX/dsh-agy-provider`。
+- **`39cd5ae` 未 push**（用户 m02649：推送他自己说）。fork 远程 `https://github.com/Gaudi-XIX/dsh-agy-cli`。
 - **durable store 尚待真机验收**：`C:\Users\toast\.dsh\agy-provider\sessions.json` 已由运行态宿主创建（17:24:27 > 宿主 15:33:47 启动 ⇒ 新代码已在运行态），当前 `{"sessions":[]}`。验收信号＝既有会话的下一轮出现 `requestMode: delta` + `conversationReused: true`。
-- 探针残留备份待删（红线，逐项待批）：内层 `F:\AgentData\antigravity\data\gemini-root-config\` 的 `mcp_config.json.dsh-agy-provider.bak`(333 B)、`settings.json.dsh-agy-provider.bak`(569 B)；外层 `settings.json.bak-pre-allowrules-20261013-143245`(120 B)、`settings.json.bak-pre-wildcard-20261014-1226`(610 B)；`agents/` 下 3 个 `dsh-agy-mcp-executor.md.backup-*`/`.bak-pre-exclude-*`。
+- 探针残留备份待删（红线，逐项待批）：内层 `F:\AgentData\antigravity\data\gemini-root-config\` 的 `mcp_config.json.dsh-agy-cli.bak`(333 B)、`settings.json.dsh-agy-cli.bak`(569 B)；外层 `settings.json.bak-pre-allowrules-20261013-143245`(120 B)、`settings.json.bak-pre-wildcard-20261014-1226`(610 B)；`agents/` 下 3 个 `dsh-agy-mcp-executor.md.backup-*`/`.bak-pre-exclude-*`。
 - `probe-timeout-resume.mjs` 的 turn 1 两次被 `loadCodeAssist: EOF` 打断 ⇒ 单次探针阴性不等于否定结论，须复跑。

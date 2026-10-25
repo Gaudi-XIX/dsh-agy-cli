@@ -9,7 +9,7 @@ export interface AgyRuntimeOverrides {
   defaultModel?: string
 }
 
-const RUNTIME_OVERRIDES_PATH = join(dshHome(), 'agy-link', 'runtime-overrides.json')
+const RUNTIME_OVERRIDES_PATH = join(dshHome(), 'agy-cli', 'runtime-overrides.json')
 // Indirection so tests (and the panel, if it ever runs in-process) can point the
 // reader at a different location without touching the user's real file.
 let _overridesPathOverride: string | undefined

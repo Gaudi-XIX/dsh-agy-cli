@@ -1,16 +1,16 @@
 # Bundle entry is enabled by default when installed through dsh plugin add.
 # Install this package into a DSH profile with:
-# npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.10.0
+# npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.10.0
 - insert:
-    - id: dsh-agy-provider
-      name: dsh-agy-provider
+    - id: dsh-agy-cli
+      name: dsh-agy-cli
       config:
         enabled: true
         provider: agy
         model: gemini-3.1-pro
         toolPolicy: dsh-owned
         # Must name a template installed under AGY's agents/ directory; install
-        # the bundled ones with `npx dsh-agy-provider agents --apply`.
+        # the bundled ones with `npx dsh-agy-cli agents --apply`.
         agent: dsh-agy-mcp-executor
         sessionMode: full
         imageInput: experimental

@@ -75,7 +75,7 @@ try {
 
 if (jsonOutput) console.log(JSON.stringify(result, null, 2))
 else if (result.plugin === undefined) {
-  console.log(`dsh-agy-provider doctor (schema v${result.schemaVersion})`)
+  console.log(`dsh-agy-cli doctor (schema v${result.schemaVersion})`)
   console.log(`status: FAIL; quotaUsed: ${result.quotaUsed}`)
   for (const issue of result.errors ?? []) console.log(`- [${issue.component}/${issue.code}] ${issue.message}`)
 } else console.log(formatDoctorHuman(result))

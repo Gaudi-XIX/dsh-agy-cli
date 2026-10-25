@@ -295,9 +295,9 @@ function parseDumpConfig(stdout: string): ParsedDumpConfig {
   const stack: Array<{ indent: number; key: string }> = []
 
   for (const line of stdout.split(/\r?\n/)) {
-    if (/^\s*#\s*==\s*dsh-agy-provider\b/i.test(line)
-      || /^\s*-\s*id:\s*dsh-agy-provider\b/i.test(line)
-      || /^\s*id:\s*dsh-agy-provider\b/i.test(line)) {
+    if (/^\s*#\s*==\s*dsh-agy-cli\b/i.test(line)
+      || /^\s*-\s*id:\s*dsh-agy-cli\b/i.test(line)
+      || /^\s*id:\s*dsh-agy-cli\b/i.test(line)) {
       recognized = true
       inBundleSection = true
       stack.length = 0
@@ -664,7 +664,7 @@ async function inspectAgent(
           code: 'PROFILE_AGENT_FRONTMATTER_INVALID',
           message: `Bundled Agent ${preset.agentName} does not match its declared tool and execution policy`,
         },
-        suggestion: `Reinstall the bundled Agent with: npx dsh-agy-provider agents install ${preset.id} --apply`,
+        suggestion: `Reinstall the bundled Agent with: npx dsh-agy-cli agents install ${preset.id} --apply`,
       }
   } catch {
     return {
@@ -683,7 +683,7 @@ async function inspectAgent(
         code: 'PROFILE_AGENT_FRONTMATTER_UNREADABLE',
         message: `Could not read the bundled Agent template for ${preset.agentName}`,
       },
-      suggestion: `Reinstall the bundled Agent with: npx dsh-agy-provider agents install ${preset.id} --apply`,
+      suggestion: `Reinstall the bundled Agent with: npx dsh-agy-cli agents install ${preset.id} --apply`,
     }
   }
 }
@@ -744,7 +744,7 @@ export async function diagnoseProfile(
     issues.push({
       component: 'profile',
       code: 'PROFILE_NOT_FOUND',
-      message: `Profile "${profileName}" not found. Create with: npx @deepseek-ai/dsh plugin --profile ${profileName} add dsh-agy-provider`,
+      message: `Profile "${profileName}" not found. Create with: npx @deepseek-ai/dsh plugin --profile ${profileName} add dsh-agy-cli`,
     })
   } else {
     const profilePackageJsonPath = join(profileDir, 'package.json')
@@ -753,9 +753,9 @@ export async function diagnoseProfile(
         const pkg = JSON.parse(readFileSync(profilePackageJsonPath, 'utf8'))
         const deps = pkg.dependencies ?? {}
         const devDeps = pkg.devDependencies ?? {}
-        packageInstalled = Boolean(deps['dsh-agy-provider'] || devDeps['dsh-agy-provider'])
+        packageInstalled = Boolean(deps['dsh-agy-cli'] || devDeps['dsh-agy-cli'])
         const bundles = pkg.dsh?.profile?.bundles
-        bundleDeclared = Array.isArray(bundles) && bundles.includes('dsh-agy-provider')
+        bundleDeclared = Array.isArray(bundles) && bundles.includes('dsh-agy-cli')
       } catch {
         issues.push({
           component: 'profile',
@@ -769,13 +769,13 @@ export async function diagnoseProfile(
       issues.push({
         component: 'profile',
         code: 'PROFILE_PACKAGE_MISSING',
-        message: `Package dsh-agy-provider is not installed in profile "${profileName}". Run: npx @deepseek-ai/dsh plugin --profile ${profileName} add dsh-agy-provider`,
+        message: `Package dsh-agy-cli is not installed in profile "${profileName}". Run: npx @deepseek-ai/dsh plugin --profile ${profileName} add dsh-agy-cli`,
       })
     } else if (!bundleDeclared) {
       issues.push({
         component: 'profile',
         code: 'PROFILE_BUNDLE_MISSING',
-        message: `Bundle dsh-agy-provider is not declared in dsh.profile.bundles for profile "${profileName}". Re-run: npx @deepseek-ai/dsh plugin --profile ${profileName} add dsh-agy-provider`,
+        message: `Bundle dsh-agy-cli is not declared in dsh.profile.bundles for profile "${profileName}". Re-run: npx @deepseek-ai/dsh plugin --profile ${profileName} add dsh-agy-cli`,
       })
     }
 
@@ -829,7 +829,7 @@ export async function diagnoseProfile(
             issues.push({
               component: 'profile',
               code: 'PROFILE_DUMP_PARSE_FAILED',
-              message: `DSH --dump-config did not contain a valid dsh-agy-provider section for profile "${profileName}"`,
+              message: `DSH --dump-config did not contain a valid dsh-agy-cli section for profile "${profileName}"`,
             })
             addSuggestion(`Inspect the read-only dump format: npx @deepseek-ai/dsh --profile ${profileName} --dump-config`)
           } else {
@@ -947,7 +947,7 @@ export async function diagnoseProfile(
       issues.push({
         component: 'profile',
         code: 'PROFILE_BUNDLE_DISABLED',
-        message: `Bundle dsh-agy-provider is disabled in profile "${profileName}". Enable in cordis.patch.yml or profile config`,
+        message: `Bundle dsh-agy-cli is disabled in profile "${profileName}". Enable in cordis.patch.yml or profile config`,
       })
     }
     if (toolPolicy === 'reject' && profileName === 'web') {
@@ -1006,7 +1006,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
 
 export function formatDoctorHuman(result: DoctorResult): string {
   const lines: string[] = []
-  lines.push(`dsh-agy-provider doctor (schema v${result.schemaVersion})`)
+  lines.push(`dsh-agy-cli doctor (schema v${result.schemaVersion})`)
   lines.push(`status: ${result.ok ? 'PASS' : 'FAIL'}; quotaUsed: ${result.quotaUsed}`)
   lines.push(`plugin: ${result.plugin.name}@${result.plugin.version ?? 'unknown'}; enabled: ${result.plugin.enabled}`)
   lines.push(`node: ${result.node.version} (${result.node.supported ? 'supported' : 'unsupported'})`)
@@ -1060,9 +1060,9 @@ export function formatDoctorHuman(result: DoctorResult): string {
 }
 
 export function formatDoctorHelp(): string {
-  return `Usage: dsh-agy-provider [doctor] [options]
+  return `Usage: dsh-agy-cli [doctor] [options]
 
-Quota-free diagnostic CLI v3 for dsh-agy-provider and DSH profiles.
+Quota-free diagnostic CLI v3 for dsh-agy-cli and DSH profiles.
 
 Commands:
   doctor                  Run diagnostic checks (default)
@@ -1076,9 +1076,9 @@ Options:
   -h, --help              Show help information
 
 Examples:
-  npx dsh-agy-provider doctor
-  npx dsh-agy-provider doctor --profile web
-  npx dsh-agy-provider doctor --profile web --json
+  npx dsh-agy-cli doctor
+  npx dsh-agy-cli doctor --profile web
+  npx dsh-agy-cli doctor --profile web --json
 `
 }
 

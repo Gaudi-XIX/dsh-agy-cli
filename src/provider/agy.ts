@@ -994,7 +994,7 @@ function normalizeReasoningEffort(value: unknown): AgyReasoningEffort | undefine
   )
 }
 
-// The panel's "default thinking strength" control writes ~/.dsh/agy-link/
+// The panel's "default thinking strength" control writes ~/.dsh/agy-cli/
 // runtime-overrides.json; this reads it back so the generation path uses the
 // user's choice as the last-resort effort instead of the built-in 'high'.
 // 30s TTL so a panel change takes effect without a host restart; an invalid or
@@ -1038,7 +1038,7 @@ function resolveAgyRetryPolicy(config: AgyRetryPolicyConfig | undefined): Resolv
     mode: 'normal',
     maxRetries,
     retryableCodes: [...effectiveCodes],
-  }, 'dsh-agy-provider.retryPolicy')
+  }, 'dsh-agy-cli.retryPolicy')
 }
 
 function resolveBoundedInteger(
@@ -1398,7 +1398,7 @@ export class AgyAdapter extends LlmAdapter {
     const configured = this.currentModels.find(entry => entry.id.toLowerCase() === baseId.toLowerCase()) ?? this.currentModels.find(entry => entry.id === model)
     void suffixEffort // suffix implies effort, handled in stream route; resolve keeps base id for UI consistency
     // "Default thinking strength" is a user setting: the panel control writes it to
-    // ~/.dsh/agy-link/runtime-overrides.json (single source of truth), and the
+    // ~/.dsh/agy-cli/runtime-overrides.json (single source of truth), and the
     // generation path reads it here. It is only a last-resort fallback — a
     // purpose route, the host's requested effort, or a model-id suffix all win.
     // Re-read per call with a 30s TTL (the panel can change it without a restart);

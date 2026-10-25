@@ -7,7 +7,7 @@ import { diagnoseProfile, runDoctor, runDoctorCli, formatDoctorHuman, formatDoct
 
 test('formatDoctorHelp returns CLI usage documentation', () => {
   const help = formatDoctorHelp()
-  assert.match(help, /dsh-agy-provider \[doctor\] \[options\]/)
+  assert.match(help, /dsh-agy-cli \[doctor\] \[options\]/)
   assert.match(help, /--profile <name>/)
   assert.match(help, /--json/)
 })
@@ -16,7 +16,7 @@ test('runDoctorCli handles --help and -v/--version flags', async () => {
   let stdoutOutput = ''
   let exitCode = await runDoctorCli(['--help'], text => { stdoutOutput += text })
   assert.equal(exitCode, 0)
-  assert.match(stdoutOutput, /dsh-agy-provider/)
+  assert.match(stdoutOutput, /dsh-agy-cli/)
 
   stdoutOutput = ''
   exitCode = await runDoctorCli(['-v'], text => { stdoutOutput += text })
@@ -71,7 +71,7 @@ test('diagnoseProfile detects package missing, bundle missing, disabled, and rej
     const webProfileDir = join(dshHome, 'profiles', 'web')
     await mkdir(webProfileDir, { recursive: true })
 
-    // 1. Profile package.json has no dsh-agy-provider
+    // 1. Profile package.json has no dsh-agy-cli
     await writeFile(join(webProfileDir, 'package.json'), JSON.stringify({ name: 'profile-web' }, null, 2))
     const resNoPkg = await diagnoseProfile({ profileName: 'web', dshHome })
     assert.equal(resNoPkg.packageInstalled, false)
@@ -80,7 +80,7 @@ test('diagnoseProfile detects package missing, bundle missing, disabled, and rej
     // 2. Profile package.json has dependency but no bundle declaration
     await writeFile(join(webProfileDir, 'package.json'), JSON.stringify({
       name: 'profile-web',
-      dependencies: { 'dsh-agy-provider': '0.5.0' },
+      dependencies: { 'dsh-agy-cli': '0.5.0' },
       dsh: { profile: { bundles: [] } },
     }, null, 2))
     const resNoBundle = await diagnoseProfile({ profileName: 'web', dshHome })
@@ -91,13 +91,13 @@ test('diagnoseProfile detects package missing, bundle missing, disabled, and rej
     // 3. Profile package.json has dependency and bundle, but dump-config returns disabled
     await writeFile(join(webProfileDir, 'package.json'), JSON.stringify({
       name: 'profile-web',
-      dependencies: { 'dsh-agy-provider': '0.5.0' },
-      dsh: { profile: { bundles: ['dsh-agy-provider'] } },
+      dependencies: { 'dsh-agy-cli': '0.5.0' },
+      dsh: { profile: { bundles: ['dsh-agy-cli'] } },
     }, null, 2))
     const mockDisabledRunner = async () => ({
       exitCode: 0,
       timedOut: false,
-      stdout: `# == dsh-agy-provider\n  enabled: false\n  toolPolicy: reject\n`,
+      stdout: `# == dsh-agy-cli\n  enabled: false\n  toolPolicy: reject\n`,
       stderr: '',
     })
     const resDisabled = await diagnoseProfile({
@@ -115,7 +115,7 @@ test('diagnoseProfile detects package missing, bundle missing, disabled, and rej
     const mockEnabledRunner = async () => ({
       exitCode: 0,
       timedOut: false,
-      stdout: `# == dsh-agy-provider\n  enabled: true\n  toolPolicy: dsh-owned\n  provider: agy\n  model: gemini-3.1-pro\n`,
+      stdout: `# == dsh-agy-cli\n  enabled: true\n  toolPolicy: dsh-owned\n  provider: agy\n  model: gemini-3.1-pro\n`,
       stderr: '',
     })
     const resReady = await diagnoseProfile({
@@ -148,8 +148,8 @@ test('diagnoseProfile resolves a Windows npm shim to the DSH JavaScript entry wh
     await writeFile(dshEntry, '', 'utf8')
     await writeFile(join(profileDir, 'package.json'), JSON.stringify({
       name: 'profile-web',
-      dependencies: { 'dsh-agy-provider': '0.5.0' },
-      dsh: { profile: { bundles: ['dsh-agy-provider'] } },
+      dependencies: { 'dsh-agy-cli': '0.5.0' },
+      dsh: { profile: { bundles: ['dsh-agy-cli'] } },
     }, null, 2))
 
     let observed
@@ -162,7 +162,7 @@ test('diagnoseProfile resolves a Windows npm shim to the DSH JavaScript entry wh
         return {
           exitCode: 0,
           timedOut: false,
-          stdout: '# == dsh-agy-provider\n  enabled: true\n  toolPolicy: agy-owned\n',
+          stdout: '# == dsh-agy-cli\n  enabled: true\n  toolPolicy: agy-owned\n',
           stderr: '',
         }
       },
@@ -189,8 +189,8 @@ test('runDoctor combines provider and profile diagnostics into unified report', 
     await mkdir(headlessProfileDir, { recursive: true })
     await writeFile(join(headlessProfileDir, 'package.json'), JSON.stringify({
       name: 'profile-headless',
-      dependencies: { 'dsh-agy-provider': '0.5.0' },
-      dsh: { profile: { bundles: ['dsh-agy-provider'] } },
+      dependencies: { 'dsh-agy-cli': '0.5.0' },
+      dsh: { profile: { bundles: ['dsh-agy-cli'] } },
     }, null, 2))
 
     const doctorResult = await runDoctor({
@@ -217,7 +217,7 @@ test('runDoctor combines provider and profile diagnostics into unified report', 
     assert.equal(doctorResult.profile?.bundleDeclared, true)
 
     const humanFormatted = formatDoctorHuman(doctorResult)
-    assert.match(humanFormatted, /dsh-agy-provider doctor/)
+    assert.match(humanFormatted, /dsh-agy-cli doctor/)
     assert.match(humanFormatted, /profile \[headless\]/)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -234,8 +234,8 @@ test('doctor v3 reports effective DSH bridge capabilities without exposing works
     await mkdir(workspaceRoot, { recursive: true })
     await writeFile(join(profileDir, 'package.json'), JSON.stringify({
       name: 'profile-workspace',
-      dependencies: { 'dsh-agy-provider': '0.5.0' },
-      dsh: { profile: { bundles: ['dsh-agy-provider'] } },
+      dependencies: { 'dsh-agy-cli': '0.5.0' },
+      dsh: { profile: { bundles: ['dsh-agy-cli'] } },
     }, null, 2))
 
     const result = await diagnoseProfile({
@@ -246,7 +246,7 @@ test('doctor v3 reports effective DSH bridge capabilities without exposing works
         exitCode: 0,
         timedOut: false,
         stderr: '',
-        stdout: `# == dsh-agy-provider
+        stdout: `# == dsh-agy-cli
   enabled: true
   toolPolicy: dsh-owned
   provider: agy
@@ -303,8 +303,8 @@ test('doctor v3 emits stable dump failure codes and read-only repair suggestions
     await mkdir(profileDir, { recursive: true })
     await writeFile(join(profileDir, 'package.json'), JSON.stringify({
       name: 'profile-web',
-      dependencies: { 'dsh-agy-provider': '0.5.0' },
-      dsh: { profile: { bundles: ['dsh-agy-provider'] } },
+      dependencies: { 'dsh-agy-cli': '0.5.0' },
+      dsh: { profile: { bundles: ['dsh-agy-cli'] } },
     }, null, 2))
 
     const timeoutResult = await diagnoseProfile({
@@ -348,8 +348,8 @@ test('doctor v3 flags unsafe effective Agent combinations without modifying the 
     await mkdir(profileDir, { recursive: true })
     await writeFile(join(profileDir, 'package.json'), JSON.stringify({
       name: 'profile-unsafe',
-      dependencies: { 'dsh-agy-provider': '0.5.0' },
-      dsh: { profile: { bundles: ['dsh-agy-provider'] } },
+      dependencies: { 'dsh-agy-cli': '0.5.0' },
+      dsh: { profile: { bundles: ['dsh-agy-cli'] } },
     }, null, 2))
 
     const result = await diagnoseProfile({
@@ -360,7 +360,7 @@ test('doctor v3 flags unsafe effective Agent combinations without modifying the 
         exitCode: 0,
         timedOut: false,
         stderr: '',
-        stdout: `# == dsh-agy-provider
+        stdout: `# == dsh-agy-cli
   enabled: true
   toolPolicy: agy-owned
   provider: agy
@@ -391,7 +391,7 @@ test('doctor v3 flags unsafe effective Agent combinations without modifying the 
         exitCode: 0,
         timedOut: false,
         stderr: '',
-        stdout: `# == dsh-agy-provider
+        stdout: `# == dsh-agy-cli
   enabled: true
   provider: agy
   model: gemini-3.7-flash-low

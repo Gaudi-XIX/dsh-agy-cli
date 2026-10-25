@@ -7,19 +7,19 @@
 DSH Web/headless 继续使用 DSH 原生 profile 安装：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.6.0
+npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.6.0
 ```
 
 普通 Node.js 导入仍可以单独安装：
 
 ```powershell
-npm install dsh-agy-provider@0.6.0
+npm install dsh-agy-cli@0.6.0
 ```
 
 安装不会发送模型请求，也不会自动写入 AGY Agent。升级后建议先运行：
 
 ```powershell
-npx dsh-agy-provider doctor --profile web --json
+npx dsh-agy-cli doctor --profile web --json
 ```
 
 ## 默认行为
@@ -37,13 +37,13 @@ npx dsh-agy-provider doctor --profile web --json
 先查看模板，不消耗额度：
 
 ```powershell
-npx dsh-agy-provider agents list
+npx dsh-agy-cli agents list
 ```
 
 安装只读档位：
 
 ```powershell
-npx dsh-agy-provider agents install read-only --apply
+npx dsh-agy-cli agents install read-only --apply
 ```
 
 `read-only` 只允许 `find_by_name`、`grep_search`、`view_file`、`list_dir`。写入档位必须显式指定已有工作区：
@@ -97,7 +97,7 @@ purposeRoutes:
 回滚只需把目标 profile 的 package spec 改回 0.5.0，并保留或移除 0.6.0 新增配置：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.5.0
+npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.5.0
 ```
 
 如果启用了 `workspace-write`、purpose route、retry 或 experimental image，回滚前应删除这些 0.6.0 配置；未安装的 Agent 模板不会影响旧版 `deepseek-proxy`。

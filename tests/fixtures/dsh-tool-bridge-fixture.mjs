@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises'
 
-export const name = 'dsh-agy-provider-tool-bridge-fixture'
+export const name = 'dsh-agy-cli-tool-bridge-fixture'
 export const inject = ['tools', 'sessions']
 
 export function apply(ctx) {

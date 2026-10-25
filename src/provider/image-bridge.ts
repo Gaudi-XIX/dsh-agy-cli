@@ -27,7 +27,7 @@ export type AgyImageMediaType = typeof IMAGE_MEDIA_TYPES[number]
  * on demand by the image-view Agent (or by the user in Explorer) long after the
  * turn that uploaded them is over.
  */
-export const IMAGE_HISTORY_CACHE_DIR = join(dshHome(), 'agy-link', 'image-cache')
+export const IMAGE_HISTORY_CACHE_DIR = join(dshHome(), 'agy-cli', 'image-cache')
 const IMAGE_HISTORY_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 
 export type AgyImageBridgeErrorCode =

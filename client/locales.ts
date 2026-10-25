@@ -1,5 +1,5 @@
 /** Native DSH locale dictionaries for the Antigravity UI. */
-export const NS = 'agy-link'
+export const NS = 'agy-cli'
 
 /** Simplified Chinese is preserved as the original UI language and key source. */
 export const zh = {

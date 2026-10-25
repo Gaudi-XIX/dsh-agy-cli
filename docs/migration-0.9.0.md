@@ -38,7 +38,7 @@ visibleModels:
 model: gemini-3.7-flash
 ```
 
-* 面板通过 `registerModelDiscovery('dsh-agy-provider')` 拿到发现列表后渲染为多选勾选框，勾选结果写回 `visibleModels`
+* 面板通过 `registerModelDiscovery('dsh-agy-cli')` 拿到发现列表后渲染为多选勾选框，勾选结果写回 `visibleModels`
 * 未勾选的模型不在选择器出现，但显式 `model: xxx` 请求仍兼容
 * `src/provider/agy.ts:effectiveModels()` 按此过滤
 
@@ -86,12 +86,12 @@ legacy `agy-owned` 仍支持显式 `workspaceRoot`，但面板会提示迁移到
 
 ## 6. 升级步骤
 
-1. 升级包：`npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.9.0`
+1. 升级包：`npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.9.0`
 2. 打开 DSH 设置面板：启用 AGY、勾选可见模型、选择默认 base 模型、在会话中选择推理强度
 3. 若曾配 `workspaceRoot` 且为 `dsh-owned`，删除该字段
 4. 若曾用 `-high` 后缀，改为 base
-5. 运行 `npx dsh-agy-provider doctor --profile web --json` 确认 `profileSchemaVersion:4`、`workspaceSource:dsh-session-cwd`、无 deprecation
+5. 运行 `npx dsh-agy-cli doctor --profile web --json` 确认 `profileSchemaVersion:4`、`workspaceSource:dsh-session-cwd`、无 deprecation
 
 ## 7. 回滚
 
-如需回滚：`npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.8.0`，旧的 `-high` 后缀与 `workspaceRoot` 在 0.8.0 仍可用（但不再推荐）。
+如需回滚：`npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.8.0`，旧的 `-high` 后缀与 `workspaceRoot` 在 0.8.0 仍可用（但不再推荐）。

@@ -1,186 +1,91 @@
-# dsh-agy-provider
+# dsh-agy-cli
 
-[简体中文](README.md) · [English](README.en.md)
+[![npm](https://img.shields.io/npm/v/dsh-agy-cli)](https://www.npmjs.com/package/dsh-agy-cli)
+[![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-cli)](LICENSE)
 
-[![npm](https://img.shields.io/npm/v/dsh-agy-provider)](https://www.npmjs.com/package/dsh-agy-provider)
-[![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-provider)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/Gaudi-XIX/dsh-agy-provider)](https://github.com/Gaudi-XIX/dsh-agy-provider)
+把本机已登录的 **Google Antigravity CLI（`agy`）** 接入 [DeepSeek Harness (DSH)](https://github.com/darkings/dsh) 作为一级模型提供方。**全部上游流量由官方二进制自己签名发起；工具执行、审批策略、工作区沙箱 100% 留在 DSH。**
 
-将本机已登录的 **Google Antigravity CLI (AGY)** 作为模型提供商接入 [DeepSeek Harness (DSH)](https://github.com/darkings/dsh)。
+> **接续声明**：本项目是 [`darkings/dsh-agy-provider`](https://github.com/darkings/dsh-agy-provider) 的接续维护版——原作者自 2026-08-28 起停更，本仓库自 2026-10-12 起接续（适配 DSH 0.2.0-rc.2 宿主、MCP 工具桥、全源码安全审计），git 历史完整保留原作者全部署名，MIT 协议不变。模型路由 id 保持 `agy`，从原版迁移无需改配置。
 
 ---
 
-## 核心架构：DSH 掌控 Harness 全局，AGY 提供合规算力
+## 生态位置：一张 25 家插件的地图（调研结论）
 
-与市面上常见的 Anti-gravity 相关插件不同，`dsh-agy-provider` 确立了严格的职责与控制权边界：
+写这个 README 之前，我们把这个市场（awesome-dsh-plugin，6,896 条）里全部 25 个 Antigravity 相关插件逐个查了一遍。先给你地形，再说我们在哪。
 
-> **Harness（工作区沙箱、审批策略、工具执行、上下文预算与长程记忆）100% 由 DSH 接管并执行；**  
-> **AGY CLI 被剥离外围权限与内置工具执行权，降维收编为纯粹的模型推理与合规配额供给端。**
+### 25 家分属 6 个技术维度
 
-```text
-       ┌────────────────────────────────────────────────────────┐
-       │                   DeepSeek Harness                     │
-       │  ┌─────────────────┐ ┌───────────────┐ ┌─────────────┐ │
-       │  │ Workspace / CWD │ │ Sandbox/Perms │ │ MCP / Tools │ │
-       │  └────────┬────────┘ └───────┬───────┘ └──────┬──────┘ │
-       │           │                  │                │        │
-       │           ▼                  ▼                ▼        │
-       │               DSH ToolRuntime & Event Loop             │
-       └─────────────────────────────▲──────────────────────────┘
-                                     │ (dsh-owned 工具调用)
-                       ┌─────────────┴─────────────┐
-                       │     dsh-agy-provider      │
-                       │ ├─ stdinMode: hold 管道守护│
-                       │ ├─ 状态机编排 & 思考链折叠 │
-                       │ ├─ 按轮预算图片协议桥接    │
-                       │ └─ 尾流式交付 & 异常兜底   │
-                       └─────────────┬─────────────┘
-                                     │ (stream-json IPC)
-                                     ▼
-                       ┌───────────────────────────┐
-                       │      Native agy.exe       │
-                       │   (纯模型推理 + 合规配额)   │
-                       └───────────────────────────┘
+| 维度 | 家数 | 干什么 |
+|---|---|---|
+| **模型 provider 接入** | **12** | 把 Antigravity 额度变成 DSH 里可选的模型路由 ← **我们在这里** |
+| 视觉/图像工具 | 4 | 借额度看图、画图 |
+| 子代理委派 | 2 | agy 当一次性编码子代理（工具面，不是模型路由） |
+| 会话数据 | 2 | 读 Antigravity 本地会话历史 |
+| 工作流外围 | 2 | 外部 agent 控制面等 |
+| 配额监控 | 1 | 多平台额度仪表盘 |
+
+### 我们所在的维度里，12 家分三条路线
+
+分界线只有两条本质问题：**凭据怎么碰、harness（工具执行/审批/上下文管理）归谁**。
+
+| 路线 | 家数 | 代表 | 代价 |
+|---|---|---|---|
+| **OAuth 凭据提取直连** | 8 | dsh-antigravity-oauth、dsh-subscriptions、dsh-antigravity-auth | 自由度最高（多账号池、图像、搜索），但伪造客户端直连私有 RPC——`dsh-antigravity-oauth` 的描述自己写着 "carries account-ban risk" |
+| **官方 CLI 委托（harness 归 CLI）** | 1 | dsh-agy-link（活跃） | 合规，但工具在 CLI 内部黑盒里跑，DSH 的审批/沙箱够不着 |
+| **官方通道 + DSH 主导 harness** | 3 | **本插件**、dsh-agy-safe（停更）、dsh-antigravity-acp（活跃，走 ACP 协议） | 合规 + DSH 治理兼得，是 12 家里唯一对「harness 强弱」免疫的子格 |
+
+### 这条线现在的真实格局
+
+同格三家，截至 2026-10-26：**dsh-agy-safe 停更于 09-08**（npm 0.1.8 后无活动），**上游原版停更于 08-28**；`dsh-antigravity-acp` 活跃但已岔去 **ACP server 进程线**（见下）。也就是说——**「官方 CLI 委托 + DSH 主导」这条 CLI 战线，目前只剩本仓库一家在维护**。原版与 agy-safe 的存量用户（两者合计月下载约千级）面对的是停更插件与新宿主（0.2.0-rc.2）不兼容的现实。
+
+### 三条第一性原理，本插件逐条这样满足
+
+1. **完全安全合规**：不抽取任何 token、不伪造任何网络请求——所有上游流量由官方 `agy.exe` 二进制自己签名。凭据只在本机内存中流经（保活/配额面板读凭据管理器 blob 仅用于判过期与身份），不落日志、不进错误消息。
+2. **原样享受官方账户额度**：消耗打在你自己的 Antigravity 套餐上，与官方客户端同池同规则。是否有客户端差异化的计费政策，无读数不宣称。
+3. **DSH 的 harness 替代 AGY 的 harness**：AGY CLI 被剥离工具执行权，降维为纯模型推理端——工具调用意图在管道层被拦截，执行权 100% 收归 DSH 的 ToolRuntime，服从 DSH 的沙箱三档（read-only / workspace-write / danger-full-access）与审批规则。
+
+## 与两个邻居的诚实对比
+
+**vs `dsh-agy-safe`（同路线前辈，停更）**：同为 CLI 无头桥接 + 工具契约回传。它有一条我们敬佩的特色——历史指纹链（会话哈希检测上下文分叉后重放完整历史）；我们的 resume 走 conversation 绑定 + mismatch 自动重放，思路不同目标相同。它停更后无法跟进 DSH 0.2.0-rc.2；本仓库接续了这个生态位并完成两轮全源码安全审计（原型污染防线、MCP 桥面闸门、面板加固——详见 CHANGELOG 0.11.0/0.12.0）。
+
+**vs `dsh-antigravity-acp`（活跃，最强同格竞品）**：架构同构（工具执行都归 DSH），**协议分岔**是本质差异——
+
+| | 本插件（stream-json CLI 线） | dsh-antigravity-acp（ACP server 线） |
+|---|---|---|
+| 连接的进程 | 官方 `agy` CLI 本体（秒级冷启动） | 官方独立发布的 ACP server 进程（PyInstaller，冷启动实测约 52 秒，需预热设计） |
+| 协议地位 | 闭源二进制的私有行协议，靠实测固化，官方改一行就要跟 | 公开标准协议（Agent Client Protocol），有规范有版本 |
+| 工具边界的保证方式 | 协议不管工具，靠工程纪律事后收权（fail-closed 准入 + 桥面闸门 + 审计） | 协议天生剥夺——agent 只有「请求工具」的发言权，执行权写在规范里归 client |
+| 依赖 | 只需本机 CLI 装好登录 | Node ≥ 22.19 + 下载维护 ACP server 进程 |
+
+诚实说：它的工程完成度目前是标杆（设置页、额度药丸、连接预热、图片输入）。我们的差异化立足点是**轻**（秒级起轮、零额外下载、只依赖 CLI 登录态）与 CLI print 模式这条兼容面更宽的通道。两条线是协议分岔不是替代关系；若官方未来把 CLI 模式冻结，迁移到 ACP 线只需换传输层，harness 设计不变。
+
+**差距清单（我们自己的短板，不藏着）**：对比 acp，我们没有额度药丸、没有连接预热、没有图片输入通道；私有行协议存在上游漂移风险；工程面 317 例测试对它的 600+，数量不在一个量级（但我们的门禁把测试数锁进脚本，删一个用例会红）。
+
+## 功能（接续版增量）
+
+- **双工具路线**：MCP 桥把 DSH 工具交给 AGY（真工具事件、过程流可视化，推荐），失败自动降级为 prompt 契约
+- **DSH 主导 harness**：工作区、审批、沙箱、上下文预算全在 DSH；AGY 只出模型
+- **流式 + 状态机**：`stdinMode: hold` 防回滚、思考链折叠、尾流交付、断连保文本
+- **会话管理**：resume / full 双模式，死亡会话自动重放，会话映射落盘可迁移
+- **配额面板与凭据保活**：loopback-only；保活读凭据仅判过期，刷新由官方二进制自己完成
+- **安全加固（0.11.0/0.12.0）**：原型污染防线、MCP 桥面闸门、面板 loopback 门与原子写、凭据脱敏补漏——全部有测试背书
+
+## 安装
+
+```console
+dsh plugin --profile <你的 profile> add dsh-agy-cli
 ```
 
----
+前置要求：本机已安装并登录官方 Antigravity CLI（`agy`）；Node ≥ 22。迁移自 `dsh-agy-provider` 或 `dsh-agy-safe`：模型路由 id 保持 `agy`，无需改模型配置；运行数据目录由 `~/.dsh/agy-link/` 变更为 `~/.dsh/agy-cli/`（旧的 runtime-overrides.json 可手动搬移）。
 
-## 与其他 DSH AGY 额度插件的技术路径对比
+## 开发与门禁
 
-针对市面上其他利用 AGY 额度的 DSH 插件方案，本项目在技术路径与架构设计上存在以下三个核心维度的差异：
-
-### 1. 凭据与协议信任边界：进程级委托 vs 逆向自建反代
-
-* **其他插件的技术路径**：  
-  在 DSH 进程内提取并保存 OAuth Token，伪造客户端 Header，在内存中直接向 Google 内部私有 RPC 接口发起 HTTP 请求，通常辅以多账号轮换机制进行配额调度。
-* **本插件的技术路径**：  
-  不存储、不外发凭据，不伪造任何网络请求——所有上游流量都由本机安装的官方 `agy.exe` 二进制自己签名发起，DSH 仅通过标准 stream-json IPC 管道与之通信。需要精确说明的边界：插件的**凭据保活**与**配额面板**会读取 Windows 凭据管理器中 AGY 自己存放的 OAuth blob（`gemini:antigravity`），但只用于「判断过期时间」与「读配额身份」；token 的刷新完全由官方二进制自己的静默认证完成（Google 的 client secret 在闭源 `agy.exe` 内，插件物理上拿不到），插件从不把凭据用作自己发请求的认证材料——这与「抽 token 伪造客户端直连」有本质区别。
-* **优势**：
-  - **零风控与封号风险**：网络传输（TLS、IP、协议指纹）和客户端认证完全由官方二进制完成，不存在因逆向私有 API、伪造客户端特征被 Google 服务端识别为异常流量而封禁账号的风险。
-  - **清晰的凭据安全边界**：插件本身不维护任何凭据存储；凭据只在本机内存中流经，不落日志、不进错误消息。
-* **劣势（代价）**：
-  - **无法构建多账号号池**：物理绑定本机已登录的单一合法凭据，无法在内存中实现多账号轮询或并发切号，配额上限严格受制于单账号官方额度。
-  - **强依赖宿主环境**：运行前提是宿主物理机上存在已安装且已完成认证的官方 CLI 二进制。
-
----
-
-### 2. 工具执行与沙箱控制权：DSH 独占执行权 vs 越权绕过沙箱
-
-* **其他插件的技术路径**：  
-  部分套壳插件为了简化流程，向 CLI 进程注入 `--dangerously-skip-permissions`，将命令执行权交由底层 CLI 裸跑；或者放任 CLI 内部工具逻辑与 DSH 自身的 Tool Loop 重叠，造成执行冲突。
-* **本插件的技术路径**：  
-  严禁向 CLI 传递任何越权参数。AGY CLI 被限定为纯模型推理器，其生成的工具调用意图在管道层被拦截，执行权 100% 收归 DSH 的 ToolRuntime，严格服从 DSH 的沙箱策略（`read-only` / `workspace-write` / `danger-full-access`）与用户审批规则。
-* **优势**：
-  - **沙箱完整性保障**：所有文件读写、Shell 命令和网络请求均在 DSH 宿主监管下运行，模型无法通过底层 CLI 逃逸沙箱。
-  - **消除执行回路竞态**：消除了 CLI 内部工具逻辑与 DSH 宿主工具体系的双重事件循环竞态。
-* **劣势（代价）**：
-  - **跨进程 IPC 延迟**：每次工具调用必须在 DSH 与外部进程之间进行中转（意图捕获 → DSH 宿主执行 → 格式化回填输入），多步工具调用的端到端耗时高于纯内存内直连 API。
-
----
-
-### 3. 流式管道与生命周期控制：状态机编排防回滚 vs 原始流简单透传
-
-* **其他插件的技术路径**：  
-  直接将子进程的标准输出向外透传。由于未适配 AGY CLI 的输入管道生命周期，输入端一旦提前收到 EOF，CLI 会触发内部任务撤回（`CORTEX_STEP_STATUS_CANCELED`），导致前面已输出的内容被全额回滚清空；同时输出中混杂原始 Thought 思考行。
-* **本插件的技术路径**：  
-  采用 `stdinMode: hold` 主动保持标准输入管道开启，直至收到 CLI 的明确完成帧；在输出端建立状态机拦截层，在流式生成过程中将思考链折叠收敛，并在最后平滑交付确定性尾流；遇异常断连可保留已流出的部分有效文本。
-* **优势**：
-  - **根除流式回滚**：彻底解决了 CLI 因输入流过早关闭而撤回 token 的问题，确保输出确定性。
-  - **结构化输出交付**：中间思考状态与最终交付文本清晰分层，避免原始调试行污染主对话流。
-* **劣势（代价）**：
-  - **首字延迟（TTFT）增加**：每次调用需经历进程拉起、CLI 启动自检和前置状态机处理，首字延迟通常在 1~2 秒，无法达到直接发送 HTTP 请求的毫秒级即时响应。
-  - **对闭源二进制变更敏感**：外部状态机强依赖 CLI 的 stream-json 行协议。一旦官方调整流式事件结构或错误格式，编排层必须跟进适配，维护成本高于标准的 HTTP 协议解析。
-
----
-
-### 核心权衡总结
-
-本项目与其他 DSH AGY 插件在额度利用上的根本权衡：
-
-| 放弃的代价 / 劣势 | 换取的工程收益 / 优势 |
-| :--- | :--- |
-| **放弃多账号号池轮询**（受制于单机官方配额） | **零封号风险**（完全遵循官方二进制认证协议与网络指纹） |
-| **承担跨进程 IPC 延迟**（多步工具调用存在管道开销） | **沙箱绝对受控**（DSH 100% 独占 ToolRuntime 与权限审批） |
-| **较高的首字延迟（TTFT）与状态机维护成本** | **消除流式回滚**（规整的尾流交付与异常文本断流兜底） |
-
----
-
-## 两个附加面（诚实披露）
-
-除模型接入主链路外，插件还有两个会**接触凭据 blob** 的附加能力，均只在本机 loopback 语境下工作：
-
-1. **凭据保活**（`tokenKeepaliveMs`，默认 60 秒检查一次）：读凭据 blob 只为判断过期时间；真正刷新靠插件在到期前的最后一个检查周期**主动启动一次官方 `agy.exe`**（立即关闭输入管道，产生零计费 token），由 AGY 自己的静默认证完成轮换。同一到期时刻的失败尝试会被记住，不会反复拉起进程。
-2. **配额面板**（设置页「模型」里本行卡片 + `/plugins/agy-link/status`）：读凭据 blob 展示账号身份（邮箱/名字）与到期倒计时，并带着凭据管理器里的 token 由**本机直连 Google 的配额查询接口**拉取剩余额度。所有面板路由仅限 loopback 访问。
-
-两个附加面都**不产生计费推理**、不落盘凭据、不把凭据带进任何错误消息或日志。
-
----
-
-## 与 dsh-zcode-provider 的关系：同一光谱的两端
-
-同一作者维护的 [`dsh-zcode-provider`](https://github.com/Gaudi-XIX/dsh-zcode-provider) 把本插件的技术路线推到了另一端，两者的差异是理解「harness 归属」最干净的对照：
-
-- **本插件 = DSH 主导 harness**。AGY CLI 暴露了 stream-json 事件协议与结构化 tool-call 信封，所以模型只负责「想」，所有「做」（工具执行、审批、沙箱、上下文）都在 DSH 手里。
-- **dsh-zcode-provider = ZCode CLI 主导 harness**。ZCode 0.17.0 不暴露裸模型接口、不吐工具投影、额度绑官方签名通道——接口没开门，插件侧变不出来，只能整轮任务委托。
-
-**选型口径**：多步工具任务走本插件（质量由 DSH 的 harness 决定）；纯文本问答走 zcode 路线（harness 强弱无感，免费额度该用就用）。一个 provider 决定一个 harness——会话选了谁，谁就主导。
-
----
-
-## 安装与配置
-
-### 1. 前置要求
-- Node.js >= 20
-- 本机已安装官方 **Google Antigravity CLI (`agy`)** 且已通过 `agy` 命令登录。
-
-### 2. 通过 DSH 插件管理器安装
-
-```powershell
-npx @deepseek-ai/dsh plugin --profile desktop add dsh-agy-provider@0.10.0
+```bash
+npm ci --ignore-scripts
+npm run typecheck
+npm test    # tsc 全量 → 317 例 node --test
 ```
 
-### 3. 配置示例（推荐放入 `cordis.patch.yml`）
+## 许可
 
-```yaml
-- id: dsh-agy-provider
-  name: dsh-agy-provider
-  config:
-    enabled: true
-    provider: agy
-    model: gemini-3.8-flash
-    visibleModels:
-      - gemini-3.8-flash
-      - gemini-3.1-pro
-    models:
-      - id: gemini-3.8-flash
-        name: Gemini 3.8 Flash
-      - id: gemini-3.1-pro
-        name: Gemini 3.1 Pro
-    toolPolicy: dsh-owned
-    sessionMode: resume
-    imageInput: experimental
-    stdinMode: hold
-    timeoutMs: 900000
-    idleTimeoutMs: 300000
-    modelDiscovery: off
-```
-
----
-
-## 诊断与测试
-
-```powershell
-# 运行配置文件健康体检（不消耗模型额度）
-npx dsh-agy-provider doctor --profile desktop --json
-
-# 运行自动化测试套件
-npm test
-```
-
----
-
-## 开源协议
-
-本项目基于 **[Darkings/dsh-agy-provider](https://github.com/darkings/dsh-agy-provider)**（MIT）进行重构与增强。
-
-遵循 [MIT License](LICENSE) 开源。
+MIT。原作品版权归 Darkings（darkings/dsh-agy-provider）所有，本接续版在同等许可证下延续并保留完整署名历史。

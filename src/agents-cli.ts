@@ -14,7 +14,7 @@ function optionValue(args: readonly string[], name: string): string | undefined 
 }
 
 export function formatAgentsHelp(): string {
-  return `Usage: dsh-agy-provider agents <command> [options]
+  return `Usage: dsh-agy-cli agents <command> [options]
 
 Quota-free Agent template management. Preview is the default; no files are changed without --apply.
 
@@ -32,9 +32,9 @@ Options:
 Presets: ${AGENT_PRESET_IDS.join(', ')}
 
 Examples:
-  npx dsh-agy-provider agents list
-  npx dsh-agy-provider agents install read-only --dir ~/.gemini/antigravity-cli/gemini-root-config/agents
-  npx dsh-agy-provider agents install workspace-write --apply --backup
+  npx dsh-agy-cli agents list
+  npx dsh-agy-cli agents install read-only --dir ~/.gemini/antigravity-cli/gemini-root-config/agents
+  npx dsh-agy-cli agents install workspace-write --apply --backup
 `
 }
 

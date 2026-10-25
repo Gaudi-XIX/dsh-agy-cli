@@ -218,7 +218,7 @@ function getOrigin(): string {
 /** Build media URL from path */
 export function buildMediaUrl(rawPath: string): string {
   const origin = getOrigin();
-  return `${origin}/plugins/agy-link/media?path=${encodeURIComponent(rawPath.trim())}`;
+  return `${origin}/plugins/agy-cli/media?path=${encodeURIComponent(rawPath.trim())}`;
 }
 
 /**
@@ -422,7 +422,7 @@ export function scanAndEnhanceImages(): void {
 
   // 1. Rewrite any existing <img> src pointing to 127.0.0.1 to current origin if remote
   if (origin && !origin.includes('127.0.0.1') && !origin.includes('localhost')) {
-    const images = document.querySelectorAll<HTMLImageElement>('img[src*="/plugins/agy-link/media"]');
+    const images = document.querySelectorAll<HTMLImageElement>('img[src*="/plugins/agy-cli/media"]');
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
       if (img && img.src.includes('127.0.0.1')) {

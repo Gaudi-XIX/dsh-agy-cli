@@ -71,6 +71,7 @@ function fakeRequest(method, path) {
   req.method = method
   req.url = path
   req.headers = {}
+  req.socket = { remoteAddress: "127.0.0.1" }
   setImmediate(() => req.emit('end'))
   return req
 }
@@ -106,8 +107,8 @@ test('a 401 from the quota RPCs surfaces as quotaError=unauthorized, not a silen
     const ws = fakeWebServer()
     const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' })
 
-    await call(ws, '/plugins/agy-link/pool/refresh-quota', 'POST')
-    const resp = await call(ws, '/plugins/agy-link/status', 'GET')
+    await call(ws, '/plugins/agy-cli/pool/refresh-quota', 'POST')
+    const resp = await call(ws, '/plugins/agy-cli/status', 'GET')
 
     assert.equal(resp.json.quotaError, 'unauthorized')
     // The badge keys off the auth phase, so it must not claim "signed in".

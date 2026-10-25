@@ -7,15 +7,15 @@
 先在目标 DSH profile 安装 0.7.0：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.7.0
-npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-provider@0.7.0
+npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.7.0
+npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-cli@0.7.0
 ```
 
 启动前可以只读检查有效配置：
 
 ```powershell
-npx dsh-agy-provider doctor --profile web --json
-npx @deepseek-ai/dsh --profile web --dump-config | Select-String dsh-agy-provider
+npx dsh-agy-cli doctor --profile web --json
+npx @deepseek-ai/dsh --profile web --dump-config | Select-String dsh-agy-cli
 ```
 
 期望 bundle 配置包含：
@@ -64,8 +64,8 @@ toolPolicy: agy-owned
 如需回滚到 0.6.1：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.6.1
-npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-provider@0.6.1
+npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.6.1
+npx @deepseek-ai/dsh plugin --profile headless add dsh-agy-cli@0.6.1
 ```
 
 回滚后删除只属于 0.7.0 的 `toolPolicy: dsh-owned`、DSH bridge 相关覆盖项，并重新运行对应版本的 doctor。不要复用 0.7.0 的 bundle patch 或 tag。

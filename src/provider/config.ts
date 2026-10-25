@@ -404,7 +404,7 @@ export function createConfigSchema(defaults: {
     },
   })
   return localized
-    .comment('其余字段在 cordis.patch.yml 中，请直接编辑对应段。 (dsh-agy-provider)') as unknown as z<Config>
+    .comment('其余字段在 cordis.patch.yml 中，请直接编辑对应段。 (dsh-agy-cli)') as unknown as z<Config>
 }
 
 /** Programmatic library default: enabled=false, toolPolicy=reject */
@@ -440,7 +440,7 @@ export function configuredModels(config: Pick<Config, 'model' | 'models'> = {}):
  * reference.
  *
  * `enabled` carries `.volatile()` so the host's SettingsForms can project this
- * Config into the `dsh-agy-provider` settings namespace — without at least one
+ * Config into the `dsh-agy-cli` settings namespace — without at least one
  * volatile field the Models page does not render our row at all. The cost is
  * that the host hands the plugin a *reference* object (`{ get() }`, written
  * through a symbol key) instead of the plain boolean the profile declares, so
@@ -448,7 +448,7 @@ export function configuredModels(config: Pick<Config, 'model' | 'models'> = {}):
  *
  * That comparison used to gate `apply()`: the directory and the HTTP routes
  * were registered (they run before the gate) while the provider adapter never
- * was, i.e. the plugin was half-mounted and `/plugins/agy-link/status` reported
+ * was, i.e. the plugin was half-mounted and `/plugins/agy-cli/status` reported
  * `enabled: {}`. Read the flag through here instead of comparing directly.
  */
 export function readConfigFlag(value: unknown): boolean {

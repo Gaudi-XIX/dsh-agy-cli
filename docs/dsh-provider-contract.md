@@ -12,7 +12,7 @@
 插件是 Cordis 模块，导出：
 
 ```ts
-export const name = 'dsh-agy-provider'
+export const name = 'dsh-agy-cli'
 export const inject = ['llm']
 export function apply(ctx: Context, config: Config) {}
 ```
@@ -163,8 +163,8 @@ DSH ToolRuntime + sandbox + approval
 
 ### 设置面板
 
-- 插件 `apply()` 注册 `ctx.llm.registerConfigurableProviders([{provider:'agy', displayName:'AGY', settingsNs:'dsh-agy-provider', settingsPath:[]}])`，设置面板由 `Config` schema 的 `description` 驱动。
-- `ctx.llm.registerModelDiscovery('dsh-agy-provider', ...)` 暴露发现模型，面板渲染为多选勾选框，勾选写回 `visibleModels`。
+- 插件 `apply()` 注册 `ctx.llm.registerConfigurableProviders([{provider:'agy', displayName:'AGY', settingsNs:'dsh-agy-cli', settingsPath:[]}])`，设置面板由 `Config` schema 的 `description` 驱动。
+- `ctx.llm.registerModelDiscovery('dsh-agy-cli', ...)` 暴露发现模型，面板渲染为多选勾选框，勾选写回 `visibleModels`。
 - `Config` 每个字段配 `.i18n({'zh-CN':{$description},en:{$description}})`，DSH 按当前 locale 合并显示；`workspaceRoot` 加 `.deprecated()` 且 `dsh-owned` 时隐藏。
 
 ### 工作区无感

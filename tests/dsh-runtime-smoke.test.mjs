@@ -8,7 +8,7 @@ test('Mock Provider registers and streams through the official DSH LLM runtime',
   const root = new Context()
   await root.plugin(LlmRuntime)
   await root.plugin({
-    name: 'dsh-agy-provider-smoke',
+    name: 'dsh-agy-cli-smoke',
     inject: ['llm'],
     apply(ctx) {
       apply(ctx, {
@@ -40,7 +40,7 @@ test('Mock Provider exposes a configured multi-model catalog through the officia
   const root = new Context()
   await root.plugin(LlmRuntime)
   await root.plugin({
-    name: 'dsh-agy-provider-model-catalog-smoke',
+    name: 'dsh-agy-cli-model-catalog-smoke',
     inject: ['llm'],
     apply(ctx) {
       apply(ctx, {
@@ -65,7 +65,7 @@ test('AGY Provider loads when the optional AttachmentStore is not installed', as
   const root = new Context()
   await root.plugin(LlmRuntime)
   await root.plugin({
-    name: 'dsh-agy-provider-optional-attachment-smoke',
+    name: 'dsh-agy-cli-optional-attachment-smoke',
     inject: ['llm'],
     apply(ctx) {
       apply(ctx, {
@@ -91,7 +91,7 @@ test('a volatile `enabled` reference still mounts the provider adapter', async (
   const root = new Context()
   await root.plugin(LlmRuntime)
   await root.plugin({
-    name: 'dsh-agy-provider-volatile-enabled-smoke',
+    name: 'dsh-agy-cli-volatile-enabled-smoke',
     inject: ['llm'],
     apply(ctx) {
       apply(ctx, {

@@ -285,7 +285,7 @@ gemini-4-argon-disabled
 
 `docs/faq` 另有：「`agy -p` is intended for direct scripting and CI workflows. **Wrapping `agy` inside third-party coding agents or applications, or automating account rotation, is not supported under consumer plans.**」
 
-⇒ **本报告只做了只读列举取证，未做任何封装或账号轮转**；把 argon 硬塞进 DSH provider 桥这类做法会直接撞上这条，账号风险远大于一个模型的收益。**这条判据对本机现装的 `dsh-agy-provider` / `dsh-connect-trae` 一类桥接同样适用**，建议父代理留意。
+⇒ **本报告只做了只读列举取证，未做任何封装或账号轮转**；把 argon 硬塞进 DSH provider 桥这类做法会直接撞上这条，账号风险远大于一个模型的收益。**这条判据对本机现装的 `dsh-agy-cli` / `dsh-connect-trae` 一类桥接同样适用**，建议父代理留意。
 
 **3. 「改配置就能拿到」——未找到任何证据。** 二进制里 argon 条目是**硬编码的静态目录**（`agy.exe` 已内置），改本地 config / 环境变量不会覆盖服务端的 `disabled` 标志；`listExperiments` 里也没有相关开关。
 

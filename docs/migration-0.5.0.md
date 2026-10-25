@@ -7,12 +7,12 @@
 DSH Web/headless 使用独立 profile。请通过 DSH 原生 plugin 命令安装：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add dsh-agy-provider@0.5.0
+npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.5.0
 ```
 
 DSH `plugin` 命令会转发给 pnpm，请先确保 `pnpm` 已在 PATH 中。
 
-普通 `npm install dsh-agy-provider` 仍只适用于 Node.js 代码导入，不会把包加入 DSH profile，也不会触发 postinstall 自动改写用户配置。
+普通 `npm install dsh-agy-cli` 仍只适用于 Node.js 代码导入，不会把包加入 DSH profile，也不会触发 postinstall 自动改写用户配置。
 
 ## 默认值变化
 
@@ -32,7 +32,7 @@ sessionMode: full
 如果必须严格拒绝 DSH tool schemas，可在目标 profile 的 `cordis.patch.yml` 中覆盖：
 
 ```yaml
-- id: dsh-agy-provider
+- id: dsh-agy-cli
   config:
     toolPolicy: reject
 ```
@@ -44,7 +44,7 @@ sessionMode: full
 安装后运行：
 
 ```powershell
-npx dsh-agy-provider doctor --profile web --json
+npx dsh-agy-cli doctor --profile web --json
 ```
 
 Doctor 只执行 quota-free 检查：AGY `--version`、`agents`、`models` 和可选 DSH `--dump-config`。它不发送 Prompt、不执行工具、不修改 profile，输出中的 `quotaUsed` 固定为 `false`。
@@ -52,7 +52,7 @@ Doctor 只执行 quota-free 检查：AGY `--version`、`agents`、`models` 和�
 如果 DSH JavaScript entry 不在当前 profile 或 PATH，显式传入：
 
 ```powershell
-npx dsh-agy-provider doctor --profile web `
+npx dsh-agy-cli doctor --profile web `
   --dsh-bin C:\path\to\node_modules\@deepseek-ai\dsh\lib\bin.js
 ```
 
@@ -60,7 +60,7 @@ npx dsh-agy-provider doctor --profile web `
 
 | code | 含义 | 修复 |
 |------|------|------|
-| `PROFILE_PACKAGE_MISSING` | Provider 不在 profile dependency | 重新执行 `dsh plugin --profile web add dsh-agy-provider@0.5.0` |
+| `PROFILE_PACKAGE_MISSING` | Provider 不在 profile dependency | 重新执行 `dsh plugin --profile web add dsh-agy-cli@0.5.0` |
 | `PROFILE_BUNDLE_MISSING` | dependency 未进入 bundle layer | 重新执行上述 plugin add 命令 |
 | `PROFILE_BUNDLE_DISABLED` | profile 覆盖关闭了 Provider | 删除覆盖或设置 `enabled: true` |
 | `PROFILE_TOOL_POLICY_REJECT` | Web 默认 schemas 与严格策略冲突 | 设置 `toolPolicy: agy-owned`，或接受 DSH tools 被拒绝 |
@@ -71,7 +71,7 @@ npx dsh-agy-provider doctor --profile web `
 从指定 profile 移除：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web remove dsh-agy-provider
+npx @deepseek-ai/dsh plugin --profile web remove dsh-agy-cli
 ```
 
 回滚到 0.4.x 时仍需手工在 profile patch 中设置 `enabled: true`，并根据 Web 是否传入 tools 选择 `reject` 或 `agy-owned`；0.4.x 不包含 0.5.0 的 doctor CLI。

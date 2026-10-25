@@ -1,4 +1,4 @@
-# dsh-agy-provider 详细开发计划
+# dsh-agy-cli 详细开发计划
 
 ## 1. 项目目标
 
@@ -68,7 +68,7 @@ DSH 是 Agent 编排层，AGY 也可能执行自己的 Agent loop。两套工具
 
 验收标准：
 
-- 项目位于 `C:\Users\Jie\Projects\dsh-agy-provider`。
+- 项目位于 `C:\Users\Jie\Projects\dsh-agy-cli`。
 - GitHub 存在同名仓库并包含默认分支。
 - 文档明确目标架构和已知风险。
 
@@ -260,7 +260,7 @@ DSH 是 Agent 编排层，AGY 也可能执行自己的 Agent loop。两套工具
 
 - 已将 package version 固定为 `0.1.0`，新增 `CHANGELOG.md`、安装文档、发布检查清单和 GitHub Actions CI。
 - CI 在 Windows runner 的 Node.js 20/24 上执行 typecheck、测试、打包预览和本地 benchmark；CI 不执行 AGY 真实请求，不消耗用户额度。
-- 经用户确认，`package.json` 已切换为公开包配置，包名为 `dsh-agy-provider`；发布后以 npm 安装为主，GitHub 源码安装作为开发入口。
+- 经用户确认，`package.json` 已切换为公开包配置，包名为 `dsh-agy-cli`；发布后以 npm 安装为主，GitHub 源码安装作为开发入口。
 
 ## 5. 风险与应对
 

@@ -12,7 +12,7 @@
 | DSH tools policy | 0.9.0 bundle：`dsh-owned`（`workspaceRoot` 已废弃，无感 workspace）；0.7.0：`dsh-owned`；0.6.1 legacy：`reject`/`agy-owned` | 通过无额度与 disposable fixture 验证 | DSH runtime schema、prompt-contract、ToolRuntime round-trip、权限 fail-fast、DSH_WORKSPACE_MISMATCH 与日志白名单测试 |
 | DSH profile onboarding | `@deepseek-ai/dsh@0.1.0-rc.7` + `dsh plugin add`（rc.8 隔离审计已通过） | 通过无额度验证 | 0.9.0/0.8.0/0.7.0 packed Web/headless plugin-add smoke、doctor v5/v4/v3、bundle defaults；均 `quotaUsed=false` |
 | DSH native capability smoke | `@deepseek-ai/dsh@0.1.0-rc.7` on Node 22/24，Windows/Ubuntu/macOS | 通过无额度验证 | DSH rc.7 的 `dsh-code-runtime`/`dsh-mcp-client` 使用 Node 22+ API；Node 20 仅纳入 Provider verify；PR run `32285350984` native 6/6 success；rc.8 lane 已审计兼容 |
-| Doctor CLI | npm package `bin/dsh-agy-provider` | 通过无额度验证 | 0.9.0 doctor v5 `profileSchemaVersion 4`（`workspaceSource/visibleModels/modelEffortSplit` + `DEPRECATED_*`），0.7.0 v3；profile dump failure codes、DSH context probe、bridge capability、frontmatter/workspace/image checks |
+| Doctor CLI | npm package `bin/dsh-agy-cli` | 通过无额度验证 | 0.9.0 doctor v5 `profileSchemaVersion 4`（`workspaceSource/visibleModels/modelEffortSplit` + `DEPRECATED_*`），0.7.0 v3；profile dump failure codes、DSH context probe、bridge capability、frontmatter/workspace/image checks |
 | Agent presets | `tool-free`/`read-only`/`workspace-write` | 通过 fake/无额度验证 | 工具白名单、argv、workspace boundary 和显式 installer tests；0.9.0 `dsh-owned` 下无需手配 `workspaceRoot` |
 | Settings panel | `Config` i18n `zh-CN/en` + `registerConfigurableProviders` + `registerModelDiscovery` + `visibleModels` | 通过无额度验证 | 0.9.0：多选可见性、base+effort 分离、归一化与旧后缀兼容，L1 160+ 与 L2 fake 覆盖 |
 | Image input | DSH raster `ImageBlock` + experimental bridge | negative result；公开仍 text-only | M4 2/2 受控请求；无 verified `view_file` event source/DSH Web attachment closure；0.9.0 仍 V8-M5 no-go |
@@ -24,7 +24,7 @@
 | DSH host | `0.2.0-rc.2`（Windows 桌面版，desktop profile） | 通过（fork 适配） | peers 放宽至 `>=0.1.7-rc.2 <0.3.0-0` + 三类 API 适配（`ToolCallId` 改名 / tool-result 消息化 / SettingsForms 取代 register）；typecheck 0 错、219/219、live 通路 PASS；详见 `docs/compatibility-dsh-0.2.0-rc.2.md` |
 | AGY | `1.3.2` | 通过 live 通路（真实一轮对话） | `agy models` 全量目录 14 模型 + `gemini-3.8-flash-medium` 真实回话；Windows 凭据管理器 keyring + `HTTPS_PROXY` 续期实测 |
 | Diagnostic catalog | `static`/`discovered`/`merged`/`cache`/`fallback` | 通过无额度验证 | V3-M5 machine schema、warning code 和 `quotaUsed=false` 测试 |
-| npm registry | `dsh-agy-provider@0.10.0`, `latest=0.10.0` | 通过 | 0.10.0 69-file pack；线上 tarball/integrity/shasum 已核验，`dsh.bundle.patch` 可读取 |
+| npm registry | `dsh-agy-cli@0.10.0`, `latest=0.10.0` | 通过 | 0.10.0 69-file pack；线上 tarball/integrity/shasum 已核验，`dsh.bundle.patch` 可读取 |
 | Publish workflow | `v*.*.*` tag + package version match + npm Trusted Publishing | 通过 | `v0.10.0` → merge `ab68e83`（PR #2，CI run `32714261279`：17/17）；npm public publish 与 GitHub Release 已完成 |
 
 0.10.0 发布证据：release merge `ab68e83`（PR #2）的 CI run `32714261279` 为 17/17，本地 `npm run verify` 为 219/219，self-contained DSH smoke 与 native capability matrix 均通过；`v0.10.0` tag/GitHub Release 已创建，69-file pack 已发布，registry `latest=0.10.0`、tarball/integrity/shasum 与 `repository` 已核验；Desktop optimized full、上下文/工具/隐私回归通过。0.7.0 发布证据：release commit `b94fa32` 的 PR run `32286276907` 为 17/17，Trusted Publishing run `32286511205` 成功；registry `0.7.0` 的 Web/headless smoke 与 15/15 permission/tool matrix 通过，`quotaUsed=false`、cleanup completed。0.6.1 legacy 证据保留。

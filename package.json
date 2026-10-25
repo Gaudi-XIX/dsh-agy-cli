@@ -1,11 +1,11 @@
 {
-  "name": "dsh-agy-provider",
-  "version": "0.11.0",
+  "name": "dsh-agy-cli",
+  "version": "0.12.0",
   "private": false,
   "publishConfig": {
     "access": "public"
   },
-  "description": "Expose the locally authenticated AGY CLI as a DSH model provider.",
+  "description": "Run the locally authenticated AGY CLI as a DSH model provider. Official-binary-only transport; tool execution, approvals and sandbox stay in DSH.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -23,7 +23,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "dsh-agy-provider": "bin/dsh-agy-provider.js"
+    "dsh-agy-cli": "bin/dsh-agy-cli.js"
   },
   "files": [
     "dist/**/*.js",
@@ -37,7 +37,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Gaudi-XIX/dsh-agy-provider.git"
+    "url": "git+https://github.com/Gaudi-XIX/dsh-agy-cli.git"
   },
   "dsh": {
     "bundle": {
@@ -98,10 +98,17 @@
     "lib": "lib",
     "test": "tests"
   },
-  "keywords": [],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "agy",
+    "antigravity",
+    "provider",
+    "cli"
+  ],
   "author": "",
   "bugs": {
-    "url": "https://github.com/darkings/dsh-agy-provider/issues"
+    "url": "https://github.com/darkings/dsh-agy-cli/issues"
   },
-  "homepage": "https://github.com/darkings/dsh-agy-provider#readme"
+  "homepage": "https://github.com/darkings/dsh-agy-cli#readme"
 }

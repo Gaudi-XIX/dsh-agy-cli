@@ -148,7 +148,7 @@ function disabledEntriesPatch() {
 }
 
 async function main() {
-  const workDir = await mkdtemp(join(smokeTempParent(), 'dsh-agy-provider-v7-tool-bridge-'))
+  const workDir = await mkdtemp(join(smokeTempParent(), 'dsh-agy-cli-v7-tool-bridge-'))
   const isolatedHome = join(workDir, 'dsh-home')
   const installRoot = join(workDir, 'dsh-install')
   const providerTarballDir = join(workDir, 'provider-tarball')
@@ -193,7 +193,7 @@ async function main() {
   config:
     provider: agy
     model: gemini-3.7-flash-low
-- id: dsh-agy-provider
+- id: dsh-agy-cli
   config:
     enabled: true
     provider: agy

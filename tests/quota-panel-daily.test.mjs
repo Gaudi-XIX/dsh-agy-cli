@@ -124,6 +124,7 @@ function fakeRequest(method, path) {
   req.method = method
   req.url = path
   req.headers = {}
+  req.socket = { remoteAddress: "127.0.0.1" }
   setImmediate(() => req.emit('end'))
   return req
 }
@@ -151,20 +152,20 @@ test('quota panel reads the daily host with the CLI identity and keeps unknown w
     const ws = fakeWebServer()
     const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' })
 
-    const refresh = ws.routes.get('/plugins/agy-link/pool/refresh-quota')
+    const refresh = ws.routes.get('/plugins/agy-cli/pool/refresh-quota')
     assert.ok(refresh)
     await new Promise((resolve) => {
-      const req = fakeRequest('POST', '/plugins/agy-link/pool/refresh-quota')
+      const req = fakeRequest('POST', '/plugins/agy-cli/pool/refresh-quota')
       const resp = fakeResponse()
       resp.res.on('finish', resolve)
       refresh.handler(req, resp.res)
     })
 
-    const status = ws.routes.get('/plugins/agy-link/status')
+    const status = ws.routes.get('/plugins/agy-cli/status')
     const resp = fakeResponse()
     await new Promise((resolve) => {
       resp.res.on('finish', resolve)
-      status.handler(fakeRequest('GET', '/plugins/agy-link/status'), resp.res)
+      status.handler(fakeRequest('GET', '/plugins/agy-cli/status'), resp.res)
     })
 
     // 1. The quota RPCs must go to daily, the host agy.exe spends against.
@@ -201,18 +202,18 @@ test('a disabled 5-hour bucket does not masquerade as a full 5-hour bucket', asy
     const ws = fakeWebServer()
     const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' })
 
-    const refresh = ws.routes.get('/plugins/agy-link/pool/refresh-quota')
+    const refresh = ws.routes.get('/plugins/agy-cli/pool/refresh-quota')
     await new Promise((resolve) => {
       const resp = fakeResponse()
       resp.res.on('finish', resolve)
-      refresh.handler(fakeRequest('POST', '/plugins/agy-link/pool/refresh-quota'), resp.res)
+      refresh.handler(fakeRequest('POST', '/plugins/agy-cli/pool/refresh-quota'), resp.res)
     })
 
-    const status = ws.routes.get('/plugins/agy-link/status')
+    const status = ws.routes.get('/plugins/agy-cli/status')
     const resp = fakeResponse()
     await new Promise((resolve) => {
       resp.res.on('finish', resolve)
-      status.handler(fakeRequest('GET', '/plugins/agy-link/status'), resp.res)
+      status.handler(fakeRequest('GET', '/plugins/agy-cli/status'), resp.res)
     })
 
     const quotas = resp.json.pool.accounts[0].quotas
@@ -238,18 +239,18 @@ test('a model with no reported fraction is unknown, not full', async () => {
     const ws = fakeWebServer()
     const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' })
 
-    const refresh = ws.routes.get('/plugins/agy-link/pool/refresh-quota')
+    const refresh = ws.routes.get('/plugins/agy-cli/pool/refresh-quota')
     await new Promise((resolve) => {
       const resp = fakeResponse()
       resp.res.on('finish', resolve)
-      refresh.handler(fakeRequest('POST', '/plugins/agy-link/pool/refresh-quota'), resp.res)
+      refresh.handler(fakeRequest('POST', '/plugins/agy-cli/pool/refresh-quota'), resp.res)
     })
 
-    const status = ws.routes.get('/plugins/agy-link/status')
+    const status = ws.routes.get('/plugins/agy-cli/status')
     const resp = fakeResponse()
     await new Promise((resolve) => {
       resp.res.on('finish', resolve)
-      status.handler(fakeRequest('GET', '/plugins/agy-link/status'), resp.res)
+      status.handler(fakeRequest('GET', '/plugins/agy-cli/status'), resp.res)
     })
 
     // gemini-3.8-flash carries only a resetTime, so its per-model fraction is
@@ -281,18 +282,18 @@ test('a summary that reports groups is answered without fetching the model catal
     const ws = fakeWebServer()
     const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' })
 
-    const refresh = ws.routes.get('/plugins/agy-link/pool/refresh-quota')
+    const refresh = ws.routes.get('/plugins/agy-cli/pool/refresh-quota')
     await new Promise((resolve) => {
       const resp = fakeResponse()
       resp.res.on('finish', resolve)
-      refresh.handler(fakeRequest('POST', '/plugins/agy-link/pool/refresh-quota'), resp.res)
+      refresh.handler(fakeRequest('POST', '/plugins/agy-cli/pool/refresh-quota'), resp.res)
     })
 
-    const status = ws.routes.get('/plugins/agy-link/status')
+    const status = ws.routes.get('/plugins/agy-cli/status')
     const resp = fakeResponse()
     await new Promise((resolve) => {
       resp.res.on('finish', resolve)
-      status.handler(fakeRequest('GET', '/plugins/agy-link/status'), resp.res)
+      status.handler(fakeRequest('GET', '/plugins/agy-cli/status'), resp.res)
     })
 
     const paths = seenRequests.map((r) => r.path)

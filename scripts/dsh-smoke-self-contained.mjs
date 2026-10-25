@@ -155,7 +155,7 @@ function smokeTempParent() {
 }
 
 async function main() {
-  const workDir = await mkdtemp(join(smokeTempParent(), 'dsh-agy-provider-v6-smoke-'))
+  const workDir = await mkdtemp(join(smokeTempParent(), 'dsh-agy-cli-v6-smoke-'))
   const isolatedHome = join(workDir, 'dsh-home')
   const installRoot = join(workDir, 'dsh-install')
   const providerTarballDir = join(workDir, 'provider-tarball')
@@ -202,8 +202,8 @@ async function main() {
     if (!existsSync(webProfileRoot)) throw new Error('DSH_WEB_PROFILE_NOT_CREATED')
 
     const webPackage = JSON.parse(await readFile(join(webProfileRoot, 'package.json'), 'utf8'))
-    if (!webPackage.dependencies?.['dsh-agy-provider']) throw new Error('WEB_PROFILE_DEPENDENCY_MISSING')
-    if (!Array.isArray(webPackage.dsh?.profile?.bundles) || !webPackage.dsh.profile.bundles.includes('dsh-agy-provider')) {
+    if (!webPackage.dependencies?.['dsh-agy-cli']) throw new Error('WEB_PROFILE_DEPENDENCY_MISSING')
+    if (!Array.isArray(webPackage.dsh?.profile?.bundles) || !webPackage.dsh.profile.bundles.includes('dsh-agy-cli')) {
       throw new Error('WEB_PROFILE_BUNDLE_DECLARATION_MISSING')
     }
 
@@ -214,7 +214,7 @@ async function main() {
     })
     assertSuccess(webDumpConfig, 'DSH_WEB_DUMP_CONFIG_FAILED')
     const webChecks = [
-      '# == dsh-agy-provider',
+      '# == dsh-agy-cli',
       'enabled: true',
       `toolPolicy: ${EXPECTED_TOOL_POLICY}`,
       'provider: agy',
@@ -223,7 +223,7 @@ async function main() {
     if (!webChecks.every(value => webDumpConfig.stdout.includes(value))) {
       const webConfigSummary = webDumpConfig.stdout
         .split(/\r?\n/)
-        .filter(line => /# == dsh-agy-provider|enabled:|toolPolicy:|provider:|model:/.test(line))
+        .filter(line => /# == dsh-agy-cli|enabled:|toolPolicy:|provider:|model:/.test(line))
         .map(line => line.trim().replace(/\s+/g, ' '))
         .slice(0, 12)
       process.stderr.write(`Web bundle config summary: ${JSON.stringify(webConfigSummary)}\n`)
@@ -232,8 +232,8 @@ async function main() {
     }
 
     // Run Doctor CLI check against the web profile
-    const installedProviderRoot = join(webProfileRoot, 'node_modules', 'dsh-agy-provider')
-    const doctorCliEntry = join(installedProviderRoot, 'bin', 'dsh-agy-provider.js')
+    const installedProviderRoot = join(webProfileRoot, 'node_modules', 'dsh-agy-cli')
+    const doctorCliEntry = join(installedProviderRoot, 'bin', 'dsh-agy-cli.js')
     const doctorResult = await runNode(doctorCliEntry, [
       'doctor', '--profile', 'web', '--dsh-home', isolatedHome, '--dsh-bin', dshEntry, '--json',
     ], {
@@ -271,7 +271,7 @@ async function main() {
         issueCodes: doctorParsed.errors?.map(issue => issue.code),
         dumpConfigLines: webDumpConfig.stdout
           .split(/\r?\n/)
-          .filter(line => /dsh-agy-provider|enabled:|toolPolicy:|provider:|model:|agent:|sessionMode:/.test(line))
+          .filter(line => /dsh-agy-cli|enabled:|toolPolicy:|provider:|model:|agent:|sessionMode:/.test(line))
           .map(line => line.trim().replace(/\s+/g, ' '))
           .slice(0, 24),
       })}\n`)
@@ -292,7 +292,7 @@ async function main() {
   config:
     provider: agy-mock
     model: agy-mock-model
-- id: dsh-agy-provider
+- id: dsh-agy-cli
   config:
     enabled: true
     provider: agy-mock
@@ -315,15 +315,15 @@ async function main() {
     assertSuccess(response, 'DSH_MOCK_RESPONSE_FAILED')
     if (!response.stdout.includes(EXPECTED_RESPONSE)) throw new Error('DSH_MOCK_RESPONSE_MISMATCH')
 
-    const providerMetadata = await packageVersion(join(webProfileRoot, 'node_modules', 'dsh-agy-provider', 'package.json'))
+    const providerMetadata = await packageVersion(join(webProfileRoot, 'node_modules', 'dsh-agy-cli', 'package.json'))
     const dshMetadata = await packageVersion(dshPackageJson)
     const inventory = [
       'lib/index.js',
       'lib/index.d.ts',
-      'bin/dsh-agy-provider.js',
+      'bin/dsh-agy-cli.js',
       'cordis.patch.yml',
     ]
-    if (!inventory.every(file => existsSync(join(webProfileRoot, 'node_modules', 'dsh-agy-provider', file)))) {
+    if (!inventory.every(file => existsSync(join(webProfileRoot, 'node_modules', 'dsh-agy-cli', file)))) {
       throw new Error('PROVIDER_BUNDLE_INVENTORY_FAILED')
     }
 

@@ -1,4 +1,4 @@
-export const name = 'dsh-agy-provider-web-local-provider-fixture'
+export const name = 'dsh-agy-cli-web-local-provider-fixture'
 export const inject = ['web']
 
 export function apply(ctx) {

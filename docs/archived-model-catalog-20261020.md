@@ -22,7 +22,7 @@
 | `claude-opus-4-6-thinking` | Claude Opus 4.6 (Thinking) | 同上 | 同上 |
 | `gpt-oss-120b-medium` | GPT-OSS 120B (Medium) | 同上 | 同上 |
 
-### 2.2 宿主选择器（`~/.dsh/profiles/desktop/cordis.patch.yml` 的 `- id: dsh-agy-provider` 段）
+### 2.2 宿主选择器（`~/.dsh/profiles/desktop/cordis.patch.yml` 的 `- id: dsh-agy-cli` 段）
 
 原 `models:` 是四项（`gemini-3.8-flash` / `claude-sonnet-4-6` / `claude-opus-4-6-thinking` / `gpt-oss-120b-medium`），原 `visibleModels:` 是四项同名。现均收成一项 `gemini-3.8-flash`。
 
@@ -52,7 +52,7 @@
 ### 4.1 恢复第三方模型（Claude / GPT-OSS）
 
 1. 确认额度真的回来了：`agy -p /usage --output-format json`，看 `Claude and GPT` 组的 weekly 是否 > 0。
-2. 改 `~/.dsh/profiles/desktop/cordis.patch.yml`（先备份）的 `- id: dsh-agy-provider` 段：
+2. 改 `~/.dsh/profiles/desktop/cordis.patch.yml`（先备份）的 `- id: dsh-agy-cli` 段：
    ```yaml
    visibleModels:
      - gemini-3.8-flash
@@ -76,7 +76,7 @@
 
 ### 4.2 恢复 `dynamicCatalogModels`（把上游目录全量喂给面板）
 
-已删除。原逻辑在 `refreshQuotas` 中把 daily `fetchAvailableModels` 的 19 条全量塞进 `dynamicCatalogModels`，再在 `/plugins/agy-link/status` 里作为 `catalogModels` 返回。
+已删除。原逻辑在 `refreshQuotas` 中把 daily `fetchAvailableModels` 的 19 条全量塞进 `dynamicCatalogModels`，再在 `/plugins/agy-cli/status` 里作为 `catalogModels` 返回。
 
 需要恢复时的最小形状：
 ```ts

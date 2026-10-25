@@ -1,5 +1,5 @@
 // The Models-page attach diagnostics: what the panel's presence depends on, and
-// what `/plugins/agy-link/diagnose` is allowed to claim about it.
+// what `/plugins/agy-cli/diagnose` is allowed to claim about it.
 //
 // Why this test exists: the AGY card lives in the host's keyed slot
 // `settings.models.provider-card`, which the host dispatches with

@@ -56,13 +56,13 @@ function runDsh(args) {
   })
 }
 
-const workDir = await mkdtemp(join(tmpdir(), 'dsh-agy-provider-smoke-'))
+const workDir = await mkdtemp(join(tmpdir(), 'dsh-agy-cli-smoke-'))
 const patchPath = join(workDir, 'mock.patch.yml')
 await writeFile(patchPath, `- id: agent-default-model
   config:
     provider: agy-mock
     model: agy-mock-model
-- id: dsh-agy-provider
+- id: dsh-agy-cli
   config:
     enabled: true
     provider: agy-mock
@@ -77,11 +77,11 @@ try {
   if (config.exitCode !== 0) {
     throw new Error(`DSH config smoke failed (${config.exitCode ?? config.signal}): ${config.stderr}`)
   }
-  if (!config.stdout.includes('# == dsh-agy-provider')
+  if (!config.stdout.includes('# == dsh-agy-cli')
     || !config.stdout.includes('provider: agy-mock')
     || !config.stdout.includes('enabled: true')
     || !config.stdout.includes('toolPolicy: reject')) {
-    throw new Error('DSH config smoke did not activate the dsh-agy-provider mock patch')
+    throw new Error('DSH config smoke did not activate the dsh-agy-cli mock patch')
   }
 
   const response = await runDsh([...commonArgs, 'Return the configured mock response without using tools.'])
@@ -92,10 +92,10 @@ try {
     throw new Error(`DSH mock smoke returned an unexpected response: ${response.stdout}`)
   }
 
-  const packagePath = join(dshHome, 'profiles', 'headless', 'node_modules', 'dsh-agy-provider', 'package.json')
+  const packagePath = join(dshHome, 'profiles', 'headless', 'node_modules', 'dsh-agy-cli', 'package.json')
   const installedPackage = JSON.parse(await readFile(packagePath, 'utf8'))
-  if (installedPackage.name !== 'dsh-agy-provider' || installedPackage.version !== expectedPackageVersion) {
-    throw new Error(`The DSH profile does not contain dsh-agy-provider@${expectedPackageVersion}`)
+  if (installedPackage.name !== 'dsh-agy-cli' || installedPackage.version !== expectedPackageVersion) {
+    throw new Error(`The DSH profile does not contain dsh-agy-cli@${expectedPackageVersion}`)
   }
 
   process.stdout.write(JSON.stringify({

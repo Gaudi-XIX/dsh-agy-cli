@@ -108,7 +108,7 @@ export function mountMcpEndpoint(
 ): McpEndpoint {
   const token = randomBytes(32).toString('hex')
   const routeSegment = randomBytes(16).toString('hex')
-  const path = `/api/dsh-agy-provider/mcp/${routeSegment}`
+  const path = `/api/dsh-agy-cli/mcp/${routeSegment}`
   // The AGY conversation this bridge currently serves. AGY sends its own
   // session id when it has one; otherwise the transport handle is this value,
   // which the adapter re-points at the DSH session before each AGY turn.

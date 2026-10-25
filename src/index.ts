@@ -24,7 +24,7 @@ import { SessionRegistry } from './session/store.js'
 import { FileSessionStore, resolveSessionStorePath } from './session/file-store.js'
 import type { DshContextLookup } from './dsh/context.js'
 
-export const name = 'dsh-agy-provider'
+export const name = 'dsh-agy-cli'
 export const inject = ['llm', 'sessions', 'workspaceRegistry', 'sandboxPolicy', 'permissionPresets', 'approval']
 
 /** Programmatic library default: enabled=false, toolPolicy=reject. */
@@ -170,14 +170,14 @@ export function apply(ctx: Context, config: ConfigType): void {
   // card only to a directory row whose `settingsNs` is exactly this string, and
   // a refused registration (DUPLICATE_DIRECTORY when this profile mounts the
   // plugin twice) used to be swallowed — which made "no card on the Models page"
-  // indistinguishable from "card rendered empty". `/plugins/agy-link/diagnose`
+  // indistinguishable from "card rendered empty". `/plugins/agy-cli/diagnose`
   // now reports both the refusal and the directory it actually has.
   const registerProviderDirectory = (): boolean => {
     try {
       ctx.llm.registerConfigurableProviders([{
         provider: 'agy',
         displayName: 'Antigravity CLI',
-        settingsNs: 'dsh-agy-provider',
+        settingsNs: 'dsh-agy-cli',
         settingsPath: [],
       }])
       noteRegistration('configurableProviders', 'ok')
@@ -204,7 +204,7 @@ export function apply(ctx: Context, config: ConfigType): void {
     })
   }
   try {
-    ctx.llm.registerModelDiscovery('dsh-agy-provider', async (request) => {
+    ctx.llm.registerModelDiscovery('dsh-agy-cli', async (request) => {
       // If editing an existing agy route, prefer our already-known catalog; otherwise discover via AGY CLI.
       // request.provider being 'agy' or undefined both mean this plugin owns the draft.
       if (request.provider !== undefined && request.provider !== 'agy') return []
@@ -223,7 +223,7 @@ export function apply(ctx: Context, config: ConfigType): void {
     noteRegistration('modelDiscovery', error instanceof Error ? error.message : String(error))
   }
 
-  // Mount web HTTP routes for GUI control panel & status polling (/plugins/agy-link/*)
+  // Mount web HTTP routes for GUI control panel & status polling (/plugins/agy-cli/*)
   try {
     setupWebRoutes(ctx, activeConfig, modelDiscovery)
     noteRegistration('webRoutes', 'ok')
@@ -239,7 +239,7 @@ export function apply(ctx: Context, config: ConfigType): void {
     ctx.llm.registerAdapter([provider], new MockAdapter(activeConfig))
     return
   }
-  const logger = ctx.logger('dsh-agy-provider')
+  const logger = ctx.logger('dsh-agy-cli')
 
   // AGY exits with `unknown agent "<name>" (available: ...)` *before* it reads
   // any input when the profile named on the command line has no template on
@@ -269,7 +269,7 @@ export function apply(ctx: Context, config: ConfigType): void {
         if (cancelled || missing.length === 0) return
         logger.warn(
           'AGY agent template(s) missing: %s. AGY rejects an unknown agent before reading any input, '
-          + 'which surfaces as AGY_INPUT_FAILED. Install them with: npx dsh-agy-provider agents install %s --apply',
+          + 'which surfaces as AGY_INPUT_FAILED. Install them with: npx dsh-agy-cli agents install %s --apply',
           missing.map(entry => `${entry.agentName} (${entry.targetPath})`).join(', '),
           missing.map(entry => entry.preset).join(' '),
         )

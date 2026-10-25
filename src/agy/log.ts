@@ -275,7 +275,7 @@ export type AgyLogger = (record: Readonly<AgyLogRecord>) => void
  * sanitized record; this file is intentionally outside the DSH session store
  * because that store currently drops Error.cause and nested diagnostics.
  */
-export const AGY_DIAGNOSTIC_LOG_PATH = join(tmpdir(), 'dsh-agy-provider-diagnostic.jsonl')
+export const AGY_DIAGNOSTIC_LOG_PATH = join(tmpdir(), 'dsh-agy-cli-diagnostic.jsonl')
 
 export function appendAgyDiagnosticRecord(record: Readonly<AgyLogRecord>): void {
   try {

@@ -102,7 +102,7 @@ V3-M4 已通过无额度 fixture gate，验证 100 轮串行、8 Session 并发�
 
 ## 发布准备（V3-M6）
 
-当前开发分支的 package version 仍是 `0.2.0`，这是有意的：避免在账号级 2FA 和 Trusted Publisher 尚未完成时误触发发布。registry 复验结果为 `dsh-agy-provider@0.2.0` 存在且 `latest=0.2.0`，`0.3.0` 尚未占用。
+当前开发分支的 package version 仍是 `0.2.0`，这是有意的：避免在账号级 2FA 和 Trusted Publisher 尚未完成时误触发发布。registry 复验结果为 `dsh-agy-cli@0.2.0` 存在且 `latest=0.2.0`，`0.3.0` 尚未占用。
 
 正式发布 0.3.0 时应按以下顺序执行：
 
@@ -110,6 +110,6 @@ V3-M4 已通过无额度 fixture gate，验证 100 轮串行、8 Session 并发�
 2. 将 `package.json` 与 `package-lock.json` 更新到 `0.3.0`，同步 CHANGELOG 和发布清单。
 3. 运行 `npm run verify`、`npm run benchmark`、`npm run diagnose -- --json` 和 `npm pack --dry-run`，确认 `quotaUsed=false` 且 tarball 无测试、规划文件、日志、凭据或本机路径。
 4. 提交版本 bump，创建并推送与 package version 完全匹配的 `v0.3.0` tag，让 publish workflow 执行 npm Trusted Publishing。
-5. 从 registry 全新安装 `dsh-agy-provider@0.3.0`，运行隔离 DSH Mock smoke；真实 AGY 请求只有在用户明确授权并确认额度预算后才执行。
+5. 从 registry 全新安装 `dsh-agy-cli@0.3.0`，运行隔离 DSH Mock smoke；真实 AGY 请求只有在用户明确授权并确认额度预算后才执行。
 
 本阶段未执行版本 bump、tag、`npm publish` 或真实模型请求。

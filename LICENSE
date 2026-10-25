@@ -19,3 +19,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Continuation notice
+-------------------
+This project continues the dsh-agy-provider plugin originally created by Darkings
+(https://github.com/darkings/dsh-agy-provider, commits up to 2026-08-28) and
+maintained as a continuation by Gaudi-XIX since 2026-10. All original commit
+attribution is preserved in the git history under the same MIT license.

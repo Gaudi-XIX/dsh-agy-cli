@@ -1,6 +1,6 @@
 import { CallId, LlmAdapter } from '@deepseek-ai/dsh-llm'
 
-export const name = 'dsh-agy-provider-capability-model-fixture'
+export const name = 'dsh-agy-cli-capability-model-fixture'
 export const inject = ['llm']
 
 const PROVIDER = 'fixture'

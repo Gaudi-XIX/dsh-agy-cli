@@ -45,6 +45,7 @@ function fakeRequest(method, path, body = null) {
   req.method = method
   req.url = path
   req.headers = {}
+  req.socket = { remoteAddress: "127.0.0.1" }
   setImmediate(() => {
     if (body) {
       req.emit('data', Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)))
@@ -77,28 +78,28 @@ function fakeResponse() {
   }
 }
 
-test('web router: registers required /plugins/agy-link/* routes', () => {
+test('web router: registers required /plugins/agy-cli/* routes', () => {
   const ws = fakeWebServer()
   const ctx = fakeContext(ws)
   const dispose = setupWebRoutes(ctx, { enabled: true, model: 'gemini-3.8-flash' })
 
-  assert.ok(ws.routes.has('/plugins/agy-link/status'), 'status route registered')
-  assert.ok(ws.routes.has('/plugins/agy-link/config'), 'config route registered')
-  assert.ok(ws.routes.has('/plugins/agy-link/pool/refresh-quota'), 'refresh-quota route registered')
-  assert.ok(ws.routes.has('/plugins/agy-link/auth'), 'auth route registered')
+  assert.ok(ws.routes.has('/plugins/agy-cli/status'), 'status route registered')
+  assert.ok(ws.routes.has('/plugins/agy-cli/config'), 'config route registered')
+  assert.ok(ws.routes.has('/plugins/agy-cli/pool/refresh-quota'), 'refresh-quota route registered')
+  assert.ok(ws.routes.has('/plugins/agy-cli/auth'), 'auth route registered')
 
   dispose()
 })
 
-test('web router: GET /plugins/agy-link/status returns valid payload for GUI', async () => {
+test('web router: GET /plugins/agy-cli/status returns valid payload for GUI', async () => {
   const ws = fakeWebServer()
   const ctx = fakeContext(ws)
   const dispose = setupWebRoutes(ctx, { enabled: true, model: 'gemini-3.8-flash' })
 
-  const route = ws.routes.get('/plugins/agy-link/status')
+  const route = ws.routes.get('/plugins/agy-cli/status')
   assert.ok(route)
 
-  const req = fakeRequest('GET', '/plugins/agy-link/status')
+  const req = fakeRequest('GET', '/plugins/agy-cli/status')
   const resp = fakeResponse()
 
   await new Promise((resolve) => {
@@ -107,7 +108,7 @@ test('web router: GET /plugins/agy-link/status returns valid payload for GUI', a
   })
 
   assert.equal(resp.status, 200)
-  assert.equal(resp.json.plugin, 'dsh-agy-provider')
+  assert.equal(resp.json.plugin, 'dsh-agy-cli')
   assert.equal(resp.json.enabled, true)
   assert.equal(resp.json.permissionMode, 'dsh-owned')
   assert.ok(Array.isArray(resp.json.catalogModels))
@@ -118,15 +119,15 @@ test('web router: GET /plugins/agy-link/status returns valid payload for GUI', a
   dispose()
 })
 
-test('web router: POST /plugins/agy-link/config updates settings', async () => {
+test('web router: POST /plugins/agy-cli/config updates settings', async () => {
   const ws = fakeWebServer()
   const ctx = fakeContext(ws)
   const dispose = setupWebRoutes(ctx, { enabled: true })
 
-  const route = ws.routes.get('/plugins/agy-link/config')
+  const route = ws.routes.get('/plugins/agy-cli/config')
   assert.ok(route)
 
-  const req = fakeRequest('POST', '/plugins/agy-link/config', {
+  const req = fakeRequest('POST', '/plugins/agy-cli/config', {
     key: 'defaultEffort',
     value: 'high',
   })
@@ -145,15 +146,15 @@ test('web router: POST /plugins/agy-link/config updates settings', async () => {
   dispose()
 })
 
-test('web router: GET /plugins/agy-link/diagnose answers 200 even when llm is unavailable', async () => {
+test('web router: GET /plugins/agy-cli/diagnose answers 200 even when llm is unavailable', async () => {
   const ws = fakeWebServer()
   const ctx = throwingLlmContext(ws)
   const dispose = setupWebRoutes(ctx, { enabled: true })
 
-  const route = ws.routes.get('/plugins/agy-link/diagnose')
+  const route = ws.routes.get('/plugins/agy-cli/diagnose')
   assert.ok(route, 'diagnose route registered')
 
-  const req = fakeRequest('GET', '/plugins/agy-link/diagnose')
+  const req = fakeRequest('GET', '/plugins/agy-cli/diagnose')
   const resp = fakeResponse()
 
   await new Promise((resolve) => {
@@ -163,7 +164,7 @@ test('web router: GET /plugins/agy-link/diagnose answers 200 even when llm is un
 
   assert.equal(resp.status, 200, 'a diagnostic route must never fail closed as a bare 400')
   assert.equal(resp.json.cardSlot, 'settings.models.provider-card')
-  assert.equal(resp.json.cardKey, 'dsh-agy-provider')
+  assert.equal(resp.json.cardKey, 'dsh-agy-cli')
   assert.equal(
     resp.json.llmError,
     'cannot access service "llm" before it is available',
@@ -175,20 +176,20 @@ test('web router: GET /plugins/agy-link/diagnose answers 200 even when llm is un
   dispose()
 })
 
-test('web router: GET /plugins/agy-link/diagnose reports llmError null when llm is mounted', async () => {
+test('web router: GET /plugins/agy-cli/diagnose reports llmError null when llm is mounted', async () => {
   const ws = fakeWebServer()
   const ctx = fakeContext(ws, {
     llm: {
       listProviders: () => [{ id: 'agy' }],
       listConfigurableProviders: () => [
-        { provider: 'agy', displayName: 'Antigravity CLI', settingsNs: 'dsh-agy-provider', settingsPath: [] },
+        { provider: 'agy', displayName: 'Antigravity CLI', settingsNs: 'dsh-agy-cli', settingsPath: [] },
       ],
     },
   })
   const dispose = setupWebRoutes(ctx, { enabled: true })
 
-  const route = ws.routes.get('/plugins/agy-link/diagnose')
-  const req = fakeRequest('GET', '/plugins/agy-link/diagnose')
+  const route = ws.routes.get('/plugins/agy-cli/diagnose')
+  const req = fakeRequest('GET', '/plugins/agy-cli/diagnose')
   const resp = fakeResponse()
 
   await new Promise((resolve) => {

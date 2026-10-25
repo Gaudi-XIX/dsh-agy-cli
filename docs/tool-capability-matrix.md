@@ -7,7 +7,7 @@ V1 采用 **AGY 自治 Agent + DSH 文本外壳**：
 ```text
 DSH messages/system
         ↓
-dsh-agy-provider（只输出文本）
+dsh-agy-cli（只输出文本）
         ↓
 AGY deepseek-proxy Agent
         ├─ AGY 内部工具执行

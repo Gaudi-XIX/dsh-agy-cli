@@ -3,13 +3,13 @@
 > **受本文件管辖的现状**：AGY 控制面板（`client/index.ts`）现只保留单账号额度卡 + 思考强度
 > + 模型显示三块。2026-10-23 起组件入口是注册到宿主 keyed 槽
 > `settings.models.provider-card` 的 provider 卡（`id: 'agy-link-provider-card'`，
-> `key: 'dsh-agy-provider'`），`AgySettingsSection` 这个名字已不存在。本文件记录被拆掉的 UI
+> `key: 'dsh-agy-cli'`），`AgySettingsSection` 这个名字已不存在。本文件记录被拆掉的 UI
 > 形状、拆分依据、以及 **将来要恢复时该接哪些线**。代码本体不删——git 历史里在 `HEAD~` 的
 > `client/index.ts`，恢复第一步就是 `git show` 取回。
 >
 > **挂载点（2026-10-21 用户裁定后变更）**：面板不再注册 `settings.section`（设置导航独立分区）
 > 与 `conversation.session.header.actions`（会话页头部徽标），改为注册宿主 keyed 槽
-> `settings.models.provider-card`（`key: 'dsh-agy-provider'`，与 `src/index.ts:169-174`
+> `settings.models.provider-card`（`key: 'dsh-agy-cli'`，与 `src/index.ts:169-174`
 > `registerConfigurableProviders` 的 `settingsNs` 逐字相同），渲染在宿主「设置-模型」页
 > Antigravity CLI 那一行的卡片扩展区。模态（`AgyModalDialog`/`agyModalStore`）、徽标
 > （`AgySessionStatus`）与 `portalToBody` 随之删除，相关 locale 键
@@ -39,7 +39,7 @@
    保留，未来分段控件可直接复用）。
 
 验收（时点：2026-10-23 17:0x）：`npm run build:client` = 8 modules → `dist/client.js` 198,728 B；
-`build-client-smoke` ok；宿主 `/plugins/events` 里 `dsh-agy-provider` 的 rev 与盘上按
+`build-client-smoke` ok；宿主 `/plugins/events` 里 `dsh-agy-cli` 的 rev 与盘上按
 `(mtimeMs, ctimeMs, size)` 实算一致 ⇒ 刷新页面即加载，无需重启宿主。
 
 ### 零附、2026-10-23 深夜：卡顿与打不开（两条实测根因）
@@ -50,7 +50,7 @@
 
 | # | 根因 | 证据 | 修法 |
 |---|---|---|---|
-| 1 | 每 3 秒轮询 `/plugins/agy-link/status` | `client/index.ts:191` `setInterval(…, 3000)`，订阅者为 0 也不停 | 按用户裁定整段删除定时器，改为 `loadStatusOnce()`：挂载时取一次 + 手动「刷新额度」 |
+| 1 | 每 3 秒轮询 `/plugins/agy-cli/status` | `client/index.ts:191` `setInterval(…, 3000)`，订阅者为 0 也不停 | 按用户裁定整段删除定时器，改为 `loadStatusOnce()`：挂载时取一次 + 手动「刷新额度」 |
 | 2 | 同步 spawn PowerShell 读凭据 | `/status` 首字节实测 10,934–22,000 ms；`/diagnose` 同时仅 1–7 ms ⇒ 卡在 `/status` 自己的服务端计算；`src/web/router.ts` 用 `execFileSync('powershell.exe', …, { timeout: 5000 })`，一次 `/status` 要串行跑 2–3 次 | `src/agy/keepalive.ts` 新增 `readKeyringBlob()`：`execFile` 异步 + 30 s 缓存 + in-flight 复用；`readIdentityFromKeyring()` 改 async；`refreshQuotas` 加 `quotaInFlight` 单飞 |
 | 3 | single-flight 写错，后到的调用方立刻 resolve | node 复现：第二次 `await loadStatusOnce()` 立即 settle 且 `status === null` ⇒ 走错误分支显示「操作未完成。请重试」 | `statusInFlight` 改存 Promise 本身，后到者 `return statusInFlight`（同一 run），`statusFetchSeq` 仍丢弃乱序响应 |
 | 4 | 失败态没有重试入口 | `status === null` 分支只有 spinner + 一句文案 | 该分支渲染 `[错误文案][重试]` 按钮；locale 四语言新增 `status.retry`（zh `重试` / en `Retry` / pt-BR `Tentar novamente` / es `Reintentar`） |
@@ -70,7 +70,7 @@
 三条硬依据，不是审美：
 
 1. **死接口**。客户端 `postJson` 打过 10 个路径，服务端 `src/web/router.ts` 只注册 4 条
-   （`GET /plugins/agy-link/status`、`POST /config`、`POST /pool/refresh-quota`、`GET|POST /auth`）。
+   （`GET /plugins/agy-cli/status`、`POST /config`、`POST /pool/refresh-quota`、`GET|POST /auth`）。
    下面这 8 个**从来没有服务端实现**：`/pool/begin-add`、`/pool/complete-add`、`/pool/cancel-add`、
    `/pool/primary`、`/pool/remove`、`/pool/proxy`、`/pool/mode`、`/pool/clear-cooldown`。
    点击只会走 `res === null → actionFailed() → api.genericError` 弹一条「操作未完成」。

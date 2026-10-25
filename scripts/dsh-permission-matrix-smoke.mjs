@@ -342,7 +342,7 @@ async function main() {
   if (!Number.isInteger(nodeMajor) || nodeMajor < DSH_MIN_NODE_MAJOR) {
     throw new Error(`DSH_RUNTIME_REQUIRES_NODE_${DSH_MIN_NODE_MAJOR}:${process.versions.node}`)
   }
-  const workDir = await mkdtemp(join(smokeTempParent(), 'dsh-agy-provider-v7-permission-'))
+  const workDir = await mkdtemp(join(smokeTempParent(), 'dsh-agy-cli-v7-permission-'))
   const installRoot = join(workDir, 'dsh-install')
   const providerTarballDir = join(workDir, 'provider-tarball')
   const webDshHome = join(workDir, 'web-dsh-home')
@@ -402,10 +402,10 @@ async function main() {
       env: { DSH_HOME: webDshHome },
     })
     assertSuccess(addWebResult, 'DSH_PLUGIN_ADD_WEB_FAILED')
-    const webPackageJson = join(webDshHome, 'profiles', 'web', 'node_modules', 'dsh-agy-provider', 'package.json')
+    const webPackageJson = join(webDshHome, 'profiles', 'web', 'node_modules', 'dsh-agy-cli', 'package.json')
     if (!existsSync(webPackageJson)) throw new Error('PACKED_PROVIDER_NOT_INSTALLED:web')
     const webPackageInfo = JSON.parse(await readFile(webPackageJson, 'utf8'))
-    if (webPackageInfo.name !== 'dsh-agy-provider' || webPackageInfo.version === undefined) {
+    if (webPackageInfo.name !== 'dsh-agy-cli' || webPackageInfo.version === undefined) {
       throw new Error('PACKED_PROVIDER_METADATA_INVALID:web')
     }
     const packedProviderVersion = webPackageInfo.version
@@ -421,10 +421,10 @@ async function main() {
         env: { DSH_HOME: scenarioDshHome },
       })
       assertSuccess(addHeadlessResult, `DSH_PLUGIN_ADD_HEADLESS_FAILED:${scenario.name}:${scenario.permissionMode}`)
-      const headlessPackageJson = join(scenarioDshHome, 'profiles', 'headless', 'node_modules', 'dsh-agy-provider', 'package.json')
+      const headlessPackageJson = join(scenarioDshHome, 'profiles', 'headless', 'node_modules', 'dsh-agy-cli', 'package.json')
       if (!existsSync(headlessPackageJson)) throw new Error(`PACKED_PROVIDER_NOT_INSTALLED:headless:${scenario.name}`)
       const headlessPackageInfo = JSON.parse(await readFile(headlessPackageJson, 'utf8'))
-      if (headlessPackageInfo.name !== 'dsh-agy-provider' || headlessPackageInfo.version !== packedProviderVersion) {
+      if (headlessPackageInfo.name !== 'dsh-agy-cli' || headlessPackageInfo.version !== packedProviderVersion) {
         throw new Error(`PACKED_PROVIDER_METADATA_MISMATCH:headless:${scenario.name}`)
       }
       if (scenario.name === 'read') await writeFile(join(workspaceDir, 'read-target.txt'), 'DSH_READ_MATRIX_SUCCESS\n', 'utf8')

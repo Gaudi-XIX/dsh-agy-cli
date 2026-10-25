@@ -138,7 +138,7 @@ function updateCordisPatch(visibleModels?: string[], defaultModel?: string): str
     }
     let content = readFileSync(CORDIS_PATCH_PATH, 'utf8')
     // JS has no \Z anchor; the file-tail alternative is a plain `$`.
-    const providerRegex = /(- id: dsh-agy-provider[\s\S]*?)(?=\n- id:|\n[a-zA-Z]|$)/
+    const providerRegex = /(- id: dsh-agy-cli[\s\S]*?)(?=\n- id:|\n[a-zA-Z]|$)/
     const match = content.match(providerRegex)
     if (!match) return undefined
 
@@ -355,7 +355,7 @@ let quotaConfig: ConfigType | undefined
 // three boot registrations are best-effort (a duplicate mount throws and used to
 // be swallowed). From outside the browser that made four different failures look
 // identical: no directory row, a refused registration, a card the host never
-// dispatched, and a card that rendered empty. `/plugins/agy-link/diagnose`
+// dispatched, and a card that rendered empty. `/plugins/agy-cli/diagnose`
 // reports the first two from the host side and the fourth from the browser.
 const bootNotes = new Map<string, string>()
 
@@ -377,7 +377,7 @@ export function noteCardPing(props: string[]): void {
   if (cardPings.length > 20) cardPings.shift()
 }
 
-/** Snapshot for `/plugins/agy-link/diagnose`. */
+/** Snapshot for `/plugins/agy-cli/diagnose`. */
 export function getAttachDiagnostics(): { notes: Record<string, string>; cardPings: CardPing[] } {
   return { notes: Object.fromEntries(bootNotes), cardPings: [...cardPings] }
 }
@@ -738,12 +738,12 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       })
     }
 
-    // 0. GET /plugins/agy-link/diagnose — the Models-page attach path as the
+    // 0. GET /plugins/agy-cli/diagnose — the Models-page attach path as the
     // host sees it. `configurable` must contain one entry whose settingsNs is
     // the card key; when it does and `cardPings` is still empty, the host never
     // dispatched the entry (a directory/namespace problem) rather than the card
     // rendering nothing (a card problem). Read-only; safe to poll.
-    reg('/plugins/agy-link/diagnose', (_req, res) => {
+    reg('/plugins/agy-cli/diagnose', (_req, res) => {
       // The host turns any throwing handler into a bare 400 with an empty body.
       // For a *diagnostic* endpoint that is the worst possible outcome: the one
       // thing it exists to prevent is a failure nobody can read. So this handler
@@ -778,13 +778,13 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       const diagnostics = getAttachDiagnostics()
       const body = {
         cardSlot: 'settings.models.provider-card',
-        cardKey: 'dsh-agy-provider',
+        cardKey: 'dsh-agy-cli',
         ...diagnostics,
         llmError,
         providers,
         configurable,
         rowCarriesCardKey: Array.isArray(configurable)
-          ? configurable.some((entry) => entry.settingsNs === 'dsh-agy-provider')
+          ? configurable.some((entry) => entry.settingsNs === 'dsh-agy-cli')
           : null,
       }
       try {
@@ -805,7 +805,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     // The browser half reports every mount of the card here. A dispatch that
     // never happens never arrives, which is what separates "no row" from "card
     // rendered empty"; the prop names prove which owner props the host passed.
-    reg('/plugins/agy-link/card-ping', async (req, res) => {
+    reg('/plugins/agy-cli/card-ping', async (req, res) => {
       const body = await readBody(req)
       const raw = body.props
       const props = Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : []
@@ -813,8 +813,8 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       sendJson(res, 200, { ok: true })
     })
 
-    // 1. GET /plugins/agy-link/status
-    reg('/plugins/agy-link/status', async (_req, res) => {
+    // 1. GET /plugins/agy-cli/status
+    reg('/plugins/agy-cli/status', async (_req, res) => {
       const overrides = readAgyRuntimeOverrides() ?? { hiddenModels: [], defaultEffort: undefined, defaultModel: undefined }
       // Never let the panel wait on the quota chain indefinitely: a timeout
       // answers with the last good snapshot and says so in `quotaError`.
@@ -855,7 +855,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         : '本机主账号 (gemini:antigravity)'
 
       sendJson(res, 200, {
-        plugin: 'dsh-agy-provider',
+        plugin: 'dsh-agy-cli',
         bin: activeConfig.agyPath || 'F:\\AgentData\\antigravity\\cli\\agy.exe',
         version: CLOUD_CODE_API_VERSION,
         enabled: readConfigFlag(activeConfig.enabled),
@@ -912,8 +912,8 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       })
     })
 
-    // 2. POST /plugins/agy-link/config
-    reg('/plugins/agy-link/config', async (req, res) => {
+    // 2. POST /plugins/agy-cli/config
+    reg('/plugins/agy-cli/config', async (req, res) => {
       if (req.method !== 'POST') {
         sendJson(res, 405, { error: 'POST only' })
         return
@@ -956,8 +956,8 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       sendJson(res, 200, { ok: true, key, value })
     })
 
-    // 3. POST /plugins/agy-link/pool/refresh-quota
-    reg('/plugins/agy-link/pool/refresh-quota', async (req, res) => {
+    // 3. POST /plugins/agy-cli/pool/refresh-quota
+    reg('/plugins/agy-cli/pool/refresh-quota', async (req, res) => {
       // The manual button is the one caller that may legitimately wait for a new
       // number, but not forever: past the deadline it reports the cached
       // snapshot plus `quotaError: 'timeout'` instead of hanging the panel.
@@ -996,8 +996,8 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       })
     })
 
-    // 4. GET & POST /plugins/agy-link/auth
-    reg('/plugins/agy-link/auth', async (_req, res) => {
+    // 4. GET & POST /plugins/agy-cli/auth
+    reg('/plugins/agy-cli/auth', async (_req, res) => {
       // Report what the keyring actually says, not an unconditional
       // "signed in": an empty or expired credential shows up as exactly that.
       const identity = await readIdentityFromKeyring()

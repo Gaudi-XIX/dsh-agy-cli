@@ -55,7 +55,7 @@ try {
   context.globalThis = context;
   context.window.__ModuleLoader__ = {
     load({ id, factory }) {
-      assert.equal(id, 'dsh-agy-provider');
+      assert.equal(id, 'dsh-agy-cli');
       elements.push(factory(hostRequire));
       loaded += 1;
     },
@@ -65,7 +65,7 @@ try {
   assert.equal(loaded, 1, 'the bundle must register exactly one module');
   const entry = elements[0];
   assert.equal(typeof entry.apply, 'function', 'client entry must export apply()');
-  assert.equal(entry.name, 'dsh-agy-provider-client');
+  assert.equal(entry.name, 'dsh-agy-cli-client');
   assert.deepEqual([ ...entry.inject ], [ 'slots', 'locale' ]);
   console.log(`build-client smoke: ok — ${bundle.length} bytes, exports ${Object.keys(entry).join(', ')}`);
 } finally {
