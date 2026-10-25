@@ -54,10 +54,10 @@ Compared to other DSH plugins that utilize AGY quota, this project differs funda
 * **Peer Plugin Technical Path**:  
   Extract and persist OAuth tokens within the DSH process, forge client headers, and make direct HTTP requests to Google Cloud Code private RPC endpoints, frequently accompanied by multi-account rotation mechanisms for quota scheduling.
 * **Our Technical Path**:  
-  Zero token extraction, zero token storage, and zero forged network traffic. All model generation is strictly delegated to the user's legitimately installed, official `agy.exe` binary. DSH communicates with the local process exclusively through standard `stream-json` IPC pipes.
+  Zero credential storage, zero credential exfiltration, and zero forged network traffic. All upstream requests are signed and sent by the user's legitimately installed, official `agy.exe` binary; DSH communicates with the local process exclusively through standard `stream-json` IPC pipes. A precise boundary statement: the plugin's **token keep-alive** and **quota panel** do read the OAuth blob that AGY itself stores in the Windows Credential Manager (`gemini:antigravity`), but only to check expiry and read the quota identity. Token rotation is performed exclusively by the official binary's own silent auth (Google's client secret lives inside the closed-source `agy.exe` and is physically unreachable), and the plugin never uses the credential as auth material for requests of its own — fundamentally different from extracting a token to forge a client.
 * **Advantages**:
   - **Zero Risk of Account Bans or Abuse Flags**: Network transport (TLS, IP address, protocol fingerprints) and client authentication are handled entirely by the official binary. There is no risk of accounts being banned due to reverse-engineered private APIs or forged client fingerprints.
-  - **Clean Credential Boundary**: The plugin maintains zero credential stores and exposes zero credential leak surface.
+  - **Clean Credential Boundary**: The plugin maintains zero credential stores; credentials flow through local memory only and never reach a log line or an error message.
 * **Trade-offs (Costs)**:
   - **Inability to Support Multi-Account Pooling**: Strictly bound to the single authenticated local OS account, without in-memory account cycling or concurrent rotation. Quotas are strictly governed by official single-account limits.
   - **Strict Host Environment Prerequisite**: Requires a pre-installed, officially authenticated CLI binary on the host machine.
@@ -100,6 +100,28 @@ Compared to other DSH plugins that utilize AGY quota, this project differs funda
 | **No multi-account pool cycling** (bounded by single-account quota) | **Zero account ban risk** (100% compliant official authentication and network fingerprint) |
 | **Inter-process IPC latency** (cross-boundary tool call overhead) | **Guaranteed sandbox integrity** (DSH exclusively owns ToolRuntime and approval gates) |
 | **Higher initial latency (TTFT) & state-machine maintenance** | **Zero stream rollback** (structured tail-stream delivery and partial text recovery) |
+
+---
+
+## Two Ancillary Surfaces (Honest Disclosure)
+
+Besides the model main path, the plugin ships two ancillary capabilities that **do touch the credential blob**, both loopback-only:
+
+1. **Token keep-alive** (`tokenKeepaliveMs`, checked every 60 s by default): the blob read only decides expiry; the actual rotation happens when the plugin starts the official `agy.exe` once on the last tick before expiry (input pipe closed immediately, zero billed tokens) and AGY's own silent auth rotates the credential. A failed attempt for a given expiry is remembered and never re-spun.
+2. **Quota panel** (the card on the Models page + `/plugins/agy-link/status`): reads the blob to show the account identity (email/name) and expiry countdown, and fetches remaining quotas from Google's quota endpoint using the keyring token. All panel routes are loopback-only.
+
+Neither surface performs billed inference, persists credentials, or lets a credential reach a log line or an error message.
+
+---
+
+## Relationship with dsh-zcode-provider: Two Ends of One Spectrum
+
+The same author's [`dsh-zcode-provider`](https://github.com/Gaudi-XIX/dsh-zcode-provider) pushes this technical route to the opposite end; the difference between the two plugins is the cleanest demonstration of "harness ownership":
+
+- **This plugin = DSH governs the harness.** The AGY CLI exposes a stream-json event protocol and structured tool-call envelopes, so the model only *thinks* — every *action* (tool execution, approvals, sandbox, context) happens inside DSH.
+- **dsh-zcode-provider = the ZCode CLI governs the harness.** ZCode 0.17.0 exposes no bare-model interface, no tool projection, and its quota is bound to the official signing channel — with no interface to build on, the task is delegated wholesale to the CLI.
+
+**Selection rule**: multi-step tool tasks belong on this plugin (quality is decided by DSH's harness); plain text Q&A belongs on the zcode route (harness strength is irrelevant there). One provider decides one harness — the provider a session picks is the harness it runs under.
 
 ---
 
