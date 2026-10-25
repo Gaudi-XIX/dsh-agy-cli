@@ -106,8 +106,8 @@ test('resolveSessionStorePath accepts a file, a directory, or the DSH default', 
     process.env.DSH_HOME = join('tmp-root', 'dsh')
     assert.equal(resolveSessionStorePath(join('x', 'map.json')), join('x', 'map.json'))
     assert.equal(resolveSessionStorePath('scratch'), join('scratch', 'sessions.json'))
-    assert.equal(resolveSessionStorePath(undefined), join('tmp-root', 'dsh', 'agy-provider', 'sessions.json'))
-    assert.equal(resolveSessionStorePath('   '), join('tmp-root', 'dsh', 'agy-provider', 'sessions.json'))
+    assert.equal(resolveSessionStorePath(undefined), join('tmp-root', 'dsh', 'agy-cli', 'sessions.json'))
+    assert.equal(resolveSessionStorePath('   '), join('tmp-root', 'dsh', 'agy-cli', 'sessions.json'))
   } finally {
     if (previous === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previous

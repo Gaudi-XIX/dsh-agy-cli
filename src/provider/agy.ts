@@ -12,6 +12,7 @@ import {
 import type {
   ContentBlock,
   GenerateOptions,
+  RequestMessage,
   LlmModelInfo,
   LlmProviderInfo,
   ReasoningEffortId,
@@ -105,8 +106,8 @@ import {
   UNSUPPORTED_REASONING_EFFORT_CODE,
   UNSUPPORTED_TOOLS_CODE,
 } from './error-codes.js'
-import { SessionRegistry, type SessionRecord } from '../session/store.js'
-import { AgyPromptError, serializeAgyTurnPrompt } from './serialize.js'
+import { SessionRegistry, type SessionFingerprint, type SessionRecord } from '../session/store.js'
+import { AgyPromptError, serializeAgyPrompt, serializeAgyTurnPrompt } from './serialize.js'
 import {
   appendToolProtocolPrompt,
   appendToolProtocolRepairPrompt,
@@ -679,6 +680,32 @@ const AGY_REASONING_METADATA = [
 
 function abortError(): LlmError {
   return new LlmError('AGY request aborted by caller', 'ABORTED')
+}
+
+/**
+ * Fingerprint of the DSH history one conversation holds: a short hash over the
+ * serialized system + messages. Kept deliberately independent of the outbound
+ * prompt (image bridges and tool contracts may decorate it) — this hash only
+ * answers "is the DSH history the same one the AGY conversation was built on".
+ */
+function historyFingerprintOf(messages: readonly RequestMessage[], system: string | undefined): string {
+  // serializeAgyPrompt reads only, but its parameter keeps the host's mutable
+  // array type — the shallow copy is for the type, the cost is one array.
+  const serialized = serializeAgyPrompt({
+    ...(messages.length === 0
+      ? { messages: [{ role: 'user', content: [{ type: 'text', text: ' ' }] }] as unknown as RequestMessage[] }
+      : { messages: [...messages] as unknown as RequestMessage[] }),
+    ...(system === undefined ? {} : { system }),
+  })
+  return createHash('sha256').update(serialized, 'utf8').digest('hex').slice(0, 16)
+}
+
+/** Fingerprint metadata to store after a turn was delivered successfully. */
+function fingerprintAfterTurn(options: GenerateOptions): SessionFingerprint {
+  return {
+    chainHash: historyFingerprintOf(options.messages, options.system),
+    messageCount: options.messages.length,
+  }
 }
 
 function idleTimeoutMsOf(result: ProcessResult): number | undefined {
@@ -1799,12 +1826,37 @@ export class AgyAdapter extends LlmAdapter {
       agent: purposeRoute?.agent ?? this.agent,
       reasoningEffort: effectiveEffort,
     }
-    const existingConversationId = sessionKey === undefined || this.sessionMode === 'full'
+    let existingConversationId = sessionKey === undefined || this.sessionMode === 'full'
       ? undefined
       : this.sessions.get(sessionKey)?.conversationId
+    // History fingerprint check (design borrowed from dsh-agy-safe's chain):
+    // a resumed turn re-serializes the prefix of the DSH history the record
+    // says AGY already holds. If the host edited, compacted or truncated that
+    // prefix, the fingerprint no longer matches and the turn falls back to the
+    // full-history replay instead of landing a delta prompt on stale context.
+    let existingRecord: SessionRecord | undefined
+    let fingerprintMismatch = false
+    if (sessionKey !== undefined && this.sessionMode === 'resume') {
+      existingRecord = this.sessions.get(sessionKey)
+      if (existingRecord?.chainHash !== undefined && existingRecord.messageCount !== undefined) {
+        const expected = historyFingerprintOf(options.messages.slice(0, existingRecord.messageCount), options.system)
+        fingerprintMismatch = expected !== existingRecord.chainHash
+        if (fingerprintMismatch) {
+          // The AGY conversation was built on a history that no longer exists
+          // (edited, compacted, truncated). It is unusable in both shapes — a
+          // delta lands on stale context and a full replay would duplicate it —
+          // so the binding is dropped and the turn bootstraps a fresh one.
+          this.sessions.delete(sessionKey)
+          existingRecord = undefined
+          existingConversationId = undefined
+        }
+      }
+    }
     const initialRequestMode = this.sessionMode === 'full'
       ? 'full' as const
-      : existingConversationId === undefined ? 'bootstrap' as const : 'delta' as const
+      : existingConversationId === undefined || fingerprintMismatch
+        ? 'bootstrap' as const
+        : 'delta' as const
 
     const telemetry: AgyTelemetry = {
       requestId: randomUUID(),
@@ -1970,6 +2022,11 @@ export class AgyAdapter extends LlmAdapter {
             persistentProtocolRepairHint = undefined
             persistentProtocolRepairReason = undefined
             if (!outcome.retryWithFullPrompt) {
+              // Success: the AGY conversation now holds exactly this turn's DSH
+              // history, so the fingerprint chain advances to this request.
+              if (sessionKey !== undefined && options.purpose === undefined && telemetry.conversationId !== undefined && telemetry.carrierAbortExpected !== true) {
+                this.sessions.set(sessionKey, telemetry.conversationId, fingerprintAfterTurn(options))
+              }
               telemetry.durationMs = Date.now() - telemetry.startedAt
               emitAgyLog(this.logger, buildAgyLogRecord(telemetry, 'agy.request.completed'))
               return
@@ -2070,6 +2127,11 @@ export class AgyAdapter extends LlmAdapter {
           throw error
         }
         if (!outcome.retryWithFullPrompt) {
+          // Success: the AGY conversation now holds exactly this turn's DSH
+          // history, so the fingerprint chain advances to this request.
+          if (sessionKey !== undefined && options.purpose === undefined && telemetry.conversationId !== undefined && telemetry.carrierAbortExpected !== true) {
+            this.sessions.set(sessionKey, telemetry.conversationId, fingerprintAfterTurn(options))
+          }
           telemetry.durationMs = Date.now() - telemetry.startedAt
           emitAgyLog(this.logger, buildAgyLogRecord(telemetry, 'agy.request.completed'))
           return

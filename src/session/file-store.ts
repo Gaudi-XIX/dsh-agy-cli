@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
-import type { SessionRecord, SessionStore } from './store.js'
+import type { SessionFingerprint, SessionRecord, SessionStore } from './store.js'
 
 /**
  * How many conversation bindings to keep. Each DSH session leaves one AGY
@@ -28,6 +28,8 @@ interface PersistedRecord {
   readonly sessionId: string
   readonly conversationId: string
   readonly updatedAt: number
+  readonly chainHash?: string
+  readonly messageCount?: number
 }
 
 function resolveDshHome(): string {
@@ -36,7 +38,7 @@ function resolveDshHome(): string {
 
 /** Default location for the durable `sessionId -> AGY conversationId` map. */
 export function defaultSessionStorePath(): string {
-  return join(resolveDshHome(), 'agy-provider', 'sessions.json')
+  return join(resolveDshHome(), 'agy-cli', 'sessions.json')
 }
 
 /**
@@ -82,6 +84,9 @@ function parsePersisted(text: string): Map<string, SessionRecord> {
       sessionId: entry.sessionId,
       conversationId: entry.conversationId,
       updatedAt: entry.updatedAt,
+      ...(typeof entry.chainHash === 'string' && typeof entry.messageCount === 'number'
+        ? { chainHash: entry.chainHash, messageCount: entry.messageCount }
+        : {}),
     })
   }
   return records
@@ -164,9 +169,14 @@ export class FileSessionStore implements SessionStore {
     return record === undefined ? undefined : { ...record }
   }
 
-  set(sessionId: string, conversationId: string): SessionRecord {
+  set(sessionId: string, conversationId: string, fingerprint?: SessionFingerprint): SessionRecord {
     const records = this.load()
-    const record: SessionRecord = { sessionId, conversationId, updatedAt: this.now() }
+    const record: SessionRecord = {
+      sessionId,
+      conversationId,
+      updatedAt: this.now(),
+      ...(fingerprint === undefined ? {} : { chainHash: fingerprint.chainHash, messageCount: fingerprint.messageCount }),
+    }
     records.set(sessionId, record)
     if (records.size > this.maxRecords) {
       const sorted = [...records.values()].sort((a, b) => a.updatedAt - b.updatedAt)

@@ -2,6 +2,10 @@
 
 ## [0.12.0] - 2026-10-26
 
+### Added
+
+- **历史指纹链**（设计借自 dsh-agy-safe）：会话记录新增 `chainHash` + `messageCount`——每次成功轮次后记录该 AGY 会话所基于的 DSH 历史指纹（serialize 后 sha256 前 16 位）。resume 轮次发送前本地重序列化前缀比对，检出历史被编辑/压缩/截断的分叉，自动废弃旧会话绑定并从完整历史重建——delta prompt 不再可能落在过期上下文上。旧格式记录（无指纹字段）自动跳过校验，向后兼容；新增 3 例测试。
+
 ### Changed
 
 - **接续版更名**：`dsh-agy-provider` → `dsh-agy-cli`。原作者 darkings 自 2026-08-28 停更，本仓库自 2026-10-12 起接续维护；插件名、settingsNs、面板路由前缀（`/plugins/agy-cli/*`）与 npm 包名同步更替，**模型路由 id 保持 `agy` 不变**，原版用户迁移无需改模型配置。运行数据目录由 `~/.dsh/agy-link/` 迁至 `~/.dsh/agy-cli/`（runtime-overrides.json 可手动搬移）。

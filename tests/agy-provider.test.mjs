@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { AgyAdapter } from '../lib/provider/agy.js'
+import { SessionRegistry } from '../lib/session/store.js'
 import { getAgyUserMessageByteLength } from '../lib/agy/stream-protocol.js'
 import { DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES, DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES } from '../lib/provider/prompt-budget.js'
 
@@ -2140,6 +2141,98 @@ test('AgyAdapter maps a DSH Session to --conversation and sends only the new tur
   assert.equal(adapter.getSession(sessionId)?.conversationId, 'conversation-a')
   assert.equal(adapter.clearSession(sessionId), true)
   assert.equal(adapter.getSession(sessionId), undefined)
+})
+
+// History fingerprint chain (design borrowed from dsh-agy-safe): the record
+// carries a hash over the DSH history the AGY conversation was built on, so an
+// edited prefix is caught before a delta prompt lands on stale context.
+test('AgyAdapter advances the history fingerprint after every successful resume turn', async () => {
+  const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+    runAgyProcess: async request => {
+      request.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: 'conversation-fp' }))
+      request.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'ok' } }))
+      return result()
+    },
+  })
+
+  const sessionId = 'session-fingerprint'
+  const firstMessages = [{ role: 'user', content: [{ type: 'text', text: 'first' }] }]
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: firstMessages })) {}
+  const afterFirst = adapter.getSession(sessionId)
+  assert.equal(afterFirst?.messageCount, 1)
+  assert.match(afterFirst?.chainHash ?? '', /^[0-9a-f]{16}$/)
+
+  const secondMessages = [
+    { role: 'user', content: [{ type: 'text', text: 'first' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+    { role: 'user', content: [{ type: 'text', text: 'second' }] },
+  ]
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: secondMessages })) {}
+  const afterSecond = adapter.getSession(sessionId)
+  assert.equal(afterSecond?.messageCount, 3)
+  assert.notEqual(afterSecond?.chainHash, afterFirst?.chainHash, 'the chain must advance with each turn')
+})
+
+test('AgyAdapter abandons the old AGY conversation when the DSH history prefix was edited', async () => {
+  const captured = []
+  let call = 0
+  const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+    runAgyProcess: async request => {
+      captured.push({ conversation: request.conversation, prompt: request.prompt })
+      request.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: `conversation-${call}` }))
+      request.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: `answer-${call}` } }))
+      call += 1
+      return result()
+    },
+  })
+
+  const sessionId = 'session-edited'
+  const firstMessages = [{ role: 'user', content: [{ type: 'text', text: 'original question' }] }]
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: firstMessages })) {}
+
+  // The user edits the first message: the prefix no longer matches the
+  // fingerprint, so the stale AGY conversation must be dropped and the turn
+  // must bootstrap a fresh conversation from the full history.
+  const editedMessages = [
+    { role: 'user', content: [{ type: 'text', text: 'EDITED question' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'answer-0' }] },
+    { role: 'user', content: [{ type: 'text', text: 'follow-up' }] },
+  ]
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: editedMessages })) {}
+
+  assert.equal(captured[1].conversation, undefined, 'the stale conversation id must not be reused')
+  assert.match(captured[1].prompt, /EDITED question/, 'the turn replays the full edited history')
+  const rebuilt = adapter.getSession(sessionId)
+  assert.equal(rebuilt?.conversationId, 'conversation-1', 'a fresh binding is stored for the next turn')
+  assert.equal(rebuilt?.messageCount, 3)
+})
+
+test('AgyAdapter skips the fingerprint check for records written before the chain existed', async () => {
+  const registry = new SessionRegistry()
+  registry.set('session-legacy', 'conversation-legacy')
+  const captured = []
+  const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+    sessionRegistry: registry,
+    runAgyProcess: async request => {
+      captured.push({ conversation: request.conversation, prompt: request.prompt })
+      request.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: 'conversation-legacy' }))
+      request.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'ok' } }))
+      return result()
+    },
+  })
+
+  const legacyMessages = [
+    { role: 'user', content: [{ type: 'text', text: 'older turn' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'older answer' }] },
+    { role: 'user', content: [{ type: 'text', text: 'new turn' }] },
+  ]
+  for await (const _chunk of adapter.stream({ ...request, sessionId: 'session-legacy', messages: legacyMessages })) {}
+
+  assert.equal(captured[0].conversation, 'conversation-legacy', 'no fingerprint means resume as before')
+  assert.match(captured[0].prompt, /new turn/)
+  assert.doesNotMatch(captured[0].prompt, /older turn/)
+  // The chain starts with this turn: the next resume is protected.
+  assert.equal(adapter.getSession('session-legacy')?.messageCount, 3)
 })
 
 // AGY keeps a conversation on disk even when its process was killed mid-answer,
