@@ -1534,7 +1534,6 @@ export class AgyAdapter extends LlmAdapter {
       throw error
     })
     let blockStarted = false
-    let resultSeen = false
     let finalResponse: string | undefined
     let finalStatus: string | undefined
     let finalErrorDetail: string | undefined
@@ -1545,7 +1544,6 @@ export class AgyAdapter extends LlmAdapter {
     let lastResultError: string | undefined
     let latestStepUsage: Record<string, unknown> | undefined
     let resultUsage: Record<string, unknown> | undefined
-    let fallbackUsage: Record<string, unknown> | undefined
     // One consolidated reasoning block records the bridged tool steps, so the
     // transcript shows what AGY did without the host replaying any of it.
     let mcpStepsOpen = false
@@ -1583,7 +1581,6 @@ export class AgyAdapter extends LlmAdapter {
           finalStatus = typeof res?.status === 'string' ? res.status as string : undefined
           finalErrorDetail = typeof res?.error === 'string' ? res.error as string : undefined
           lastResultError = finalErrorDetail
-          resultSeen = true
           telemetry.finalStatus = finalStatus
           telemetry.finalResultRaw ??= finalResultRawOf(event)
           telemetry.firstEventMs ??= Date.now() - dispatchStartedAt
@@ -1633,7 +1630,7 @@ export class AgyAdapter extends LlmAdapter {
     }
     const mcpCloseLine = mcpStepCount > 0 ? reasoningCloseLine(mcpStepCount) : ''
     mcpStepsText = `${mcpStepsText}${mcpCloseLine}`
-    const selectedUsage = latestStepUsage ?? fallbackUsage ?? resultUsage
+    const selectedUsage = latestStepUsage ?? resultUsage
     const usageSource: AgyUsageSource | undefined = latestStepUsage !== undefined
       ? 'step'
       : selectedUsage === undefined ? undefined : 'result-fallback'
@@ -1692,7 +1689,21 @@ export class AgyAdapter extends LlmAdapter {
     // end) emit it as the answer. Nothing to emit for a tool-only step: its
     // tool-call block is the whole record, and a blank text block would land in
     // the transcript as an empty assistant message (see the one-shot path).
-    if (finalResponse !== undefined && finalResponse.length > 0) {
+    // A failed turn's `response` is a placeholder ("(no content)"): when real
+    // text already streamed, keep that text and park AGY's reason as a
+    // reasoning annotation; otherwise fail the turn exactly like one-shot —
+    // delivering the placeholder as the answer is worse than either.
+    const streamedPartialAnswer = finalStatus !== undefined
+      && !isSuccessStatus(finalStatus)
+      && modelText.trim().length > 0
+    if (finalStatus !== undefined && !isSuccessStatus(finalStatus) && !streamedPartialAnswer) {
+      const detail = [finalStatus, finalErrorDetail].filter(value => value !== undefined).join(' ')
+      const code = classifyAgyFailure(detail, 'AGY_STATUS')
+      throw new LlmError(safeAgyFailureMessage(`AGY returned status ${finalStatus}`, detail), code)
+    }
+    if (streamedPartialAnswer) telemetry.partialAnswerDelivered = true
+    const appendFinalResponse = !streamedPartialAnswer && finalResponse !== undefined && finalResponse.trim().length > 0
+    if (appendFinalResponse && finalResponse !== undefined) {
       const suffix = modelText.length === 0
         ? finalResponse
         : finalResponse.startsWith(modelText) ? finalResponse.slice(modelText.length) : ''
@@ -1708,11 +1719,30 @@ export class AgyAdapter extends LlmAdapter {
     if (blockStarted) {
       yield { type: 'block-end', index: 0, block: { type: 'text', text: modelText } }
     }
+    if (streamedPartialAnswer) {
+      const reason = (lastResultError ?? finalErrorDetail ?? 'AGY reported status ERROR').trim()
+      const line = `[agy finished with error] ${reason}\n\n`
+      if (!mcpStepsOpen) {
+        mcpStepsOpen = true
+        yield { type: 'block-start', index: 1, blockType: 'reasoning' }
+      }
+      if (!mcpBannerEmitted) {
+        mcpBannerEmitted = true
+        mcpStepsText += reasoningBanner()
+        yield { type: 'reasoning-delta', index: 1, text: reasoningBanner() }
+      }
+      mcpStepsText += line
+      yield { type: 'reasoning-delta', index: 1, text: line }
+    }
     if (mcpStepsOpen) {
       if (mcpCloseLine !== '') {
         yield { type: 'reasoning-delta', index: 1, text: mcpCloseLine }
       }
       yield { type: 'block-end', index: 1, block: { type: 'reasoning', text: mcpStepsText } }
+    } else if (!blockStarted && telemetry.toolCallCount === 0) {
+      // Same invariant as the one-shot path: a text-only turn that produced
+      // nothing is a failure the host can retry, never a silent success.
+      throw new LlmError('AGY completed without a text response', EMPTY_RESPONSE_CODE)
     }
     if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
     yield { type: 'finish', reason: { kind: 'stop' } }

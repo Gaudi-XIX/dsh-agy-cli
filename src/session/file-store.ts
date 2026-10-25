@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -139,14 +139,21 @@ export class FileSessionStore implements SessionStore {
   private persist(): void {
     if (!this.dirty) return
     const list = [...(this.records ?? []).values()]
+    // Unpredictable temp name: two processes pointing at the same file must not
+    // be able to win each other's rename.
+    const temporary = `${this.path}.tmp-${process.pid}-${Date.now().toString(36)}`
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       // Temp file plus rename: a crash mid-write leaves the previous map intact.
-      const temporary = `${this.path}.tmp`
       writeFileSync(temporary, JSON.stringify({ sessions: list }, null, 2), 'utf8')
       renameSync(temporary, this.path)
       this.dirty = false
     } catch {
+      try {
+        rmSync(temporary, { force: true })
+      } catch {
+        // Nothing to clean up, or the cleanup itself failed.
+      }
       // A read-only or unwritable location degrades to in-memory behaviour only.
       this.dirty = false
     }

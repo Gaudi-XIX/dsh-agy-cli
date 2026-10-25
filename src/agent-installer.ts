@@ -127,7 +127,9 @@ export async function installAgentPreset(options: AgentInstallOptions): Promise<
   }
 
   if (state.exists && state.content === content) {
-    return resultFor(preset, targetPath, options.apply === true, 'unchanged')
+    // Nothing was written, so `applied` must stay false even under --apply:
+    // the CLI would otherwise report "applied" for a no-op.
+    return resultFor(preset, targetPath, false, 'unchanged')
   }
 
   if (state.exists && options.apply !== true) {

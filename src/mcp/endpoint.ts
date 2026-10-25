@@ -61,7 +61,8 @@ export interface McpEndpoint {
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024
 
-function isLoopback(address: string | undefined): boolean {
+/** Loopback-only, shared with the settings panel routes. */
+export function isLoopback(address: string | undefined): boolean {
   if (address === undefined) return false
   return address === '127.0.0.1'
     || address === '::1'
@@ -137,12 +138,17 @@ export function mountMcpEndpoint(
         send(res, 401, 'unauthorized', 'text/plain; charset=utf-8')
         return
       }
+      // Snapshot the session handle before any await: setSession() re-points
+      // the closure variable when the next AGY turn starts, and a request
+      // suspended inside readBody must not wake up holding another session's
+      // agent scope.
+      const requestedSession = sessionHandle
       const body = await readBody(req)
       if (body.trim().length === 0) {
         send(res, 400, 'empty request body', 'text/plain; charset=utf-8')
         return
       }
-      const response = await session.handleMessage(body, sessionHandle)
+      const response = await session.handleMessage(body, requestedSession)
       if (response === undefined) {
         // Notification: MCP expects 202 with no body.
         res.writeHead(202, { 'content-length': 0 })
@@ -165,7 +171,11 @@ export function mountMcpEndpoint(
   // Read the port lazily: the carrier reports it only after its own listen
   // callback, which may be later than this registration.
   const port = webServer.port
-  const host = webServer.host === '0.0.0.0' ? '127.0.0.1' : (webServer.host ?? '127.0.0.1')
+  // A wildcard or IPv6 bind still reaches the bridge over loopback; a literal
+  // `::` in the URL is not connectable, so every non-IPv4 bind normalizes.
+  const host = webServer.host === '0.0.0.0' || webServer.host === '::' || (webServer.host ?? '').includes(':')
+    ? '127.0.0.1'
+    : (webServer.host ?? '127.0.0.1')
   return {
     url: typeof port === 'number' && port > 0 ? `http://${host}:${port}${path}` : undefined,
     token,

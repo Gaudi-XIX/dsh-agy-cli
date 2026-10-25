@@ -2,14 +2,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import http from 'node:http'
 import https from 'node:https'
 import tls from 'node:tls'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config as ConfigType } from '../provider/config.js'
 import { configuredModels, normalizeModelId, readConfigFlag } from '../provider/config.js'
 import type { AgyModelDiscovery } from '../agy/models.js'
-import type { DshWebServerLike } from '../mcp/endpoint.js'
+import { isLoopback, type DshWebServerLike } from '../mcp/endpoint.js'
 import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides, type AgyRuntimeOverrides } from '../agy/overrides.js'
 import { lastKeepaliveOutcome, readKeyringBlob, refreshAgyTokenIfDue } from '../agy/keepalive.js'
 
@@ -99,6 +100,9 @@ const AGY_IDENTITY_HEADERS: Record<string, string> = {
   'X-Goog-Api-Client': 'antigravity/cli/1.4.2 aidev_client windows/amd64 consumer',
 }
 
+/** POST body ceiling for the panel routes; these carry only small JSON settings. */
+const PANEL_MAX_BODY_BYTES = 1024 * 1024
+
 function readOverrides(): AgyRuntimeOverrides {
   return readAgyRuntimeOverrides() ?? { hiddenModels: [] }
 }
@@ -107,28 +111,65 @@ function saveOverrides(updates: { hiddenModels?: string[]; defaultEffort?: strin
   saveAgyRuntimeOverrides(updates)
 }
 
-function updateCordisPatch(visibleModels?: string[], defaultModel?: string): void {
+/**
+ * Rewrite the plugin's own block in the host `cordis.patch.yml` after a panel
+ * change. Failures propagate to the caller so the panel reports them instead of
+ * answering `{ok:true}` over a write that never happened.
+ *
+ * Every interpolation goes through a replacer *function*: a model id or a
+ * visible-models line carrying `$&` / `$'` would otherwise be expanded by
+ * String.replace's special sequences, and a newline in the value would inject
+ * a YAML line into the host config. Values are validated against a model-id
+ * allowlist before they reach the file at all.
+ *
+ * The write is atomic (temp + rename in the same directory): the host parses
+ * this file at boot, and a torn write would break the next start, not just the
+ * panel.
+ */
+function updateCordisPatch(visibleModels?: string[], defaultModel?: string): string | undefined {
   try {
-    if (!existsSync(CORDIS_PATCH_PATH)) return
+    if (!existsSync(CORDIS_PATCH_PATH)) return undefined
+    if (defaultModel !== undefined && !/^[A-Za-z0-9._-]+$/.test(defaultModel)) {
+      return `refusing to write non-model-id defaultModel: ${defaultModel.slice(0, 64)}`
+    }
+    if (visibleModels !== undefined
+      && !visibleModels.every(id => /^[A-Za-z0-9._-]+$/.test(id))) {
+      return 'refusing to write non-model-id visibleModels entry'
+    }
     let content = readFileSync(CORDIS_PATCH_PATH, 'utf8')
-    const providerRegex = /(- id: dsh-agy-provider[\s\S]*?)(?=\n- id:|\n[a-zA-Z]|\Z)/
+    // JS has no \Z anchor; the file-tail alternative is a plain `$`.
+    const providerRegex = /(- id: dsh-agy-provider[\s\S]*?)(?=\n- id:|\n[a-zA-Z]|$)/
     const match = content.match(providerRegex)
-    if (!match) return
+    if (!match) return undefined
 
     let block = match[1]!
-    if (defaultModel) {
-      block = block.replace(/(model:\s*)[^\r\n]+/, `$1${defaultModel}`)
+    if (defaultModel !== undefined) {
+      block = block.replace(/(model:\s*)[^\r\n]+/, (_whole, prefix: string) => `${prefix}${defaultModel}`)
     }
-    if (visibleModels) {
+    if (visibleModels !== undefined) {
       const lines = visibleModels.map((m) => `      - ${m}`).join('\n')
       const visibleRegex = /visibleModels:(\s*\n(\s+-[^\r\n]+\n*)*)/
       if (visibleRegex.test(block)) {
-        block = block.replace(visibleRegex, `visibleModels:\n${lines}\n`)
+        block = block.replace(visibleRegex, () => `visibleModels:\n${lines}\n`)
       }
     }
-    content = content.replace(providerRegex, block)
-    writeFileSync(CORDIS_PATCH_PATH, content, 'utf8')
-  } catch {}
+    content = content.replace(providerRegex, () => block)
+    const temporary = `${CORDIS_PATCH_PATH}.tmp-${process.pid}-${randomUUID()}`
+    try {
+      writeFileSync(temporary, content, 'utf8')
+      renameSync(temporary, CORDIS_PATCH_PATH)
+    } catch (error) {
+      try {
+        rmSync(temporary, { force: true })
+      } catch {
+        // Nothing to clean up, or the cleanup itself failed; the write error wins.
+      }
+      throw error
+    }
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
 }
 
 
@@ -385,7 +426,12 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
     // else (the timer, or this plugin's own keep-alive) shows up on the panel
     // without waiting out the 30 s window. The read is async + cached, so this
     // costs a PowerShell spawn at most once per freshness window.
-    if ((await readAccessTokenFromKeyring()) === lastQuotaToken) return cachedQuotas
+    try {
+      if ((await readAccessTokenFromKeyring()) === lastQuotaToken) return cachedQuotas
+    } catch {
+      // Keyring read failed: treat the cache as stale and let the full fetch
+      // below report its own error instead of rejecting out of the cache path.
+    }
     lastQuotaFetchTime = 0
   }
 
@@ -578,7 +624,13 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
 
     cachedQuotas = familyQuotas
     lastQuotaFetchTime = now
-  } catch {}
+  } catch {
+    // A throw past the in-function classification (a parse failure, a shape
+    // change) must not leave the previous error on display: surface it as a
+    // network-class failure so the panel shows a live problem, not a stale
+    // snapshot with no explanation.
+    lastQuotaError = 'network'
+  }
 
   return cachedQuotas
 }
@@ -623,7 +675,19 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     const readBody = (req: IncomingMessage): Promise<Record<string, unknown>> => {
       return new Promise((resolve) => {
         const chunks: Buffer[] = []
-        req.on('data', (c) => chunks.push(c))
+        let total = 0
+        // Without this listener an aborted POST surfaces as an unhandled
+        // 'error' on the stream — an uncaught exception in the host process.
+        req.on('error', () => resolve({}))
+        req.on('data', (c: Buffer) => {
+          total += c.length
+          if (total > PANEL_MAX_BODY_BYTES) {
+            req.destroy()
+            resolve({})
+            return
+          }
+          chunks.push(c)
+        })
         req.on('end', () => {
           try {
             const v = JSON.parse(Buffer.concat(chunks).toString('utf8'))
@@ -636,7 +700,19 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     }
 
     const reg = (path: string, handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>) => {
-      const d = webServer.register({ kind: 'exact', path, handler })
+      // The panel routes answer with account identity and drive quota fetches;
+      // they are loopback-only exactly like the MCP endpoint.
+      const d = webServer.register({
+        kind: 'exact',
+        path,
+        handler: async (req, res) => {
+          if (!isLoopback(req.socket?.remoteAddress)) {
+            sendJson(res, 403, { ok: false, error: 'loopback only' })
+            return
+          }
+          await handler(req, res)
+        },
+      })
       if (typeof d === 'function') disposers.push(d)
     }
 
@@ -747,6 +823,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       const quotas = quotaAnswer ?? cachedQuotas
 
       let discovered = [...DEFAULT_CATALOG_MODELS]
+      let catalogError: string | null = null
       if (modelDiscovery) {
         try {
           const configured = configuredModels(activeConfig)
@@ -759,7 +836,9 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
               }
             }
           }
-        } catch {}
+        } catch (error) {
+          catalogError = error instanceof Error ? error.message : String(error)
+        }
       }
 
       let hidden = overrides.hiddenModels
@@ -825,7 +904,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
             },
           ],
         },
-        catalog: { source: 'agy models', count: discovered.length, lastError: null },
+        catalog: { source: 'agy models', count: discovered.length, lastError: catalogError },
         catalogModels: discovered,
         hiddenModels: hidden,
         bindings: 1,
@@ -848,7 +927,11 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         saveOverrides({ hiddenModels: value })
         const discovered = DEFAULT_CATALOG_MODELS.map((m) => m.id)
         const visible = discovered.filter((id) => !value.includes(id))
-        updateCordisPatch(visible)
+        const patchError = updateCordisPatch(visible)
+        if (patchError !== undefined) {
+          sendJson(res, 500, { ok: false, key, error: patchError })
+          return
+        }
         sendJson(res, 200, { ok: true, key, value })
         return
       }
@@ -861,7 +944,11 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
 
       if (key === 'defaultModel' && typeof value === 'string') {
         saveOverrides({ defaultModel: value })
-        updateCordisPatch(undefined, value)
+        const patchError = updateCordisPatch(undefined, value)
+        if (patchError !== undefined) {
+          sendJson(res, 500, { ok: false, key, error: patchError })
+          return
+        }
         sendJson(res, 200, { ok: true, key, value })
         return
       }
@@ -910,8 +997,20 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     })
 
     // 4. GET & POST /plugins/agy-link/auth
-    reg('/plugins/agy-link/auth', (_req, res) => {
-      sendJson(res, 200, { phase: 'signed_in', message: '已通过 Windows 凭据管理器授权' })
+    reg('/plugins/agy-link/auth', async (_req, res) => {
+      // Report what the keyring actually says, not an unconditional
+      // "signed in": an empty or expired credential shows up as exactly that.
+      const identity = await readIdentityFromKeyring()
+      const expired = identity.expiresAtMs !== undefined && identity.expiresAtMs <= Date.now()
+      const phase = identity.accessToken === null
+        ? 'signed_out'
+        : expired ? 'expired' : 'signed_in'
+      const message = phase === 'signed_in'
+        ? '已通过 Windows 凭据管理器授权'
+        : phase === 'expired'
+          ? '凭据已过期，等待自动续期或重新登录'
+          : '凭据管理器中没有 AGY 凭据（gemini:antigravity）'
+      sendJson(res, 200, { phase, message })
     })
   })
 

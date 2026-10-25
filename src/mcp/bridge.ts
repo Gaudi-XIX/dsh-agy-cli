@@ -247,7 +247,16 @@ async function agentOf(
   options: DshMcpBridgeOptions,
   sessionHandle: string,
 ): Promise<unknown> {
-  const controller = options.sessionControllerLookup?.() ?? options.sessionController
+  // The lookup reads a Cordis service that a sibling bundle mounts later;
+  // cordis throws on property access while it is not mounted. Degrade to the
+  // static controller instead of failing every MCP request with a 500.
+  let controller: DshSessionControllerLike | undefined
+  try {
+    controller = options.sessionControllerLookup?.()
+  } catch {
+    controller = undefined
+  }
+  controller ??= options.sessionController
   if (controller === undefined) {
     options.logger?.('dsh mcp bridge: the host sessionController service is unavailable')
     return undefined
@@ -315,6 +324,19 @@ async function executeDshTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<McpCallResult> {
+  // Bridge-level gates first, independent of agent resolution: a tool the
+  // projection layer refuses to show must never execute through this bridge.
+  // Without this, a session whose agent could not be resolved (subagent
+  // routing, controller not mounted) degenerates to the global view, and a
+  // never-projected or allowlisted-out name would reach `tools.execute`
+  // directly — bypassing the promise tool-projection.ts makes.
+  if (NEVER_PROJECTED_TOOLS.has(name)) {
+    return { content: [{ type: 'text', text: `unknown tool "${name}"` }], isError: true }
+  }
+  if (options.toolAllowlist !== undefined && options.toolAllowlist.length > 0
+    && !options.toolAllowlist.includes(name)) {
+    return { content: [{ type: 'text', text: `unknown tool "${name}"` }], isError: true }
+  }
   // No resolvable agent means fail closed, never silently open: the call still
   // goes through `tools.execute()` so the host guard chain sees it, but the host
   // itself decides what an unscoped call may do.

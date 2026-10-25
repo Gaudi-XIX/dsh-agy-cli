@@ -51,7 +51,8 @@ export interface McpJsonRpcError {
 
 export interface McpJsonRpcResponse {
   readonly jsonrpc: '2.0'
-  readonly id: string | number
+  /** `null` when the request had no recoverable id (JSON-RPC 2.0 spec). */
+  readonly id: string | number | null
   readonly result?: unknown
   readonly error?: McpJsonRpcError
 }
@@ -118,16 +119,18 @@ export class McpServerSession {
     try {
       parsed = JSON.parse(raw)
     } catch {
+      // JSON-RPC 2.0: an unparseable body has no recoverable id, so the answer
+      // carries `id: null`, not a fabricated 0.
       return {
         jsonrpc: '2.0',
-        id: 0,
+        id: null,
         error: { code: MCP_ERROR_CODES.parseError, message: 'Parse error: body is not valid JSON' },
       }
     }
     if (!isRecord(parsed) || parsed.jsonrpc !== '2.0' || typeof parsed.method !== 'string') {
       return {
         jsonrpc: '2.0',
-        id: isRecord(parsed) && (typeof parsed.id === 'string' || typeof parsed.id === 'number') ? parsed.id : 0,
+        id: isRecord(parsed) && (typeof parsed.id === 'string' || typeof parsed.id === 'number') ? parsed.id : null,
         error: { code: MCP_ERROR_CODES.invalidRequest, message: 'Invalid Request' },
       }
     }

@@ -39,7 +39,9 @@ Examples:
 }
 
 function formatInstallResult(result: Awaited<ReturnType<typeof installAgentPreset>>): string {
-  const mode = result.applied ? 'applied' : 'preview'
+  // "unchanged" is neither applied nor a preview: the file already holds the
+  // target content, so saying either would mislead the operator.
+  const mode = result.action === 'unchanged' ? 'unchanged' : result.applied ? 'applied' : 'preview'
   const lines = [
     `mode: ${mode}`,
     `preset: ${result.preset}`,

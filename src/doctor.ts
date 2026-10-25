@@ -245,12 +245,16 @@ function defaultRunCommand(
 
     child.stdout?.setEncoding('utf8')
     child.stderr?.setEncoding('utf8')
+    let stderrBytes = 0
     child.stdout?.on('data', chunk => {
       totalBytes += Buffer.byteLength(chunk, 'utf8')
       if (totalBytes <= maxOutputBytes) stdout += chunk
     })
     child.stderr?.on('data', chunk => {
-      if (Buffer.byteLength(stderr, 'utf8') <= maxOutputBytes) stderr += chunk
+      // Counted incrementally like stdout: re-measuring the whole accumulated
+      // string per chunk is quadratic on a chatty child.
+      stderrBytes += Buffer.byteLength(chunk, 'utf8')
+      if (stderrBytes <= maxOutputBytes) stderr += chunk
     })
     child.once('error', () => finish(null))
     child.once('close', exitCode => finish(exitCode))
@@ -790,8 +794,10 @@ export async function diagnoseProfile(
       : dshCandidates.find(p => existsSync(p))
         ?? pathDshCommand
 
+    // dshEntry always resolves (the PATH fallback is unconditional), so there
+    // is no "missing" branch to guard: a dump is always attempted.
     let dumpStatus: ProfileDumpStatus = 'not-run'
-    if (dshEntry !== undefined) {
+    {
       try {
         const invocation = resolveDshInvocation(dshEntry)
         const args = [...invocation.prefixArgs, '--profile', profileName, '--dump-config']
