@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   AttachmentStore,
@@ -8,6 +8,7 @@ import type {
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock, GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
+import { dshHome } from '../dsh-home.js'
 import { serializeAgyPrompt, serializeAgyTurnPrompt } from './serialize.js'
 
 export const IMAGE_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
@@ -26,7 +27,7 @@ export type AgyImageMediaType = typeof IMAGE_MEDIA_TYPES[number]
  * on demand by the image-view Agent (or by the user in Explorer) long after the
  * turn that uploaded them is over.
  */
-export const IMAGE_HISTORY_CACHE_DIR = join(homedir(), '.dsh', 'agy-link', 'image-cache')
+export const IMAGE_HISTORY_CACHE_DIR = join(dshHome(), 'agy-link', 'image-cache')
 const IMAGE_HISTORY_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 
 export type AgyImageBridgeErrorCode =

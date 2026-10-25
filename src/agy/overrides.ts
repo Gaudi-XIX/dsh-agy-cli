@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { dshHome } from '../dsh-home.js'
 import { isAgyReasoningEffort, type AgyReasoningEffort } from './process.js'
 
 export interface AgyRuntimeOverrides {
@@ -9,7 +9,7 @@ export interface AgyRuntimeOverrides {
   defaultModel?: string
 }
 
-const RUNTIME_OVERRIDES_PATH = join(homedir(), '.dsh', 'agy-link', 'runtime-overrides.json')
+const RUNTIME_OVERRIDES_PATH = join(dshHome(), 'agy-link', 'runtime-overrides.json')
 // Indirection so tests (and the panel, if it ever runs in-process) can point the
 // reader at a different location without touching the user's real file.
 let _overridesPathOverride: string | undefined
