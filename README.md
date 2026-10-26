@@ -3,7 +3,13 @@
 [![npm](https://img.shields.io/npm/v/dsh-agy-cli)](https://www.npmjs.com/package/dsh-agy-cli)
 [![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-cli)](LICENSE)
 
-把本机已登录的 **Google Antigravity CLI（`agy`）** 接入 [DeepSeek Harness (DSH)](https://github.com/darkings/dsh) 作为一级模型提供方。**全部上游流量由官方二进制自己签名发起；工具执行、审批策略、工作区沙箱 100% 留在 DSH。**
+把本机已登录的 **Google Antigravity CLI（`agy`）** 接入 [DeepSeek Harness (DSH)](https://github.com/darkings/dsh) 作为一级模型提供方。
+
+**这个插件的三件事（它与其他 AGY 额度插件的全部区别）：**
+
+1. **完全合规** —— 不抽 token、不伪造客户端、不碰私有 RPC：所有上游请求由官方 `agy.exe` 二进制自己签名发起。零风控、零封号面。
+2. **吃到 Antigravity 账号的官方福利** —— 消耗打在你自己的套餐上，与官方客户端同池同规则：订阅额度、免费档、促销窗口原样可用，不需要任何 API Key。
+3. **抛弃 AGY 自带的 harness，DSH 接管一切** —— 工具执行、审批、沙箱、上下文预算 100% 在 DSH；AGY 被降维成纯模型推理端，上游 Agent 的 harness 强弱与你无关。
 
 > **接续声明**：本项目是 [`darkings/dsh-agy-provider`](https://github.com/darkings/dsh-agy-provider) 的接续维护版——原作者自 2026-08-28 起停更，本仓库自 2026-10-12 起接续（适配 DSH 0.2.0-rc.2 宿主、MCP 工具桥、全源码安全审计），git 历史完整保留原作者全部署名，MIT 协议不变。模型路由 id 保持 `agy`，从原版迁移无需改配置。
 >
