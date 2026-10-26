@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join, parse } from 'node:path'
 
-const DSH_PACKAGE = '@deepseek-ai/dsh@0.1.0-rc.7'
+const DSH_PACKAGE = '@deepseek-ai/dsh@0.2.0-rc.2'
+// The cached-entry probe below must agree with this pin, so derive it instead
+// of hardcoding the version a second time.
+const DSH_VERSION = DSH_PACKAGE.slice(DSH_PACKAGE.lastIndexOf('@') + 1)
 const PROVIDER_SPEC = process.env.DSH_SMOKE_PROVIDER_SPEC?.trim()
 const EXPECTED_TOOL_POLICY = process.env.DSH_SMOKE_EXPECTED_TOOL_POLICY?.trim() || 'dsh-owned'
 // Keep the self-contained smoke aligned with the v4 diagnostic contract used
@@ -129,7 +132,7 @@ async function findCachedDshEntry() {
       const packageJson = join(root, 'package.json')
       if (!existsSync(dshEntry) || !existsSync(packageJson)) continue
       const packageInfo = JSON.parse(await readFile(packageJson, 'utf8'))
-      if (packageInfo.version === '0.1.0-rc.7') return dshEntry
+      if (packageInfo.version === DSH_VERSION) return dshEntry
     }
   }
   return undefined
@@ -255,7 +258,7 @@ async function main() {
         || doctorParsed.profile?.effective?.dumpStatus !== 'ok'
         || doctorParsed.profile?.effective?.provider !== 'agy'
         || doctorParsed.profile?.effective?.model !== 'gemini-3.1-pro'
-        || doctorParsed.profile?.effective?.agent !== 'deepseek-proxy'
+        || doctorParsed.profile?.effective?.agent !== 'dsh-agy-mcp-executor'
         || doctorParsed.profile?.effective?.sessionMode !== 'full'
         || doctorParsed.profile?.effective?.imageInput !== 'experimental'
         || JSON.stringify(doctorParsed.profile?.effective?.modelCapability?.inputModalities) !== '["text","image"]'))) {

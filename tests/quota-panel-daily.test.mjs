@@ -18,6 +18,30 @@ import https from 'node:https'
 import tls from 'node:tls'
 import { setupWebRoutes } from '../lib/web/router.js'
 
+// Self-contained credentials and no ambient-network dependency.
+//
+// Why both lines below exist: this suite used to be green only on one machine.
+// Two ambient facts stood between it and CI — the quota chain needs an access
+// token from the Windows Credential Manager, and the fetch path hardcoded a
+// CONNECT tunnel to a local proxy at 127.0.0.1:12450. On a runner (Windows,
+// macOS or Linux) there is no keyring and no proxy, so `fetchQuotas` returned
+// early with `unauthorized`, zero RPCs were ever issued, and every assertion
+// about host/UA/numbers failed. A test that only passes where the author happens
+// to be logged in is a fake green.
+//
+// `DSH_AGY_KEYRING_BLOB` is the production seam in `src/agy/keepalive.ts`: it
+// feeds the same base64 OAuth blob shape agy.exe stores, decoded through the
+// same path, so the credential is supplied instead of scraped. The expiry is set
+// a millennium out on purpose — `refreshAgyTokenIfDue` then reports `not-due` and
+// the test never spawns a real `agy`. Clearing the proxy envs pins the direct
+// connection path, which is the one `interceptHttps()` below stubs.
+process.env.DSH_AGY_KEYRING_BLOB = Buffer.from(
+  JSON.stringify({ token: { access_token: 'test-access-token', expiry: '2999-01-01T00:00:00Z' } }),
+).toString('base64')
+for (const key of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) {
+  delete process.env[key]
+}
+
 const seenRequests = []
 // The summary normally carries `groups`, which is the path live traffic takes.
 // Flipping this makes the fixture answer without them so the catalog fallback

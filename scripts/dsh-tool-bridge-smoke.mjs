@@ -4,7 +4,9 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { pathToFileURL } from 'node:url'
 import { dirname, join, parse } from 'node:path'
 
-const DSH_PACKAGE = '@deepseek-ai/dsh@0.1.0-rc.7'
+// The host pin here must stay in step with the DSH runtime the CI smokes use
+// (dsh-smoke-self-contained / dsh-permission-matrix-smoke and .github/workflows/ci.yml).
+const DSH_PACKAGE = '@deepseek-ai/dsh@0.2.0-rc.2'
 const PROVIDER_SPEC = process.env.DSH_SMOKE_PROVIDER_SPEC?.trim()
 const COMMAND_TIMEOUT_MS = 10 * 60_000
 const OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024

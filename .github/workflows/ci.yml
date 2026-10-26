@@ -70,7 +70,7 @@ jobs:
           DSH_INSTALL_DIR: ${{ runner.temp }}/dsh-install
 
       - name: Install DSH runtime
-        run: pnpm add --dir "${{ runner.temp }}/dsh-install" --ignore-scripts --config.node-linker=hoisted --config.auto-install-peers=true @deepseek-ai/dsh@0.1.0-rc.7
+        run: pnpm add --dir "${{ runner.temp }}/dsh-install" --ignore-scripts --config.node-linker=hoisted --config.auto-install-peers=true @deepseek-ai/dsh@0.2.0-rc.2
 
       - name: Run self-contained DSH Mock smoke
         run: npm run smoke:dsh:self-contained
@@ -86,7 +86,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
-        # DSH 0.1.0-rc.7 imports Node 22+ APIs; Node 20 remains covered by
+        # DSH 0.2.0-rc.2 imports Node 22+ APIs; Node 20 remains covered by
         # the provider verify matrix above, but cannot run DSH-native smoke.
         node: ['22.x', '24.x']
 
@@ -113,7 +113,7 @@ jobs:
           DSH_INSTALL_DIR: ${{ runner.temp }}/dsh-install
 
       - name: Install DSH runtime
-        run: pnpm add --dir "${{ runner.temp }}/dsh-install" --ignore-scripts --config.node-linker=hoisted --config.auto-install-peers=true @deepseek-ai/dsh@0.1.0-rc.7
+        run: pnpm add --dir "${{ runner.temp }}/dsh-install" --ignore-scripts --config.node-linker=hoisted --config.auto-install-peers=true @deepseek-ai/dsh@0.2.0-rc.2
 
       - name: Run quota-free DSH capability matrix
         run: npm run smoke:dsh:permission-matrix

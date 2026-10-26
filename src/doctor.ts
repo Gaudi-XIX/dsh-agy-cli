@@ -16,7 +16,7 @@ import {
   type ProviderDiagnosticOptions,
   type ProviderDiagnosticResult,
 } from './diagnostics.js'
-import { Config, type Config as ConfigType, type ToolPolicy } from './provider/config.js'
+import { type ToolPolicy } from './provider/config.js'
 
 const require = createRequire(import.meta.url)
 
@@ -568,18 +568,20 @@ interface ParsedAgentFrontmatter {
   tools: readonly string[] | null
   commandExecutionPolicy: string | null
   mcpServersEmpty: boolean | null
+  inheritMcp: boolean | null
   subagent: boolean | null
 }
 
 function parseAgentFrontmatter(source: string): ParsedAgentFrontmatter {
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(source)
   if (match === null || match[1] === undefined) {
-    return { name: null, tools: null, commandExecutionPolicy: null, mcpServersEmpty: null, subagent: null }
+    return { name: null, tools: null, commandExecutionPolicy: null, mcpServersEmpty: null, inheritMcp: null, subagent: null }
   }
   let name: string | null = null
   let tools: string[] | null = null
   let commandExecutionPolicy: string | null = null
   let mcpServersEmpty: boolean | null = null
+  let inheritMcp: boolean | null = null
   let subagent: boolean | null = null
   let collectingTools = false
 
@@ -598,10 +600,11 @@ function parseAgentFrontmatter(source: string): ParsedAgentFrontmatter {
     if (field[1] === 'tools' && !collectingTools) tools = [...listValue(rawValue)]
     if (field[1] === 'commandExecutionPolicy') commandExecutionPolicy = rawValue || null
     if (field[1] === 'mcpServers') mcpServersEmpty = rawValue === '[]'
+    if (field[1] === 'inheritMcp') inheritMcp = booleanValue(rawValue)
     if (field[1] === 'subagent') subagent = booleanValue(rawValue)
   }
 
-  return { name, tools, commandExecutionPolicy, mcpServersEmpty, subagent }
+  return { name, tools, commandExecutionPolicy, mcpServersEmpty, inheritMcp, subagent }
 }
 
 function presetForAgent(agent: string | null, agentPreset: string | null): AgentPreset | undefined {
@@ -640,10 +643,19 @@ async function inspectAgent(
     const actualTools = frontmatter.tools ?? []
     const toolsMatch = actualTools.length === preset.tools.length
       && actualTools.every((tool, index) => tool === preset.tools[index])
+    // The MCP half of the contract differs per preset: the four closed
+    // presets declare `mcpServers: []`, while the DSH bridge preset
+    // (`mcp-executor`) must inherit the host's `dsh` MCP server
+    // (`inheritMcp: true`, since 2b7988a) and carries no explicit list.
+    // Requiring `mcpServers: []` there made doctor flag its own default
+    // agent as invalid on every clean install.
+    const mcpContractSatisfied = preset.id === 'mcp-executor'
+      ? frontmatter.inheritMcp === true
+      : frontmatter.mcpServersEmpty === true
     const valid = frontmatter.name === preset.agentName
       && toolsMatch
       && frontmatter.commandExecutionPolicy === 'off'
-      && frontmatter.mcpServersEmpty === true
+      && mcpContractSatisfied
       && frontmatter.subagent === false
     const capability = {
       knownPreset: true,
@@ -1121,11 +1133,17 @@ export async function runDoctorCli(
   }
 
   try {
+    // Do NOT pre-resolve the config here. `enabled` is a `.volatile()` field,
+    // so one pass through the schema replaces it with a host-style reference
+    // object (`{ get() }`); feeding that back through the same schema (which
+    // diagnoseProvider does for its own defaults) throws
+    // `$.enabled expected boolean but got [object Object]`, and the whole
+    // doctor command dies as DOCTOR_EXECUTION_FAILED. diagnoseProvider already
+    // parses `options.config ?? {}` exactly once on its own.
     const result = await runDoctor({
       ...(profile === undefined ? {} : { profile }),
       ...(dshHome === undefined ? {} : { dshHome }),
       ...(dshBin === undefined ? {} : { dshBin }),
-      config: Config({}),
     })
 
     if (jsonOutput) {

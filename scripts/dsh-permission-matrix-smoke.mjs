@@ -5,7 +5,10 @@ import { parse, join, dirname } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const DSH_PACKAGE = '@deepseek-ai/dsh@0.1.0-rc.7'
+const DSH_PACKAGE = '@deepseek-ai/dsh@0.2.0-rc.2'
+// The cached-entry probe below must agree with this pin, so derive it instead
+// of hardcoding the version a second time.
+const DSH_VERSION = DSH_PACKAGE.slice(DSH_PACKAGE.lastIndexOf('@') + 1)
 const PROVIDER_SPEC = process.env.DSH_SMOKE_PROVIDER_SPEC?.trim()
 const COMMAND_TIMEOUT_MS = 3 * 60_000
 const DSH_INSTALL_TIMEOUT_MS = 10 * 60_000
@@ -58,6 +61,11 @@ const DISABLED_TOOL_ENTRIES = [
   'tool-subagent-report',
   'workflow-worker-thread',
   'tool-workflow',
+  // DSH 0.2.0 mounts workflow-ptc from dsh-base; it hard-injects `subagents`,
+  // which the entries above just disabled - the entry stayed pending, the agent
+  // setup never settled and the scenario died on the command timeout. Disable
+  // the consumer as well as its providers so nothing waits on a killed service.
+  'workflow-ptc',
   'tool-todo',
   'tool-goal',
   'tool-ralph',
@@ -176,7 +184,7 @@ async function findCachedDshEntry() {
       const packageJson = join(npxRoot, entry.name, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
       if (!existsSync(dshEntry) || !existsSync(packageJson)) continue
       const packageInfo = JSON.parse(await readFile(packageJson, 'utf8'))
-      if (packageInfo.version === '0.1.0-rc.7') return dshEntry
+      if (packageInfo.version === DSH_VERSION) return dshEntry
     }
   }
   return undefined
@@ -217,6 +225,11 @@ ${disabledEntriesPatch()}
 - insert:
     - id: dsh-web-runtime-fixture
       name: '@deepseek-ai/dsh-web'
+      # DSH 0.2.x fails closed with WEB_PROVIDER_AMBIGUOUS when several fetch
+      # providers are usable, so pin the fixture provider instead of relying on
+      # the old implicit pick.
+      config:
+        fetchProvider: fixture-local-fetch
     - id: dsh-web-local-provider-fixture
       name: '${webFixturePath}'
     - id: dsh-mcp-client-fixture

@@ -28,7 +28,7 @@ AGY 的 Google 凭据存放在 Windows 凭据管理器 `gemini:antigravity`（bl
 - Node.js `>=20` 和 npm。
 - pnpm（DSH `plugin --profile ... add` 会将插件管理转发给 pnpm）。
 - AGY CLI 已安装并完成登录，`agy agents` 能列出 `deepseek-proxy`，`agy --version >=1.1.15`。
-- DSH `@deepseek-ai/dsh@0.1.0-rc.7`（`rc.8` 隔离 lane 已审计，stable 仍为 rc.7）。
+- DSH `@deepseek-ai/dsh@0.2.0-rc.2`（旧 `0.1.0-rc.7` 基线已被宿主 API 变更淘汰：`CallId`→`ToolCallId`、tool-result 消息化）。
 
 ## 安装到 DSH profile
 
@@ -262,7 +262,7 @@ npm pack --dry-run
 npm run smoke:dsh:self-contained
 ```
 
-该脚本在临时目录安装固定 `@deepseek-ai/dsh@0.1.0-rc.7`，使用 DSH 原生 `plugin --profile web/headless add` 安装当前 Provider tarball，检查 Web bundle defaults、运行 doctor，并在 headless profile 执行 `agy-mock` 文本请求后自动清理。它不会调用 AGY，结果固定标记 `quotaUsed: false`。
+该脚本在临时目录安装固定 `@deepseek-ai/dsh@0.2.0-rc.2`，使用 DSH 原生 `plugin --profile web/headless add` 安装当前 Provider tarball，检查 Web bundle defaults、运行 doctor，并在 headless profile 执行 `agy-mock` 文本请求后自动清理。它不会调用 AGY，结果固定标记 `quotaUsed: false`。
 
 完整 7 层测试（`docs/v0.9.0-release-checklist.md`）：L1 单元(160+) → L2 集成(fake) → L3 自包含Mock → L4 权限矩阵 → L5 设置面板(i18n/可见性/强度) → L6 跨平台 → L7 真实抽样(预算内)。这些命令不会发送模型 Prompt；`diagnose` 只读版本、Agent 和目录，`benchmark` 与测试使用本地数据或 fake runner。完整的 tag、Trusted Publisher 和 registry 复验步骤见 [0.9.0 发布检查清单](v0.9.0-release-checklist.md)。
 

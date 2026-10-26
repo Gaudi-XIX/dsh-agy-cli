@@ -1,4 +1,4 @@
-import { CallId, LlmAdapter } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
 
 export const name = 'dsh-agy-cli-capability-model-fixture'
 export const inject = ['llm']
@@ -18,7 +18,8 @@ function scenarioConfig() {
   const scenarios = {
     read: {
       tool: 'read',
-      arguments: { file_path: 'read-target.txt', offset: 0, limit: 20 },
+      // DSH 0.2.x rejects offset 0 ("offset must be a positive integer").
+      arguments: { file_path: 'read-target.txt', offset: 1, limit: 20 },
     },
     write: {
       tool: 'write',
@@ -84,8 +85,16 @@ function scenarioConfig() {
   return { scenario, ...selected }
 }
 
+// DSH 0.2.x promotes tool results to first-class `role: 'tool'` messages; the
+// 0.1.x shape carried a `tool-result` content block instead. Accept both so the
+// fixture keeps working against either host generation.
+function toolResultMessages(messages) {
+  return messages.filter(message => message.role === 'tool'
+    || message.content?.some?.(block => block.type === 'tool-result'))
+}
+
 function hasToolResult(messages) {
-  return messages.some(message => message.content?.some(block => block.type === 'tool-result'))
+  return toolResultMessages(messages).length > 0
 }
 
 function textChunks(text) {
@@ -132,9 +141,7 @@ class CapabilityAdapter extends LlmAdapter {
     if (options.signal?.aborted) throw new Error('CAPABILITY_FIXTURE_ABORTED')
 
     if (hasToolResult(options.messages)) {
-      const result = options.messages
-        .flatMap(message => message.content ?? [])
-        .find(block => block.type === 'tool-result')
+      const result = toolResultMessages(options.messages).at(-1)
       const resultText = result?.content
         ?.filter(block => block.type === 'text')
         ?.map(block => block.text)
@@ -144,7 +151,7 @@ class CapabilityAdapter extends LlmAdapter {
       return
     }
 
-    const id = CallId(`capability-${this.config.scenario}-call`)
+    const id = ToolCallId(`capability-${this.config.scenario}-call`)
     const argumentsText = JSON.stringify(this.config.arguments)
     yield { type: 'block-start', index: 0, blockType: 'tool-call' }
     yield {

@@ -25,7 +25,18 @@ import { FileSessionStore, resolveSessionStorePath } from './session/file-store.
 import type { DshContextLookup } from './dsh/context.js'
 
 export const name = 'dsh-agy-cli'
-export const inject = ['llm', 'sessions', 'workspaceRegistry', 'sandboxPolicy', 'permissionPresets', 'approval']
+/**
+ * Hard-injected harness services. `workspaceRegistry` is deliberately NOT here:
+ * it is provided by the web/desktop layer only (@deepseek-ai/dsh-api-workspace-
+ * controller is mounted by dsh-web-app), so declaring it as a requirement makes
+ * this plugin stay `pending (waiting for service: workspaceRegistry)` on the
+ * headless profile - apply() would never run, no adapter would register, and
+ * every headless request would die with NO_ADAPTER. The runtime reads the
+ * registry through service(), which falls back to the root context, and fails
+ * closed with DSH_WORKSPACE_UNAVAILABLE when a tool request genuinely needs it
+ * and the host does not provide one.
+ */
+export const inject = ['llm', 'sessions', 'sandboxPolicy', 'permissionPresets', 'approval']
 
 /** Programmatic library default: enabled=false, toolPolicy=reject. */
 export const Config = ConfigSchema

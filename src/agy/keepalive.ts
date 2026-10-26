@@ -207,6 +207,26 @@ function blobIsFresh(now: number): boolean {
 }
 
 async function readKeyringBlobUncached(): Promise<KeyringBlob> {
+  // Credential seam, checked before the platform gate. Why: there is no Windows
+  // Credential Manager on Linux/macOS (and none on a CI runner), so every chain
+  // behind this read — the quota panel, its 4 daily-host tests — could only ever
+  // be green on the one dev machine that happened to hold a real login. That is
+  // a fake green, not a passing suite. `DSH_AGY_KEYRING_BLOB` feeds the exact
+  // base64 OAuth blob agy.exe stores through the identical decode path, so a
+  // test (or an operator without a keyring) can stand in for the credential.
+  // Unset => behavior unchanged. Set => the blob is trusted as if read from the
+  // store, on every platform: whoever can set this env can already read that
+  // store as the same user, so it grants nothing new.
+  const injected = process.env.DSH_AGY_KEYRING_BLOB?.trim()
+  if (injected !== undefined && injected.length > 0) {
+    try {
+      return decodeKeyringBlob(injected)
+    } catch {
+      // A malformed blob is "no credential", never a crash and never a partial
+      // identity: fail closed to the same shape the unreadable keyring gives.
+      return { accessToken: null }
+    }
+  }
   if (process.platform !== 'win32') return { accessToken: null }
   return await new Promise<KeyringBlob>((resolve) => {
     execFile(

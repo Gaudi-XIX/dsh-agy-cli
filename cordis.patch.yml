@@ -1,6 +1,6 @@
 # Bundle entry is enabled by default when installed through dsh plugin add.
 # Install this package into a DSH profile with:
-# npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.10.0
+# npx @deepseek-ai/dsh plugin --profile web add dsh-agy-cli@0.12.1
 - insert:
     - id: dsh-agy-cli
       name: dsh-agy-cli

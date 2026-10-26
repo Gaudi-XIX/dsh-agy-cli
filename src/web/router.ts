@@ -13,6 +13,7 @@ import type { AgyModelDiscovery } from '../agy/models.js'
 import { isLoopback, type DshWebServerLike } from '../mcp/endpoint.js'
 import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides, type AgyRuntimeOverrides } from '../agy/overrides.js'
 import { lastKeepaliveOutcome, readKeyringBlob, refreshAgyTokenIfDue } from '../agy/keepalive.js'
+import { resolveAgyExecutable } from '../agy/process.js'
 
 interface QuotaModelEntry {
   remainingFraction?: number
@@ -205,11 +206,92 @@ async function readAccessTokenFromKeyring(options: { force?: boolean | undefined
   return (await readIdentityFromKeyring(options)).accessToken
 }
 
-function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, proxyUrl = 'http://127.0.0.1:12450'): Promise<any> {
+// Proxy resolution for the quota RPCs. Was: a hardcoded default of
+// `http://127.0.0.1:12450` — the dev machine's tunnel. On any other host (CI,
+// users without that exact proxy) the CONNECT failed silently behind a
+// `.catch(() => null)`, so the quota panel showed nothing and the quota tests
+// only passed where the proxy happened to be listening.
+// Now: use the standard proxy environment (`HTTPS_PROXY`, checked case-first,
+// then lowercase — Node's own env handling accepts both) when it is set, and a
+// plain direct HTTPS request when it is not. Same behavior in production and
+// in tests: no ambient-network dependency left in the fetch path.
+// The panel shows which AGY binary it is talking to. `resolveAgyExecutable`
+// walks PATH, so running it on every `/status` poll (the panel polls) would do
+// a filesystem scan per request. The answer is stable for the life of the host
+// process, so memoize the auto-discovered one; an explicit `agyPath` is read
+// straight from config and stays reactive to settings changes.
+let memoAgyBin: string | undefined
+function reportAgyBin(agyPath: string | undefined): string {
+  const configured = agyPath?.trim()
+  if (configured) return configured
+  if (memoAgyBin === undefined) memoAgyBin = resolveAgyExecutable()
+  return memoAgyBin
+}
+
+function resolveQuotaProxyUrl(): string | undefined {
+  const raw = process.env.HTTPS_PROXY ?? process.env.https_proxy
+  const trimmed = raw?.trim()
+  if (!trimmed) return undefined
+  try {
+    const url = new URL(trimmed)
+    // A CONNECT tunnel only makes sense for an http(s) proxy endpoint; socks://
+    // and friends need an agent we deliberately do not depend on.
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
+function fetchHttpsDirect(targetUrlStr: string, accessToken: string): Promise<any> {
   return new Promise((resolve, reject) => {
     try {
       const targetUrl = new URL(targetUrlStr)
-      const proxy = new URL(proxyUrl)
+      const body = JSON.stringify({})
+      const httpsReq = https.request(
+        {
+          host: targetUrl.hostname,
+          path: targetUrl.pathname + targetUrl.search,
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            ...AGY_IDENTITY_HEADERS,
+            'Content-Length': Buffer.byteLength(body),
+          },
+          timeout: 10000,
+        },
+        (httpsRes) => {
+          const chunks: Buffer[] = []
+          httpsRes.on('data', (d) => chunks.push(d))
+          httpsRes.on('end', () => {
+            try {
+              resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+            } catch (e) {
+              reject(e)
+            }
+          })
+        },
+      )
+      httpsReq.on('timeout', () => {
+        httpsReq.destroy(new Error('HTTPS pa.googleapis.com timed out after 10000ms'))
+      })
+      httpsReq.on('error', (err) => reject(err))
+      httpsReq.write(body)
+      httpsReq.end()
+    } catch (e) {
+      reject(e)
+    }
+  })
+}
+
+function fetchHttpsThroughHttpProxy(targetUrlStr: string, accessToken: string, proxyUrl?: string): Promise<any> {
+  const effectiveProxy = proxyUrl ?? resolveQuotaProxyUrl()
+  if (!effectiveProxy) return fetchHttpsDirect(targetUrlStr, accessToken)
+  return new Promise((resolve, reject) => {
+    try {
+      const targetUrl = new URL(targetUrlStr)
+      const proxy = new URL(effectiveProxy)
 
       const connectReq = http.request({
         host: proxy.hostname,
@@ -856,7 +938,11 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
 
       sendJson(res, 200, {
         plugin: 'dsh-agy-cli',
-        bin: activeConfig.agyPath || 'F:\\AgentData\\antigravity\\cli\\agy.exe',
+        // Never fall back to a developer's absolute path: this value ships to
+        // every panel and used to leak `F:\AgentData\antigravity\cli\agy.exe`
+        // into every user's settings page. Empty agyPath means "auto-discover",
+        // so report what the spawn path actually resolves to.
+        bin: reportAgyBin(activeConfig.agyPath),
         version: CLOUD_CODE_API_VERSION,
         enabled: readConfigFlag(activeConfig.enabled),
         permissionMode: 'dsh-owned',

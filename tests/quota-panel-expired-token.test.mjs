@@ -13,6 +13,18 @@ import https from 'node:https'
 import tls from 'node:tls'
 import { setupWebRoutes } from '../lib/web/router.js'
 
+// Same self-contained seams as tests/quota-panel-daily.test.mjs: supply the
+// credential through the production `DSH_AGY_KEYRING_BLOB` seam and pin the
+// direct-connect path by clearing proxy envs. Without a token `fetchQuotas`
+// bails out before issuing any RPC, so this file would end up asserting the
+// early-return path instead of the 401 path its header describes.
+process.env.DSH_AGY_KEYRING_BLOB = Buffer.from(
+  JSON.stringify({ token: { access_token: 'lapsed-test-token', expiry: '2999-01-01T00:00:00Z' } }),
+).toString('base64')
+for (const key of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) {
+  delete process.env[key]
+}
+
 function interceptUnauthorized() {
   const originalRequest = https.request
   const originalConnect = tls.connect
