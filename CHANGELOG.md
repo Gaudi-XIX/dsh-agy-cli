@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.1] - 2026-10-26
+
+### Fixed
+
+- `package.json` 的 `bugs` / `homepage` 指向不存在的 `darkings/dsh-agy-cli`，改为本仓；`package-lock.json` 的包名与 `bin` 名同步为 `dsh-agy-cli`（此前仍是 `dsh-agy-provider`）。
+- `src/provider/config.ts` 中 `sessionStorePath` 的三处说明写的是 `DSH_HOME/agy-provider/sessions.json`，与代码实际路径 `<DSH_HOME>/agy-cli/sessions.json` 不符，已改正。
+- `docs/installation.md` 的 GitHub 安装命令指向 `darkings/dsh-agy-cli`（不存在的仓库），改为 `Gaudi-XIX/dsh-agy-cli`。
+
+### Changed
+
+- README（中/英）重写为如实口径并去掉历史叙事：新增「凭据与网络行为」一节，明确写出读取 Windows Credential Manager 的 OAuth blob、并把 `access_token` 作为 Bearer 发往 `daily-cloudcode-pa.googleapis.com` / `cloudcode-pa.googleapis.com` 的只读配额 RPC（不外传第三方）；标注 **仅 Windows**；补上「装完必须跑 `agents install --apply`，否则 AGY 报 unknown agent」这一步；删除与 `dsh-zcode-cli` 的对照节、25 家插件市场地图、与 agy-safe / acp 的逐条对比与接续叙事。
+
 ## [0.12.0] - 2026-10-26
 
 ### Added

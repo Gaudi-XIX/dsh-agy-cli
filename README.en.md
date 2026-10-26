@@ -3,16 +3,26 @@
 [![npm](https://img.shields.io/npm/v/dsh-agy-cli)](https://www.npmjs.com/package/dsh-agy-cli)
 [![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-cli)](LICENSE)
 
-Runs the locally authenticated **Google Antigravity CLI (`agy`)** as a first-class model provider for [DeepSeek Harness (DSH)](https://github.com/darkings/dsh). **All upstream traffic is signed by the official binary itself; tool execution, approvals and workspace sandbox stay 100% inside DSH.**
+Runs the locally authenticated **Google Antigravity CLI (`agy`)** as a first-class model provider for [DeepSeek Harness (DSH)](https://github.com/darkings/dsh).
 
-> **Continuation notice**: this project continues [`darkings/dsh-agy-provider`](https://github.com/darkings/dsh-agy-provider) — the original author has been inactive since 2026-08-28. Maintained here since 2026-10-12 (DSH 0.2.0-rc.2 host adaptation, MCP tool bridge, a full-source security audit). The git history preserves every original attribution; MIT license unchanged. The model route id stays `agy`.
+**What this plugin does, in three points:**
 
-For the full market-position survey (25 AGY-family plugins across 6 technical dimensions, the three provider routes, and honest comparisons against `dsh-agy-safe` and `dsh-antigravity-acp`), see [README.md](README.md) (Chinese). The short version:
+1. **Generation is signed by the official binary.** Every model request goes out through the official `agy.exe`; the plugin does not sign it, proxy it, or replace its generation path, so the model-side risk surface matches the official client.
+2. **Spends your Antigravity quota.** Requests draw on your own subscription under the same pool and rules as the official client. No API key.
+3. **AGY is only the model; DSH owns the harness.** Tool execution, approvals, sandbox and context budgeting stay 100% inside DSH; AGY's own agent loop is stripped.
 
-- **Dimension**: model-provider integration — the largest of the 6 dimensions (12 of 25 plugins).
-- **Our cell**: *official channel + DSH-owned harness*. The only cell of the three provider routes that is immune to how strong or weak the upstream agent's own harness is. Its CLI front now has exactly one maintained plugin — this one.
-- **Versus the OAuth-extraction majority (8 plugins)**: they gain freedom (account pools, image generation) at the cost of forged-client traffic and ban risk; we keep zero forged traffic.
-- **Versus `dsh-antigravity-acp`**: same harness ownership, different protocol — it speaks the official ACP standard through a separately downloaded server process (~52 s cold start), we speak the CLI's private stream-json through the light binary you already have (seconds to start). Our edge is lightness and the widest-compatible channel; theirs is a standards-grade contract and deeper feature polish. Both are honest choices of the same first principles: no token extraction, official-signed traffic, tools owned by DSH.
+> **Platform: Windows only.** The quota panel and credential keep-alive depend on Windows Credential Manager. The other features have no cross-platform implementation and are untested on macOS/Linux.
+
+---
+
+## Credentials and network behaviour (stated plainly)
+
+- **Reads**: the Google OAuth blob that AGY stores in Windows Credential Manager (target `gemini:antigravity`), via `CredRead` in `src/agy/keepalive.ts`. Used for two things: deciding whether the token is close to expiry and should trigger one official-CLI renewal, and reading `access_token` for the quota queries below. The token stays in process memory; it is never logged or placed in an error message.
+- **Quota queries — the only outbound request the plugin makes itself**: the token above is sent as `Authorization: Bearer` to the read-only quota RPCs of `https://daily-cloudcode-pa.googleapis.com` and `https://cloudcode-pa.googleapis.com`, together with AGY client identity headers (`User-Agent` / `X-Goog-Api-Client`) — the server returns different quota groups per client, and omitting them drops the Gemini group. **Those requests go to those two Google endpoints only; nothing is sent to third parties.**
+- **Not done**: no interception, replay or forgery of generation requests; no token handed to third parties; no credentials read beyond the target above.
+- **Renewal**: token rotation is performed entirely by the official `agy.exe`; the plugin only launches it once before expiry.
+
+Evidence for the endpoint semantics and identity-header behaviour: `docs/prod-generation-feasibility-20261020.md`.
 
 ## Install
 
@@ -20,8 +30,19 @@ For the full market-position survey (25 AGY-family plugins across 6 technical di
 dsh plugin --profile <your profile> add dsh-agy-cli
 ```
 
-Requires the official Antigravity CLI installed and signed in locally; Node ≥ 22. Migrating from `dsh-agy-provider` or `dsh-agy-safe`: the route id is unchanged (`agy`); the runtime data directory moved from `~/.dsh/agy-link/` to `~/.dsh/agy-cli/`.
+Requires Windows, the official Antigravity CLI installed and signed in locally, and Node ≥ 22.
+
+**One more step, or AGY will report an unknown agent** (the bundled agent presets are not copied into AGY's agent directory by the install alone):
+
+```console
+npx dsh-agy-cli agents install read-only --apply
+npx dsh-agy-cli agents install workspace-write --apply
+```
+
+`--apply` writes into `~/.gemini/antigravity-cli/gemini-root-config/agents`; add `--backup` first if you want a copy, and `agents list` shows the current state. After a host restart the plugin's card appears under Settings → Models (model visibility, reasoning effort, quota panel).
+
+**Diagnostics**: `npx dsh-agy-cli doctor --profile <profile>` — install, bundle declaration, agent presets, config parsing and credential state, without spending quota.
 
 ## License
 
-MIT. Original work copyright Darkings (darkings/dsh-agy-provider); this continuation preserves the full attribution history under the same license.
+MIT. Source derived from Darkings' `dsh-agy-provider` (MIT); the original copyright and full commit history are preserved in `LICENSE` and in this repository's git history.

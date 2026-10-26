@@ -1,6 +1,6 @@
 {
   "name": "dsh-agy-cli",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "private": false,
   "publishConfig": {
     "access": "public"
@@ -108,7 +108,7 @@
   ],
   "author": "",
   "bugs": {
-    "url": "https://github.com/darkings/dsh-agy-cli/issues"
+    "url": "https://github.com/Gaudi-XIX/dsh-agy-cli/issues"
   },
-  "homepage": "https://github.com/darkings/dsh-agy-cli#readme"
+  "homepage": "https://github.com/Gaudi-XIX/dsh-agy-cli#readme"
 }

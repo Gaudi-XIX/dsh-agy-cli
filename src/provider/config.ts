@@ -74,7 +74,7 @@ export interface Config {
   /**
    * Where the durable `DSH sessionId -> AGY conversationId` map lives, so
    * `sessionMode: resume` survives a host restart. Empty uses
-   * `<DSH_HOME>/agy-provider/sessions.json`. A value ending in `.json` is a
+   * `<DSH_HOME>/agy-cli/sessions.json`. A value ending in `.json` is a
    * file; anything else is a directory holding `sessions.json`.
    */
   sessionStorePath?: string
@@ -281,7 +281,7 @@ export function createConfigSchema(defaults: {
     idleTimeoutMs: z.number().min(1).max(3_600_000).default(300_000).description('Inactivity budget per request ms; re-armed on every output line. Must stay below timeoutMs').hidden(),
     stdinMode: z.union(['hold', 'close'] as const).default('hold').description('Keep the request pipe open until AGY closes the turn (hold) or end it as soon as the frame is written (close)').hidden(),
     sessionMode: z.union(['resume', 'full'] as const).default('full').description('Session mode'),
-    sessionStorePath: z.string().default('').description('Durable sessionId to conversationId map path; empty uses DSH_HOME/agy-provider/sessions.json'),
+    sessionStorePath: z.string().default('').description('Durable sessionId to conversationId map path; empty uses DSH_HOME/agy-cli/sessions.json'),
     minimumAgyVersion: z.string().pattern(/^\d+\.\d+\.\d+$/).default('1.1.15').description('Minimum AGY version').hidden(),
     maxConcurrent: z.natural().min(1).max(64).default(4).description('Max concurrent AGY processes').hidden(),
     maxQueue: z.natural().max(256).default(32).description('Max queue length').hidden(),
@@ -342,7 +342,7 @@ export function createConfigSchema(defaults: {
       idleTimeoutMs: { $description: '单次请求的无输出静默预算（毫秒）；每有一行输出即重新计时' },
       stdinMode: { $description: '请求管道收尾方式：hold=等 AGY 自己结束本轮再关（默认，避免中途无输出被判死）, close=写完即关' },
       sessionMode: { $description: '会话模式：full=每轮完整历史, resume=复用 AGY 会话' },
-      sessionStorePath: { $description: '会话映射（DSH 会话→AGY 对话）的落盘路径；留空用 DSH_HOME/agy-provider/sessions.json，让 resume 模式在宿主重启后仍能续话' },
+      sessionStorePath: { $description: '会话映射（DSH 会话→AGY 对话）的落盘路径；留空用 DSH_HOME/agy-cli/sessions.json，让 resume 模式在宿主重启后仍能续话' },
       minimumAgyVersion: { $description: '最低允许的 AGY 版本' },
       maxConcurrent: { $description: '最大并发 AGY 进程数' },
       maxQueue: { $description: '最大排队长度' },
@@ -381,7 +381,7 @@ export function createConfigSchema(defaults: {
       idleTimeoutMs: { $description: 'Per-request inactivity budget (ms); re-armed on every output line' },
       stdinMode: { $description: 'How the request pipe is retired: hold=wait for AGY to finish the turn (default), close=end right after the frame is written' },
       sessionMode: { $description: 'Session mode: full or resume' },
-      sessionStorePath: { $description: 'Path of the durable DSH session to AGY conversation map; empty uses DSH_HOME/agy-provider/sessions.json so resume keeps working after a host restart' },
+      sessionStorePath: { $description: 'Path of the durable DSH session to AGY conversation map; empty uses DSH_HOME/agy-cli/sessions.json so resume keeps working after a host restart' },
       minimumAgyVersion: { $description: 'Minimum AGY version' },
       maxConcurrent: { $description: 'Max concurrent AGY processes' },
       maxQueue: { $description: 'Max queue length' },

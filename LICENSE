@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 dsh-agy-provider contributors
+Copyright (c) 2026 Darkings and dsh-agy-provider contributors; dsh-agy-cli additions copyright (c) 2026 Gaudi-XIX
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,9 +22,10 @@ SOFTWARE.
 
 ---
 
-Continuation notice
--------------------
-This project continues the dsh-agy-provider plugin originally created by Darkings
-(https://github.com/darkings/dsh-agy-provider, commits up to 2026-08-28) and
-maintained as a continuation by Gaudi-XIX since 2026-10. All original commit
-attribution is preserved in the git history under the same MIT license.
+Upstream attribution
+--------------------
+This project contains code derived from the MIT-licensed plugin
+https://github.com/darkings/dsh-agy-provider (commits up to 2026-08-28).
+Copyright (c) 2026 Darkings and the dsh-agy-provider contributors, under the
+same MIT terms reproduced above. The full commit history is preserved in this
+repository's git log.

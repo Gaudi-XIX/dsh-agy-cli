@@ -73,7 +73,7 @@ npm install dsh-agy-cli@0.10.0
 ## 从 GitHub 安装源码包
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add github:darkings/dsh-agy-cli
+npx @deepseek-ai/dsh plugin --profile web add github:Gaudi-XIX/dsh-agy-cli
 ```
 
 ## 版本与发布状态

@@ -198,7 +198,7 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     // EOF is read as "no next turn" and cancels the turn it is still generating.
     stdinMode: 'hold',
     sessionMode: 'full',
-    // Durable sessionId -> conversationId map; '' means <DSH_HOME>/agy-provider/sessions.json
+    // Durable sessionId -> conversationId map; '' means <DSH_HOME>/agy-cli/sessions.json
     sessionStorePath: '',
     minimumAgyVersion: '1.1.15',
     maxConcurrent: 4,

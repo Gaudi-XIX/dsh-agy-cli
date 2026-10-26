@@ -26,7 +26,7 @@
 - [x] 添加 `.github/workflows/publish.yml`，仅响应匹配 package version 的 `v*.*.*` tag。
 - [x] 发布 workflow 使用 GitHub-hosted Node.js 24、`id-token: write` 和无 token 的 npm publish 命令。
 - [x] 因账号级 2FA 暂不可用，使用本机已配置的 bypass-2FA granular token 直接发布 `dsh-agy-cli@0.2.0`；凭据未写入仓库或 workflow。
-- [ ] 在 npm package settings 配置 Trusted Publisher：`darkings/dsh-agy-cli` + `publish.yml` + `npm publish`（等待账号级 2FA；用于下一个可发布版本）。
+- [ ] 在 npm package settings 配置 Trusted Publisher：`Gaudi-XIX/dsh-agy-cli` + `publish.yml` + `npm publish`（等待账号级 2FA；用于下一个可发布版本）。
 - [ ] 用下一个可发布版本 tag 验证 publish workflow；不要用已经发布的 `v0.2.0` 再次触发 `npm publish`。
 - [x] 用 `npm view dsh-agy-cli@0.2.0`、干净 registry 安装和 DSH Mock smoke 复验产物；`latest=0.2.0`、`version=0.2.0`、`quotaUsed=false`。
 - [x] 确认 private GitHub repo 的 provenance 限制已在发布说明中明确。
@@ -46,7 +46,7 @@
 
 ### 发布前仍需人工/账号条件
 
-- [ ] npm 账号级 2FA 恢复并完成 Trusted Publisher：`darkings/dsh-agy-cli`、`.github/workflows/publish.yml`、npm publish。
+- [ ] npm 账号级 2FA 恢复并完成 Trusted Publisher：`Gaudi-XIX/dsh-agy-cli`、`.github/workflows/publish.yml`、npm publish。
 - [ ] 在独立 release commit 中将 `package.json`/`package-lock.json` bump 到 `0.3.0`，同步 CHANGELOG、README 和迁移说明。
 - [ ] 运行完整 `npm run verify`、pack dry-run 和诊断，确认没有测试会话、规划文件、日志、凭据或本机路径进入 tarball。
 - [ ] 创建并推送精确匹配的 `v0.3.0` tag；只在用户明确授权后触发 publish workflow。
