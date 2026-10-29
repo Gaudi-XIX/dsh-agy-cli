@@ -38,6 +38,13 @@ export const name = 'dsh-agy-cli'
  */
 export const inject = ['llm', 'sessions', 'sandboxPolicy', 'permissionPresets', 'approval']
 
+/**
+ * How long the MCP bridge waits for `webServer` and `tools` to mount before it
+ * gives up and reports the carrier as unavailable. Host startup binds the HTTP
+ * carrier within a few seconds; the ceiling only bounds a broken composition.
+ */
+const BRIDGE_SERVICE_WAIT_MS = 20_000
+
 /** Programmatic library default: enabled=false, toolPolicy=reject. */
 export const Config = ConfigSchema
 export { AgyAdapter, MockAdapter }
@@ -305,12 +312,37 @@ export function apply(ctx: Context, config: ConfigType): void {
   const wantsBridge = activeConfig.mcpBridge !== false
     && activeConfig.toolPolicy === 'dsh-owned'
   if (wantsBridge) {
+    /**
+     * Both carrier services mount after this plugin under the shipped desktop
+     * composition, so a `ctx.get()` sampled while the plugin applies can read
+     * `undefined` and latch "host webServer service is unavailable" for the
+     * whole host lifetime. Wait for them instead: a late bridge retries what a
+     * latch can never undo. `sessionController` already resolves late for the
+     * same reason; only the two carriers were sampled eagerly.
+     */
+    const waitForService = async <T>(
+      lookup: () => T | undefined,
+      timeoutMs: number,
+    ): Promise<T | undefined> => {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        const value = lookup()
+        if (value !== undefined) return value
+        if (Date.now() >= deadline) return undefined
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+    }
     ctx.effect(() => {
       let cancelled = false
       void (async () => {
+        const [webServer, tools] = await Promise.all([
+          waitForService(() => ctx.get('webServer') as DshWebServerLike | undefined, BRIDGE_SERVICE_WAIT_MS),
+          waitForService(() => ctx.get('tools') as DshToolRuntimeLike | undefined, BRIDGE_SERVICE_WAIT_MS),
+        ])
+        if (cancelled) return
         const bridge = await startDshMcpBridge({
-          webServer: ctx.get('webServer') as DshWebServerLike,
-          tools: ctx.get('tools') as DshToolRuntimeLike,
+          webServer: webServer as DshWebServerLike,
+          tools: tools as DshToolRuntimeLike,
           // Late-bound on purpose: this plugin loads before the Session
           // controller bundle finishes mounting, and a value captured here
           // stays undefined for the life of the host.

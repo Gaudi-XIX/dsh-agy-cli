@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.2] - 2026-10-29
+
+### Fixed
+
+- **工具协议 Schema 兼容性**：工具入参 schema 包含 `$schema`（如 Context7 MCP 服务的 draft 2020-12）、`$id`、`$comment`、`deprecated`、`examples`、`readOnly`、`writeOnly` 等无校验语义的元数据关键字时，此前会被 `SUPPORTED_SCHEMA_KEYS` 严格门禁判定为 `TOOL_PROTOCOL_SCHEMA_INVALID` 导致工具请求失败；现将元数据关键字安全过滤，既保持校验层 fail-closed 门禁，又兼容现代 MCP 工具描述。
+- **宿主启动服务时序竞态**：桌面端冷启动时 `webServer` 与 `tools` 服务晚于本插件挂载，此前在 `apply()` 中立即读取导致抓取到 `undefined` 并永久锁定“服务不可用”；现引入 `waitForService` 异步等待挂载（超时 20s），与 `sessionController` 晚绑定机制对齐，彻底解决 DSH 启动后 MCP 工具桥不可用的问题。
+- **诊断脚本参数调用**：修复 `scripts/diagnose.mjs` 中对 `configInputFromEnvironment()` 预先调用 `Config()` 导致 `runDoctor` 二次校验抛出 `$.enabled expected boolean but got [object Object]` 的报错。
+
 ## [0.12.1] - 2026-10-26
 
 ### Fixed

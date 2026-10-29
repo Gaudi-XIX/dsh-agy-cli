@@ -148,6 +148,24 @@ const SUPPORTED_SCHEMA_KEYS = new Set([
   'uniqueItems',
 ])
 
+/**
+ * JSON Schema keywords that carry no validation semantics. A dialect
+ * declaration such as `$schema` is a compatibility detail of whoever published
+ * the schema (the Context7 MCP server emits draft 2020-12 on every tool), so
+ * dropping these keeps the fail-closed policy for real keywords — anything the
+ * validator would act on still has to be supported — while a well-formed tool
+ * catalogue no longer fails the whole request over metadata.
+ */
+const IGNORED_METADATA_KEYS = new Set([
+  '$comment',
+  '$id',
+  '$schema',
+  'deprecated',
+  'examples',
+  'readOnly',
+  'writeOnly',
+])
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -251,6 +269,7 @@ function sanitizeSchemaNode(value: unknown, depth: number, path: string): JsonRe
     if (!isSafeObjectKey(key)) {
       throw new ToolProtocolError(TOOL_PROTOCOL_SCHEMA_INVALID_CODE, 'unsafe object key')
     }
+    if (IGNORED_METADATA_KEYS.has(key)) continue
     if (!SUPPORTED_SCHEMA_KEYS.has(key)) {
       throw new ToolProtocolError(TOOL_PROTOCOL_SCHEMA_INVALID_CODE, `unsupported keyword ${key}`)
     }

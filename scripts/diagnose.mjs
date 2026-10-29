@@ -1,6 +1,5 @@
 import { redactText } from '../lib/agy/redact.js'
 import { formatDoctorHuman, runDoctor } from '../lib/doctor.js'
-import { Config } from '../lib/provider/config.js'
 
 const argv = process.argv.slice(2)
 const jsonOutput = argv.includes('--json')
@@ -64,7 +63,7 @@ function configFailure(error) {
 let result
 try {
   result = await runDoctor({
-    config: Config(configInputFromEnvironment()),
+    config: configInputFromEnvironment(),
     profile,
     dshHome,
     dshBin,

@@ -346,6 +346,36 @@ test('structured tool protocol rejects malformed JSON and fragmented responses o
   )
 })
 
+test('structured tool protocol strips non-validating schema metadata keys', () => {
+  const protocol = createStructuredToolProtocol([{
+    name: 'ctx7_tool',
+    description: 'tool with metadata keywords',
+    parameters: {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $id: 'https://example.com/tool.json',
+      $comment: 'metadata comment',
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          deprecated: false,
+          examples: ['test query'],
+          readOnly: false,
+          writeOnly: false,
+        },
+      },
+      required: ['query'],
+    },
+  }])
+  const entry = protocol.schema.oneOf.find(s => s.properties?.name?.enum?.[0] === 'ctx7_tool')
+  assert.ok(entry)
+  assert.equal(entry.properties.arguments.$schema, undefined)
+  assert.equal(entry.properties.arguments.$id, undefined)
+  assert.equal(entry.properties.arguments.$comment, undefined)
+  assert.equal(entry.properties.arguments.properties.query.deprecated, undefined)
+  assert.equal(entry.properties.arguments.properties.query.examples, undefined)
+})
+
 test('structured tool protocol rejects unsupported schema features and duplicate names', () => {
   assert.throws(
     () => createStructuredToolProtocol([{
