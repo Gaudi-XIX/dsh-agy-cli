@@ -246,3 +246,30 @@ test('AgyAdapter keeps process, parser, status, and empty-response codes stable'
     )
   }
 })
+
+test('AgyAdapter delivers partial answer when timeout occurs after streaming text', async () => {
+  const adapter = new AgyAdapter({}, {
+    runAgyProcess: async requestValue => {
+      requestValue.onStdoutLine?.(JSON.stringify({
+        event: 'step_update',
+        step_update: { step_type: 'agent_response', text_delta: 'partial text before timeout' },
+      }))
+      return {
+        exitCode: null,
+        signal: null,
+        termination: 'timeout',
+        stdoutLines: [],
+        stderr: '',
+        durationMs: 1000,
+      }
+    },
+  })
+  const chunks = []
+  for await (const chunk of adapter.stream(request())) chunks.push(chunk)
+  const text = chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join('')
+  assert.equal(text, 'partial text before timeout')
+  const reasoning = chunks.filter(chunk => chunk.type === 'reasoning-delta').map(chunk => chunk.text).join('')
+  assert.match(reasoning, /AGY request exceeded the configured wall-clock timeout/)
+  assert.equal(chunks.at(-1)?.type, 'finish')
+  assert.equal(chunks.at(-1)?.reason.kind, 'stop')
+})

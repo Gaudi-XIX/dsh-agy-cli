@@ -600,3 +600,50 @@ test('the bridge reports an error result instead of throwing when a tool fails',
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('the bridge falls back to agentsLookup when sessionController rejects with subagent routing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agy-mcp-subagent-'))
+  try {
+    const webServer = fakeWebServer()
+    const childAgent = { id: 'agent-child-subagent' }
+    const bridge = await startDshMcpBridge({
+      webServer,
+      tools: {
+        schemas: scope => scope === childAgent
+          ? [
+            { name: 'click', description: 'c', parameters: { type: 'object' } },
+            { name: 'ops_bash', description: 'b', parameters: { type: 'object' } },
+          ]
+          : [{ name: 'click', description: 'c', parameters: { type: 'object' } }],
+        async execute() {
+          return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
+        },
+      },
+      sessionController: {
+        async resolveAgent() {
+          const err = new Error('use subagent delivery for this child session')
+          err.code = 'session/agent-busy'
+          throw err
+        },
+      },
+      agentsLookup: () => ({
+        get(id) {
+          if (id === 'session-subagent-1') return childAgent
+          return undefined
+        },
+      }),
+      serverVersion: '1.0.0',
+      agyConfigRoot: root,
+    })
+    bridge.setSession('session-subagent-1')
+    const path = new URL(bridge.url).pathname
+    const { body } = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0', id: 99, method: 'tools/list', params: {},
+    }))
+    const names = JSON.parse(body).result.tools.map(tool => tool.name)
+    assert.ok(names.includes('ops_bash'), 'the subagent child session resolves ops_bash via agentsLookup')
+    await bridge.dispose()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

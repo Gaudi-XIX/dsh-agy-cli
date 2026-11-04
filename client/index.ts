@@ -924,7 +924,7 @@ export function apply(ctx: ClientContext): void {
 			observer.observe(row ?? (parent ?? root), { childList: true });
 			return () => observer.disconnect();
 		}, []);
-		const expanded = manualOpen ?? hostOpen ?? true;
+		const expanded = manualOpen ?? hostOpen ?? false;
 
 		const showToast = (text: string, type: ToastNotice['type'] = 'info') => {
 			setToast({ text, type, id: Date.now() });
@@ -1347,9 +1347,9 @@ export function apply(ctx: ClientContext): void {
 			h('style', null, GLOBAL_CSS),
 			h('div', { style: S.headerCard },
 				h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', minWidth: 0 } },
-					h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' }, title: accountAlias }, accountAlias),
+					expanded ? h('span', { style: { fontWeight: 700, fontSize: '13.5px', color: 'var(--agy-text-primary)' }, title: accountAlias }, accountAlias) : null,
 					h('span', { style: isAuthed ? S.badgeReady : S.badgeUnready }, isAuthed ? t('status.ready') : t('status.needsAuth')),
-					tokenLine,
+					expanded ? tokenLine : null,
 				),
 				h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 } },
 					h('button', {
@@ -1360,13 +1360,13 @@ export function apply(ctx: ClientContext): void {
 						'aria-expanded': expanded ? 'true' : 'false',
 						onClick: () => setManualOpen(!expanded),
 					}, expanded ? '▾' : '▸'),
-					h('button', {
+					expanded ? h('button', {
 						type: 'button',
 						className: 'agy-btn',
 						style: { ...S.btn, gap: '4px', flexShrink: 0 },
 						disabled: isBusy,
 						onClick: () => void refreshQuota(),
-					}, loadingAction === 'refresh:all' ? [renderSpinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`]),
+					}, loadingAction === 'refresh:all' ? [renderSpinner(), t('header.refreshing')] : [uiIcon('refresh', 12, 'var(--agy-text-btn)'), ` ${t('header.refreshQuota')}`]) : null,
 				),
 			),
 			renderToastBanner(),

@@ -347,6 +347,7 @@ export function apply(ctx: Context, config: ConfigType): void {
           // controller bundle finishes mounting, and a value captured here
           // stays undefined for the life of the host.
           sessionControllerLookup: () => ctx.get('sessionController') as DshSessionControllerLike | undefined,
+          agentsLookup: () => ctx.get('agents') as { get(sessionId: unknown): unknown } | undefined,
           ...((activeConfig.mcpToolAllowlist ?? []).length > 0 ? { toolAllowlist: activeConfig.mcpToolAllowlist } : {}),
           serverVersion: '0.0.0',
           logger: message => {

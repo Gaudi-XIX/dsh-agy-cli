@@ -1210,8 +1210,14 @@ export class AgyAdapter extends LlmAdapter {
     this.resolveToolBridge = dependencies.resolveToolBridge
     this.mcpBridgeEnabled = config.mcpBridge !== false
     this.agyPath = config.agyPath?.trim() === '' ? undefined : config.agyPath?.trim()
-    this.timeoutMs = config.timeoutMs ?? 900_000
-    this.idleTimeoutMs = config.idleTimeoutMs ?? 300_000
+    const envTimeout = process.env.DSH_AGY_TIMEOUT_MS ? Number(process.env.DSH_AGY_TIMEOUT_MS) : undefined
+    this.timeoutMs = envTimeout !== undefined && Number.isFinite(envTimeout) && envTimeout > 0
+      ? envTimeout
+      : (config.timeoutMs ?? 600_000)
+    const envIdleTimeout = process.env.DSH_AGY_IDLE_TIMEOUT_MS ? Number(process.env.DSH_AGY_IDLE_TIMEOUT_MS) : undefined
+    this.idleTimeoutMs = envIdleTimeout !== undefined && Number.isFinite(envIdleTimeout) && envIdleTimeout > 0
+      ? envIdleTimeout
+      : (config.idleTimeoutMs ?? 60_000)
     this.stdinMode = config.stdinMode ?? 'hold'
     this.run = dependencies.runAgyProcess ?? runAgyProcess
     this.sessionMode = config.sessionMode === 'resume' ? 'resume' : 'full'
@@ -1651,6 +1657,14 @@ export class AgyAdapter extends LlmAdapter {
         }
       }
       await persistentRequest
+    } catch (error) {
+      if (modelText.trim().length > 0) {
+        telemetry.partialAnswerDelivered = true
+        lastResultError = error instanceof Error ? error.message : String(error)
+        finalStatus = "ERROR"
+      } else {
+        throw error
+      }
     } finally {
       queue.end()
       persistentRequest?.catch(() => undefined)
@@ -1720,9 +1734,10 @@ export class AgyAdapter extends LlmAdapter {
     // text already streamed, keep that text and park AGY's reason as a
     // reasoning annotation; otherwise fail the turn exactly like one-shot —
     // delivering the placeholder as the answer is worse than either.
-    const streamedPartialAnswer = finalStatus !== undefined
-      && !isSuccessStatus(finalStatus)
-      && modelText.trim().length > 0
+    const streamedPartialAnswer = (
+      (finalStatus !== undefined && !isSuccessStatus(finalStatus))
+      || lastResultError !== undefined
+    ) && modelText.trim().length > 0
     if (finalStatus !== undefined && !isSuccessStatus(finalStatus) && !streamedPartialAnswer) {
       const detail = [finalStatus, finalErrorDetail].filter(value => value !== undefined).join(' ')
       const code = classifyAgyFailure(detail, 'AGY_STATUS')
@@ -2436,7 +2451,10 @@ export class AgyAdapter extends LlmAdapter {
       : result === undefined
         ? new LlmError('AGY process did not return a result', 'AGY_PROCESS')
         : processFailure(result)
-    if (failure !== undefined) throw failure
+    const isFailureOrCutShort = failure !== undefined || (resultSeen && !isSuccessStatus(finalStatus))
+    const streamedPartialAnswer = isFailureOrCutShort && modelText.trim().length > 0
+    if (streamedPartialAnswer) telemetry.partialAnswerDelivered = true
+    if (failure !== undefined && !streamedPartialAnswer) throw failure
     // AGY reports `status: ERROR` on a turn it cut short, and it can carry a
     // placeholder under `response` ("(no content)") instead of the answer. When
     // the user already watched real text stream in, keep that text, park AGY's
@@ -2447,8 +2465,6 @@ export class AgyAdapter extends LlmAdapter {
     // 1508 and the result branch at src/host/mapper.ts:400-428); the difference
     // is that a placeholder response is not deliverable content, so the streamed
     // text decides whether anything survives.
-    const streamedPartialAnswer = resultSeen && !isSuccessStatus(finalStatus) && modelText.trim().length > 0
-    if (streamedPartialAnswer) telemetry.partialAnswerDelivered = true
     if (resultSeen && !isSuccessStatus(finalStatus) && !streamedPartialAnswer) {
       const detail = [finalStatus, finalErrorDetail].filter(value => value !== undefined).join(' ')
       const code = classifyAgyFailure(detail, 'AGY_STATUS')
@@ -2546,7 +2562,7 @@ export class AgyAdapter extends LlmAdapter {
     // AGY's own reason for a cut-short turn belongs in the same reasoning block
     // as the bridged tool steps, so the transcript gets one annotation, not two.
     if (streamedPartialAnswer) {
-      const reason = (lastResultError ?? finalErrorDetail ?? 'AGY reported status ERROR').trim()
+      const reason = (lastResultError ?? finalErrorDetail ?? failure?.message ?? 'AGY reported status ERROR').trim()
       const line = `[agy finished with error] ${reason}\n\n`
       if (!mcpStepsOpen) {
         mcpStepsOpen = true

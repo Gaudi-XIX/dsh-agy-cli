@@ -166,3 +166,20 @@ test('the cache lives outside the per-turn temp directory', () => {
   assert.equal(IMAGE_HISTORY_CACHE_DIR.includes(`${sep}agy-cli${sep}`), true)
   assert.equal(existsSync(join(IMAGE_HISTORY_CACHE_DIR, 'unrelated-sentinel')), false)
 })
+
+test('prepareAgyPrompts falls back to text placeholders when bridge is disabled', async () => {
+  const history = [imageRef(50)]
+  const current = [imageRef(51)]
+  const store = countingStore()
+
+  const prepared = await prepareAgyPrompts(
+    { messages: messagesWith(history, current), system: 'text fallback' },
+    { enabled: false, agentCanViewFile: false, attachmentStore: store },
+  )
+
+  assert.equal(prepared.bridgeActive, false)
+  assert.equal(prepared.imageDirectory, undefined)
+  assert.equal(prepared.imagePaths.length, 0)
+  assert.equal(prepared.fullPrompt.includes('[IMAGE_ATTACHMENT'), true)
+  assert.equal(store.calls.length, 0, 'no attachment is read from disk in text mode')
+})

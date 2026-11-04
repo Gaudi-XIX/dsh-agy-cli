@@ -69,6 +69,8 @@ export interface DshMcpBridgeOptions {
    * agent plane). Resolving per turn removes the load-order dependency.
    */
   readonly sessionControllerLookup?: (() => DshSessionControllerLike | undefined) | undefined
+  /** Direct Cordis agent registry lookup, resolving child/subagent sessions. */
+  readonly agentsLookup?: (() => { get(sessionId: unknown): unknown } | undefined) | undefined
   /** Optional allowlist of DSH tool names exposed to AGY. */
   readonly toolAllowlist?: readonly string[] | undefined
   readonly serverVersion: string
@@ -262,14 +264,28 @@ async function agentOf(
     return undefined
   }
   if (sessionHandle.length === 0) return undefined
-  const resolved = await controller.resolveAgent(sessionHandle).catch((error: unknown) => {
-    const rejection = subagentRejectionIn(error)
-    options.logger?.(rejection === undefined
-      ? `dsh mcp bridge: resolveAgent("${sessionHandle}") threw ${String(error)}`
-      : `dsh mcp bridge: session "${sessionHandle}" is owned by subagent routing (${rejection}); the host refuses an agent handle for a child session by design, so this turn sees the global tool view`)
-    return undefined
-  })
-  const agent = agentIn(resolved)
+  let resolved: unknown
+  if (controller !== undefined) {
+    resolved = await controller.resolveAgent(sessionHandle).catch((error: unknown) => {
+      const rejection = subagentRejectionIn(error)
+      options.logger?.(rejection === undefined
+        ? `dsh mcp bridge: resolveAgent("${sessionHandle}") threw ${String(error)}`
+        : `dsh mcp bridge: session "${sessionHandle}" is owned by subagent routing (${rejection}); attempting direct agents lookup`)
+      return undefined
+    })
+  }
+  let agent = agentIn(resolved)
+  if (agent === undefined && options.agentsLookup !== undefined) {
+    try {
+      const direct = options.agentsLookup()?.get(sessionHandle)
+      if (direct !== undefined) {
+        agent = direct
+        options.logger?.(`dsh mcp bridge: resolved agent for session "${sessionHandle}" via direct agents registry`)
+      }
+    } catch (err) {
+      options.logger?.(`dsh mcp bridge: direct agents lookup threw ${String(err)}`)
+    }
+  }
   if (agent === undefined) {
     options.logger?.(`dsh mcp bridge: no agent resolved for session "${sessionHandle}"`)
   }

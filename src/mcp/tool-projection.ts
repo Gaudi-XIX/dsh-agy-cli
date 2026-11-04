@@ -152,7 +152,7 @@ export function projectDshTools(
   options: ToolProjectionOptions = {},
 ): ToolProjectionResult {
   const excluded: string[] = []
-  const maxTools = options.maxTools ?? TOOL_PROTOCOL_LIMITS.maxTools
+  const maxTools = options.maxTools ?? Number.POSITIVE_INFINITY
   if (registry === undefined || typeof registry.schemas !== 'function') {
     return { tools: [], excluded }
   }
