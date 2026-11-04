@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.3] - 2026-11-04
+
+### Fixed
+
+- **子会话工具桥接**：MCP 桥此前只经 `sessionController.resolveAgent()` 解析会话，宿主对子代理会话会拒绝返回 agent 句柄；现新增 `agentsLookup`，解析失败后改查 Cordis agent 注册表，子会话能拿到自有工具视图，不再退化成全局工具视图。
+- **工具数量上限**：`projectDshTools` 的 `maxTools` 默认值由 `TOOL_PROTOCOL_LIMITS.maxTools` 改为 `Number.POSITIVE_INFINITY`，默认不再截断工具数量，仍可用显式 `options.maxTools` 覆盖。
+- **超时与部分答案**：`AgyAdapter` 默认 `timeoutMs` 由 900000 缩到 600000、`idleTimeoutMs` 由 300000 缩到 60000，并支持 `DSH_AGY_TIMEOUT_MS` / `DSH_AGY_IDLE_TIMEOUT_MS` 环境变量覆盖；超时或报错但已流出文本时，保留这段部分答案并标记 `telemetry.partialAnswerDelivered`、`finalStatus` 记为 `ERROR`、`streamedPartialAnswer` 补上 `lastResultError`，reason 用 `failure?.message` 兜底。
+- **附件与工具变更序列化**：`serialize` 此前遇到 image / file / tool-addition / tool-removal 内容块会抛 `AgyPromptError UNSUPPORTED_CONTENT`，现改为输出结构化文本占位 `[IMAGE_ATTACHMENT ...]` / `[FILE_ATTACHMENT ...]` / `[DSH TOOL ADDITION: ...]` / `[DSH TOOL REMOVAL: ...]`；未知类型仍拒绝。
+
+### Changed
+
+- **设置面板默认收起**：`expanded` 默认值由 `true` 改为 `false`，收起时隐藏账号别名、令牌行与「刷新额度」按钮。
+
 ## [0.12.2] - 2026-10-29
 
 ### Fixed

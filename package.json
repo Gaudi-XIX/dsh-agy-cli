@@ -1,6 +1,6 @@
 {
   "name": "dsh-agy-cli",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "private": false,
   "publishConfig": {
     "access": "public"
