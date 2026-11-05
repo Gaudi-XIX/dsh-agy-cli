@@ -210,6 +210,18 @@ function clampSectionsToBytes(
     return start
   })()
 
+  // UTF-8 bytes of the whole window `[startIndex, newestIndex]` once the
+  // assembly below joins it — two-byte separators between consecutive sections,
+  // none before the newest one. This is the same accounting as the backward walk
+  // above, so `windowBytes(firstKept) <= budget` holds by construction.
+  const windowBytes = (startIndex: number): number => {
+    let total = byteLength(sections[newestIndex]!.text)
+    for (let index = startIndex; index < newestIndex; index += 1) {
+      total += byteLength(sections[index]!.text) + 2
+    }
+    return total
+  }
+
   // Snap the window start down to a power-of-two stride.
   //
   // Without this the start drifts outward by exactly one message per turn as the
@@ -224,12 +236,22 @@ function clampSectionsToBytes(
   // The boundary is quantized *before* packing, not after: adjusting an
   // already-packed window only moves its first kept message, which is the byte
   // the cache comparison fails on.
+  //
+  // The snap back is a cache optimisation on the *start*, so it may never cost
+  // the end of the window. `budget` was sized for the window that begins at
+  // `packedStart`; a start further back makes the window larger, and the forward
+  // pack below would then spend the budget on that older head and stop before it
+  // reached the newest sections — dropping the newest messages that still fit
+  // while the trailing section is appended anyway, i.e. shipping stale history
+  // under a fresh timestamp. Keep the wider window only while it fits whole.
   const packedStart = firstKept
   const quantizedStart = ((): number => {
     if (packedStart <= 0) return 0
     let stride = 1
     while (stride * 2 <= packedStart) stride *= 2
-    return packedStart - (packedStart % stride)
+    const snapped = packedStart - (packedStart % stride)
+    if (snapped === packedStart) return snapped
+    return windowBytes(snapped) <= budget ? snapped : packedStart
   })()
 
   // Pack forward from the quantized boundary so the retained window always

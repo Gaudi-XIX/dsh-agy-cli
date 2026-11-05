@@ -142,6 +142,85 @@ test('prompt budget keeps the latest tool result when older turns are removed', 
   assert.match(bounded.prompt, /LATEST_PROTOCOL_MUST_SURVIVE/)
 })
 
+// A real DSH turn is serialized as four sections: a plugin relay message, the
+// user's own request, the runtime context, and the time-context section that
+// closes the turn. So the turn's request is NEVER the last section of the
+// prompt — the trailer is — and a budget pass whose only protected section is
+// `sections[length - 1]` protects a timestamp over the question it belongs to.
+// The bodies are incompressible filler so each turn has a predictable byte cost.
+function dshTurnPrompt({ turns, relayBytes, requestBytes, runtimeBytes, timeBytes }) {
+  const sections = []
+  for (let index = 0; index < turns; index += 1) {
+    sections.push(`=== USER ===\n[relevant memories for turn ${index}]\n${'m'.repeat(relayBytes)}`)
+    sections.push(`=== USER ===\nREQUEST_SENTINEL_${index}\n${'r'.repeat(requestBytes)}`)
+    sections.push(`=== USER ===\nruntime context for turn ${index}\n${'c'.repeat(runtimeBytes)}`)
+    sections.push(`=== USER ===\nTime sampled while preparing turn ${index}, step 1\n${'t'.repeat(timeBytes)}`)
+  }
+  return sections.join('\n\n')
+}
+
+function retainedSentinelIndexes(prompt) {
+  return [...prompt.matchAll(/REQUEST_SENTINEL_(\d+)(?!\d)/g)].map(match => Number(match[1]))
+}
+
+test('prompt budget keeps the current turn request when the clip window start snaps back', () => {
+  const turns = 20
+  const prompt = dshTurnPrompt({
+    turns,
+    relayBytes: 3_000,
+    requestBytes: 400,
+    runtimeBytes: 7_000,
+    timeBytes: 300,
+  })
+  const bounded = boundAgyPrompt(prompt, {
+    maxFrameBytes: 256 * 1024,
+    maxPromptBytes: 180 * 1024,
+  })
+
+  assert.equal(bounded.historyCompacted, true)
+  assert.ok(bounded.promptBytes <= 180 * 1024)
+  // The question being asked about is the newest turn's, and it must be there
+  // rather than an older turn's request standing in for it.
+  assert.match(bounded.prompt, new RegExp(`REQUEST_SENTINEL_${turns - 1}(?!\\d)`))
+  // The retained turns are one contiguous run ending at the newest turn: a gap
+  // is a run of messages silently cut out of the middle of the conversation.
+  const retained = retainedSentinelIndexes(bounded.prompt)
+  assert.equal(retained[retained.length - 1], turns - 1)
+  assert.deepEqual(retained, Array.from({ length: retained.length }, (_, index) => retained[0] + index))
+  // The prompt is the clamped shape: the omission marker heads it and the
+  // newest turn's own trailer closes it, so the turn being asked about is the
+  // one whose timestamp the model reads.
+  assert.match(bounded.prompt, /^=== USER ===\n\[DSH HISTORY COMPACTED: this message was omitted/)
+  assert.ok(
+    bounded.prompt.lastIndexOf(`Time sampled while preparing turn ${turns - 1}, step 1`)
+      > bounded.prompt.lastIndexOf('REQUEST_SENTINEL_'),
+  )
+})
+
+test('prompt budget keeps the whole newest turn group under a second history shape', () => {
+  const turns = 80
+  const prompt = dshTurnPrompt({
+    turns,
+    relayBytes: 500,
+    requestBytes: 300,
+    runtimeBytes: 2_000,
+    timeBytes: 300,
+  })
+  const bounded = boundAgyPrompt(prompt, {
+    maxFrameBytes: 256 * 1024,
+    maxPromptBytes: 180 * 1024,
+  })
+
+  assert.equal(bounded.historyCompacted, true)
+  assert.match(bounded.prompt, new RegExp(`REQUEST_SENTINEL_${turns - 1}(?!\\d)`))
+  // The newest turn's own trailer must not be the only surviving piece of it.
+  assert.match(bounded.prompt, new RegExp(`runtime context for turn ${turns - 1}\\b`))
+  assert.match(bounded.prompt, new RegExp(`Time sampled while preparing turn ${turns - 1}, step 1\\b`))
+  const retained = retainedSentinelIndexes(bounded.prompt)
+  assert.equal(retained[retained.length - 1], turns - 1)
+  assert.deepEqual(retained, Array.from({ length: retained.length }, (_, index) => retained[0] + index))
+})
+
 test('prompt budget reports a stable error when non-tool prompt content cannot fit', () => {
   assert.throws(
     () => boundAgyPrompt('x'.repeat(5_000), { maxFrameBytes: 1_024 }),
