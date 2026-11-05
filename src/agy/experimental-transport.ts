@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { buildWindowsNoConsoleLaunch } from './windows-launcher.js'
 import { randomUUID } from 'node:crypto'
 
 export type PersistentTransportErrorCode =
@@ -339,8 +340,9 @@ class PersistentAgyWorker {
       await this.stop('reset')
       throw new PersistentTransportError('Persistent AGY request aborted before write', 'ABORTED')
     }
-    const timeoutMs = input.timeoutMs ?? this.options.defaultRequestTimeoutMs
-    validateInteger('timeoutMs', timeoutMs, 1, 3_600_000)
+    const timeoutMs = input.timeoutMs !== undefined
+      ? validateInteger('timeoutMs', input.timeoutMs, 1, 3_600_000)
+      : undefined
     const maxOutputBytes = Math.min(
       input.maxOutputBytes ?? this.options.maxOutputBytes,
       this.options.maxOutputBytes,
@@ -370,9 +372,11 @@ class PersistentAgyWorker {
         new PersistentTransportError('Persistent AGY request aborted', 'ABORTED'),
       )
       input.signal?.addEventListener('abort', active.abortListener, { once: true })
-      active.timer = setTimeout(() => this.failActiveAndReset(
-        new PersistentTransportError('Persistent AGY request exceeded its timeout', 'TIMEOUT'),
-      ), timeoutMs)
+      if (timeoutMs !== undefined) {
+        active.timer = setTimeout(() => this.failActiveAndReset(
+          new PersistentTransportError('Persistent AGY request exceeded its timeout', 'TIMEOUT'),
+        ), timeoutMs)
+      }
       void this.sendRequest(active, input.payload)
     })
   }
@@ -435,7 +439,11 @@ class PersistentAgyWorker {
       this.readyReject = reject
     })
     try {
-      const child = spawn(this.options.executable, [...this.options.args], {
+      const args = [...this.options.args]
+      const launch = process.platform === 'win32'
+        ? buildWindowsNoConsoleLaunch(this.options.executable, args)
+        : { executable: this.options.executable, args }
+      const child = spawn(launch.executable, [...launch.args], {
         cwd: this.options.cwd,
         env: {
           ...process.env,

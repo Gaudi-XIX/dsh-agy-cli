@@ -223,9 +223,11 @@ test('persistent dispatch streams text deltas before the turn resolves', async (
   assert.equal(finish?.reason.kind, 'stop', 'MCP-bridge turns finish as an ordinary stop')
   assert.equal(typeof input.text, 'string')
   assert.ok(input.text.length > 0, 'the serialized prompt is handed to the worker')
-  assert.equal(typeof input.timeoutMs, 'number')
+  assert.ok(input.timeoutMs === undefined || typeof input.timeoutMs === 'number')
   assert.equal(typeof input.idleTimeoutMs, 'number')
-  assert.ok(input.idleTimeoutMs <= input.timeoutMs, 'idle budget must be reachable under the wall clock')
+  if (input.timeoutMs !== undefined) {
+    assert.ok(input.idleTimeoutMs <= input.timeoutMs, 'idle budget must be reachable under the wall clock if present')
+  }
   assert.equal(
     [...deltas, ...rest.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text)].join(''),
     'first slice. second slice.',

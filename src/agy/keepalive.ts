@@ -492,6 +492,7 @@ export async function startAgyKeepaliveRun(input: KeepaliveRunInput): Promise<Ke
       executable: input.executable,
       args: buildKeepaliveArgs(input.model),
       stdinMode: 'close',
+      windowsNoConsole: true,
       ...(home === undefined ? {} : { cwd: home }),
       timeoutMs: input.timeoutMs ?? 45_000,
     })

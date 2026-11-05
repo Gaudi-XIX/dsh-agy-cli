@@ -446,10 +446,12 @@ class PersistentAgyWorker {
       await this.stop('reset')
       throw new PersistentTransportError('Persistent AGY request aborted before write', 'ABORTED')
     }
-    const timeoutMs = input.timeoutMs ?? this.options.defaultRequestTimeoutMs
-    validateInteger('timeoutMs', timeoutMs, 1, 3_600_000)
-    const idleTimeoutMs = input.idleTimeoutMs ?? timeoutMs
-    validateInteger('idleTimeoutMs', idleTimeoutMs, 1, 3_600_000)
+    const timeoutMs = input.timeoutMs !== undefined
+      ? validateInteger('timeoutMs', input.timeoutMs, 1, 3_600_000)
+      : undefined
+    const idleTimeoutMs = input.idleTimeoutMs !== undefined
+      ? validateInteger('idleTimeoutMs', input.idleTimeoutMs, 1, 3_600_000)
+      : this.options.defaultRequestTimeoutMs
     const maxOutputBytes = Math.min(
       input.maxOutputBytes ?? this.options.maxOutputBytes,
       this.options.maxOutputBytes,
@@ -481,12 +483,14 @@ class PersistentAgyWorker {
         new PersistentTransportError('Persistent AGY request aborted', 'ABORTED'),
       )
       input.signal?.addEventListener('abort', active.abortListener, { once: true })
-      // Two independent clocks: the wall clock is a hard ceiling, the idle clock
-      // is re-armed by every frame so a long thinking or tool pause is not a kill.
-      const wallClock = setTimeout(() => this.failActiveAndReset(
-        new PersistentTransportError('Persistent AGY request exceeded its wall-clock timeout', 'TIMEOUT'),
-      ), timeoutMs)
-      active.timer = wallClock
+      // Idle watchdog is re-armed by every frame so a long thinking or tool pause is not a kill.
+      // Wall clock is an optional ceiling only armed when an explicit timeoutMs is requested.
+      if (timeoutMs !== undefined) {
+        const wallClock = setTimeout(() => this.failActiveAndReset(
+          new PersistentTransportError('Persistent AGY request exceeded its wall-clock timeout', 'TIMEOUT'),
+        ), timeoutMs)
+        active.timer = wallClock
+      }
       this.touchActive(active)
       void this.sendRequest(active, input.text)
     })

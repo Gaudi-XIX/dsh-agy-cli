@@ -8,7 +8,9 @@ internal static class Program
     private const uint CreateSuspended = 0x00000004;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint CreateNoWindow = 0x08000000;
+    private const uint StartfUseShowWindow = 0x00000001;
     private const uint StartfUseStdHandles = 0x00000100;
+    private const ushort SwHide = 0;
     private const uint JobObjectExtendedLimitInformationClass = 9;
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const uint Infinite = 0xFFFFFFFF;
@@ -59,7 +61,8 @@ internal static class Program
         var startup = new StartupInfo
         {
             cb = Marshal.SizeOf(typeof(StartupInfo)),
-            dwFlags = StartfUseStdHandles,
+            dwFlags = StartfUseStdHandles | StartfUseShowWindow,
+            wShowWindow = SwHide,
             hStdInput = GetStdHandle(StdInputHandle),
             hStdOutput = GetStdHandle(StdOutputHandle),
             hStdError = GetStdHandle(StdErrorHandle),

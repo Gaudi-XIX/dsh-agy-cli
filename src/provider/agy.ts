@@ -1158,7 +1158,7 @@ export class AgyAdapter extends LlmAdapter {
   private readonly toolPolicy: ToolPolicy
   private readonly dshContext: DshContextLookup | undefined
   private readonly agyPath: string | undefined
-  private readonly timeoutMs: number
+  private readonly timeoutMs: number | undefined
   private readonly idleTimeoutMs: number
   private readonly stdinMode: AgyStdinMode
   private readonly run: AgyProcessRunner
@@ -1213,7 +1213,7 @@ export class AgyAdapter extends LlmAdapter {
     const envTimeout = process.env.DSH_AGY_TIMEOUT_MS ? Number(process.env.DSH_AGY_TIMEOUT_MS) : undefined
     this.timeoutMs = envTimeout !== undefined && Number.isFinite(envTimeout) && envTimeout > 0
       ? envTimeout
-      : (config.timeoutMs ?? 600_000)
+      : undefined
     const envIdleTimeout = process.env.DSH_AGY_IDLE_TIMEOUT_MS ? Number(process.env.DSH_AGY_IDLE_TIMEOUT_MS) : undefined
     this.idleTimeoutMs = envIdleTimeout !== undefined && Number.isFinite(envIdleTimeout) && envIdleTimeout > 0
       ? envIdleTimeout
@@ -1386,7 +1386,7 @@ export class AgyAdapter extends LlmAdapter {
       ...(this.agyPath === undefined ? {} : { executable: this.agyPath }),
       expectedAgent: this.agent,
       minimumVersion: this.minimumAgyVersion,
-      timeoutMs: Math.min(this.timeoutMs, 10_000),
+      timeoutMs: Math.min(this.timeoutMs ?? 10_000, 10_000),
     })
   }
 
@@ -1536,7 +1536,7 @@ export class AgyAdapter extends LlmAdapter {
       ...(persistentExtraArgsOf(this.mode).length === 0
         ? {}
         : { extraArgs: persistentExtraArgsOf(this.mode) }),
-      timeoutMs: this.timeoutMs,
+      ...(this.timeoutMs === undefined ? {} : { timeoutMs: this.timeoutMs }),
       idleTimeoutMs: this.idleTimeoutMs,
       maxOutputBytes: this.maxOutputBytes,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -2222,7 +2222,7 @@ export class AgyAdapter extends LlmAdapter {
       prompt,
       agent: imageRuntime?.agent ?? route.agent,
       model: route.model,
-      timeoutMs: this.timeoutMs,
+      ...(this.timeoutMs === undefined ? {} : { timeoutMs: this.timeoutMs }),
       idleTimeoutMs: this.idleTimeoutMs,
       maxStdoutBytes: this.maxOutputBytes,
       maxStderrBytes: this.maxOutputBytes,

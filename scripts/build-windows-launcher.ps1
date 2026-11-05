@@ -13,7 +13,19 @@ $root = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $root 'native\windows-launcher\Program.cs'
 $outputDirectory = Join-Path $root 'bin\win32-x64'
 $output = Join-Path $outputDirectory 'agy-launcher.exe'
+$outputTemp = Join-Path $outputDirectory "agy-launcher.$PID.tmp.exe"
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-& $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$output" $source
+& $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$outputTemp" $source
 if ($LASTEXITCODE -ne 0) { throw "C# launcher compilation failed with exit code $LASTEXITCODE" }
+
+if (Test-Path -LiteralPath $output) {
+  $outputOld = Join-Path $outputDirectory "agy-launcher.old.$PID.exe"
+  Move-Item -LiteralPath $output -Destination $outputOld -Force
+}
+Move-Item -LiteralPath $outputTemp -Destination $output -Force
+
+Get-ChildItem -Path $outputDirectory -Filter 'agy-launcher.*.exe' | ForEach-Object {
+  try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch {}
+}
+
 Write-Output "Built $output"

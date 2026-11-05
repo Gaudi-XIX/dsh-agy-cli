@@ -115,6 +115,14 @@ test("persistent-transport real: abort/timeout/output-limit/malformed reset", as
     assert.match(afterTimeout.events.find(e=>e.event==="result")?.result?.response ?? "", /after-timeout/);
 
     await assert.rejects(
+      v.request({ sessionId: sid, text: "mode:delay delayMs:300", idleTimeoutMs: 50 }),
+      e => e.code === "TIMEOUT" && /produced no output for 50 ms/.test(e.message)
+    );
+    await waitForWorkers(v, 0);
+    const afterIdleTimeout = await v.request({ sessionId: sid, text: "after-idle-timeout" });
+    assert.match(afterIdleTimeout.events.find(e => e.event === "result")?.result?.response ?? "", /after-idle-timeout/);
+
+    await assert.rejects(
       v.request({ sessionId: sid, text: "mode:burst", maxOutputBytes: 256 }),
       e=> e.code==="OUTPUT_LIMIT"
     );
