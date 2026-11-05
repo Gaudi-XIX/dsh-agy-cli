@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.4] - 2026-11-05
+
+### Fixed
+
+- **README 措辞**：根目录 README 的「思考链折叠」改为「工具步骤折叠显示（只列执行了哪些工具，不显示模型的内部思考内容）」，避免让人误以为插件透传了模型思维链。
+- **provider README 措辞**：`src/provider/README.md` 删去「reasoning-delta 输出仍未启用」这句与实现冲突的旧话，改为如实列出该通道实际输出的四类文本（横幅、逐步工具状态行、收尾行、异常行），并写明它不映射 AGY 的 reasoning envelope、不输出模型内部思考内容。
+- **Windows 启动器**：启动器增 `StartfUseShowWindow` + `SwHide` 隐藏控制台窗口；构建脚本改用临时文件原子替换并清理中间体；重建 `bin/win32-x64/agy-launcher.exe`。
+- **超时默认值**：provider 默认 `timeoutMs` 由 `600_000` 改为 `undefined`（仍可用 `DSH_AGY_TIMEOUT_MS` 显式指定）；两个 transport 只有显式拿到 `timeoutMs` 时才启用绝对墙钟；默认只保留按帧重置的 idle 静默看门狗。
+
+### Changed
+
+- 版本升至 0.12.4。上一版 0.12.3 发布后仓库里的启动器、超时与文档修正此前只落在 GitHub，本次一并随包发布。
+
 ## [0.12.3] - 2026-11-04
 
 ### Fixed
