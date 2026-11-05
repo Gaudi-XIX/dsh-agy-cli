@@ -6,6 +6,7 @@ using System.Text;
 internal static class Program
 {
     private const uint CreateSuspended = 0x00000004;
+    private const uint DetachedProcess = 0x00000008;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint CreateNoWindow = 0x08000000;
     private const uint StartfUseShowWindow = 0x00000001;
@@ -56,6 +57,26 @@ internal static class Program
         return null;
     }
 
+    private static bool IsBatchFile(string command)
+    {
+        if (string.IsNullOrEmpty(command)) return false;
+        var trimmed = command.TrimStart();
+        if (trimmed.Length == 0) return false;
+        string exePath;
+        if (trimmed[0] == '"')
+        {
+            var endQuote = trimmed.IndexOf('"', 1);
+            exePath = endQuote > 1 ? trimmed.Substring(1, endQuote - 1) : trimmed.Substring(1);
+        }
+        else
+        {
+            var space = trimmed.IndexOf(' ');
+            exePath = space > 0 ? trimmed.Substring(0, space) : trimmed;
+        }
+        return exePath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) ||
+               exePath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static int RunChild(string command)
     {
         var startup = new StartupInfo
@@ -69,6 +90,10 @@ internal static class Program
         };
 
         var creationFlags = CreateSuspended | CreateUnicodeEnvironment | CreateNoWindow;
+        if (!IsBatchFile(command))
+        {
+            creationFlags |= DetachedProcess;
+        }
         ProcessInformation processInfo;
         if (!CreateProcessW(
             null,
