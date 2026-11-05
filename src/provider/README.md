@@ -12,7 +12,7 @@
 
 M7 增加了每个 Adapter 实例的 AGY 进程并发上限和有界等待队列。通过 DSH bundle 注册时，Adapter 使用 Cordis `ctx.logger('dsh-agy-cli')` 输出脱敏的 JSON 生命周期记录；日志失败不会影响请求。
 
-V2-M3 增加固定事件类别计数、最终 AGY status 和稳定错误分类。工具/权限事件只作为内部进度计数，不转换为 DSH tool call；V3-M2 已支持 reasoning effort 控制参数，V3-M3 日志增加 `toolPolicy` 和 `toolSchemaCount`，V3-M5 增加白名单 `reasoningEffort`、model discovery source/warning code；`reasoning-delta` 通道现只输出插件自生成的工具步骤状态行（`[agy 过程流]`），不映射 AGY 的 reasoning envelope，也不输出模型内部思考内容。
+V2-M3 增加固定事件类别计数、最终 AGY status 和稳定错误分类。工具/权限事件只作为内部进度计数，不转换为 DSH tool call；V3-M2 已支持 reasoning effort 控制参数，V3-M3 日志增加 `toolPolicy` 和 `toolSchemaCount`，V3-M5 增加白名单 `reasoningEffort`、model discovery source/warning code；`reasoning-delta` 通道承载插件自生成的过程流文本——横幅 `[agy 过程流]`、逐步工具状态行、`〔共 N 步〕` 收尾行；异常收尾时还会追加一行 `[agy finished with error] <reason>`，其中 `reason` 取自 AGY 侧的错误信息。该通道不映射 AGY 的 reasoning envelope，也不输出模型内部思考内容。
 
 测试阶段的 `agy.request.failed` 记录还会按需包含 `processDiagnostic`：`stage`、内部错误名/稳定 code、stdout 行号/长度、stdout/stderr 字节计数和 16 位行哈希。该字段不包含 Prompt、响应正文、stderr 原文、可执行路径、工具参数或凭据；`lineHash` 仅用于把同一次失败与本地复现对应起来。
 
