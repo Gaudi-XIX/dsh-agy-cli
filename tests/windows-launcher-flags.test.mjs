@@ -22,5 +22,6 @@ test('Windows launcher never combines DETACHED_PROCESS with CREATE_NO_WINDOW', a
   assert.ok(creationFlagsLine, 'launcher source should declare creationFlags')
   assert.match(creationFlagsLine, /CreateNoWindow/)
   assert.doesNotMatch(creationFlagsLine, /DetachedProcess/)
-  assert.doesNotMatch(source, /creationFlags\s*\|=\s*DetachedProcess/)
+  // 常量定义、别名或其它写法也一律不放过：只要启动器里出现 DETACHED_PROCESS 就算回归。
+  assert.doesNotMatch(source, /DetachedProcess|DETACHED_PROCESS/i)
 })
