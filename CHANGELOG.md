@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.5] - 2026-11-06
+
+### Fixed
+
+- **Windows 启动器闪框根因**：`CreateProcessW` 同时给 `DETACHED_PROCESS` 与 `CREATE_NO_WINDOW` 时前者胜出，子进程实际没有控制台；`agy.exe` 是控制台子系统程序，自己分配控制台时 Windows 会建出真实窗口并短暂显示，即每 turn 开头一闪而过的黑框。0.12.4 之前的启动器只带 `CREATE_NO_WINDOW` + `StartfUseShowWindow`/`SwHide`，窗口根本不建；`75c9b95` 加上的 `DETACHED_PROCESS` 引入了这个回归。本次移除 `DETACHED_PROCESS` 及其已无用途的 `IsBatchFile` 判断，只保留 `CreateSuspended | CreateUnicodeEnvironment | CreateNoWindow`，并重建 `bin/win32-x64/agy-launcher.exe`（8192 → 7680 B）。
+- **回归测试**：新增 `tests/windows-launcher-flags.test.mjs`，直接断言启动器的创建标志组合含 `CreateNoWindow`、不含 `DetachedProcess`，防止该回归再次进入源码。
+
+### Changed
+
+- **提示词预算截断**：`clampSectionsToBytes` 把起始位置回退到 2 的幂步长以保住前缀缓存后，截取窗口比预算更大，正向打包会把预算花在更旧的开头、提前中断而漏掉最新消息，最终拼出的 prompt 末尾是旧 turn 的请求配当前 turn 的时间戳。现在只在整窗放得下时才用回退后的起点，否则守住放得下的窗口（`5a46293`）。
+- 版本升至 0.12.5。
+
 ## [0.12.4] - 2026-11-05
 
 ### Fixed

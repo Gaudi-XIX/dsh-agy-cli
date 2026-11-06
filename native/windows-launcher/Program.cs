@@ -6,7 +6,6 @@ using System.Text;
 internal static class Program
 {
     private const uint CreateSuspended = 0x00000004;
-    private const uint DetachedProcess = 0x00000008;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint CreateNoWindow = 0x08000000;
     private const uint StartfUseShowWindow = 0x00000001;
@@ -57,7 +56,7 @@ internal static class Program
         return null;
     }
 
-        private static int RunChild(string command)
+    private static int RunChild(string command)
     {
         var startup = new StartupInfo
         {
