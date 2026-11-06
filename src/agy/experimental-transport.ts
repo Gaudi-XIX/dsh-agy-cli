@@ -449,6 +449,8 @@ class PersistentAgyWorker {
           ...process.env,
           ...this.options.env,
           DSH_AGY_EXPERIMENTAL_SESSION: this.sessionId,
+          // Force-last: agy's updater only honours the literal lowercase 'true'.
+          AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
         },
         shell: false,
         detached: process.platform !== 'win32',

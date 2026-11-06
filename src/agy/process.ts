@@ -379,7 +379,9 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
   try {
     child = spawn(launch.executable, [...launch.args], {
       cwd: request.cwd,
-      env: request.env === undefined ? process.env : { ...process.env, ...request.env },
+      // agy's background updater spawns a visible console window. Upstream only
+      // honours the literal lowercase 'true', so force it last on every agy spawn.
+      env: { ...process.env, ...request.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
       shell: false,
       detached: process.platform !== 'win32',
       windowsHide: true,
