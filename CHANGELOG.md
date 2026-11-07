@@ -4,8 +4,9 @@
 
 ### Fixed
 
-- **Windows 启动器闪框根因**：`CreateProcessW` 同时给 `DETACHED_PROCESS` 与 `CREATE_NO_WINDOW` 时前者胜出，子进程实际没有控制台；`agy.exe` 是控制台子系统程序，自己分配控制台时 Windows 会建出真实窗口并短暂显示，即每 turn 开头一闪而过的黑框。0.12.4 之前的启动器只带 `CREATE_NO_WINDOW` + `StartfUseShowWindow`/`SwHide`，窗口根本不建；`75c9b95` 加上的 `DETACHED_PROCESS` 引入了这个回归。本次移除 `DETACHED_PROCESS` 及其已无用途的 `IsBatchFile` 判断，只保留 `CreateSuspended | CreateUnicodeEnvironment | CreateNoWindow`，并重建 `bin/win32-x64/agy-launcher.exe`（8192 → 7680 B）。
-- **回归测试**：新增 `tests/windows-launcher-flags.test.mjs`，直接断言启动器的创建标志组合含 `CreateNoWindow`、不含 `DetachedProcess`，防止该回归再次进入源码。
+- **更正此前「修复闪框」的失实说明**：0.12.5 早期把每 turn 开头的黑框归因于我方启动器 `CreateProcessW` 的 `DETACHED_PROCESS`，据此移除该标志、重建 `bin/win32-x64/agy-launcher.exe` 并新增启动器标志测试。复核确认该标志出现在 agy 自身 `--bg-updater` 的子进程派生里，不在我方启动器的 `CreateProcessW` 调用里；上游 `google-antigravity/antigravity-cli#942` 也说明给 agy 加 `CREATE_NO_WINDOW` 无效。这几个改动对黑框的抑制效果为零，不构成修复，黑框是否出现与它们无因果关系。
+- **黑框修复**：agy 每隔约 15 分钟做一次后台自更新检查；窗口到期时派生 `agy --bg-updater` → 无参数 `agy.exe` → `conhost`，链尾自建可见控制台窗口。`3a3e2bb` 在 3 处 agy 子进程 env 组装末尾强制 `AGY_CLI_DISABLE_AUTO_UPDATE: 'true'`，让 agy 在读取检查时间戳前关掉这条派生链。决定性验收（15 分钟窗口过期后跑一次真实 turn，窗口探针全程在场）：整轮无 `ConsoleWindowClass`、无 `agy.exe` 可见窗口；agy 日志出现 `auto_updater.go:247] Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE`，且无 `Spawned background update process`。历史上另有一条不带该变量的 agy 调用路径（最后触点 2026-11-07 09:42:49，宿主重启后未再出现），发起者未定位，仍属未决项。本修复只落在本检出，未 push、未 publish、未打 tag，npm 上 latest 仍为 0.12.4。
+- **回归测试**：`tests/windows-launcher-flags.test.mjs` 只断言我方启动器的创建标志含 `CreateNoWindow`、不含 `DetachedProcess`，与黑框无关；`tests/auto-update-disable.test.mjs` 钉住 3 处 env 注入的字面小写 `'true'`，并用真实子进程验证调用方传别的值仍被强制为 `true`。
 
 ### Changed
 
