@@ -20,6 +20,10 @@ import {
 import { startDshMcpBridge } from '../lib/mcp/bridge.js'
 
 /** A fake host HTTP carrier that records the routes plugins claim. */
+// The host settles one assistant step as a batch; a bridge call is a batch of
+// one. These mocks answer in the same shape production returns.
+const batchOf = (exec, result) => ({ results: [{ callId: exec.calls[0].id, result }] })
+
 function fakeWebServer(port = 43117) {
   const routes = new Map()
   return {
@@ -213,8 +217,8 @@ test('the bridge asks the registry as the session agent, not as the global layer
             { name: 'click', description: 'c', parameters: { type: 'object' } },
             { name: 'read', description: 'r', parameters: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } },
           ],
-        async execute() {
-          return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
+        async execute(exec) {
+          return batchOf(exec, { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] })
         },
       },
       // The real controller unwraps and returns the Agent itself (it throws the
@@ -258,8 +262,8 @@ test('the bridge resolves the session controller late, so a later mount is not l
             { name: 'click', description: 'c', parameters: { type: 'object' } },
             { name: 'read', description: 'r', parameters: { type: 'object' } },
           ],
-        async execute() {
-          return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
+        async execute(exec) {
+          return batchOf(exec, { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] })
         },
       },
       // This plugin loads before the Session controller bundle finishes
@@ -298,8 +302,8 @@ test('the bridge rejects a call that violates the advertised schema before the h
           { name: 'memory_search', description: 'm', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] } },
         ],
         async execute(exec) {
-          executions.push(exec.name)
-          return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
+          executions.push({ name: exec.calls[0].name, callId: exec.calls[0].id })
+          return batchOf(exec, { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] })
         },
       },
       sessionController: { async resolveAgent() { return { agent: { id: 'a' } } } },
@@ -324,14 +328,14 @@ test('the bridge rejects a call that violates the advertised schema before the h
     // A type the schema does not describe is left to DSH, not guessed here.
     const unknownKey = await call(23, { query: 'ok', somethingElse: 7 })
     assert.equal(unknownKey.isError, false)
-    assert.deepEqual(executions, ['memory_search'])
+    assert.deepEqual(executions.map(entry => entry.name), ['memory_search'])
 
     const ghost = JSON.parse((await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
       jsonrpc: '2.0', id: 24, method: 'tools/call', params: { name: 'write', arguments: { file_path: 'x' } },
     }))).body).result
     assert.equal(ghost.isError, true)
     assert.match(ghost.content[0].text, /unknown tool "write"/)
-    assert.deepEqual(executions, ['memory_search'], 'a tool AGY was never shown does not run')
+    assert.deepEqual(executions.map(entry => entry.name), ['memory_search'], 'a tool AGY was never shown does not run')
 
     await bridge.dispose()
   } finally {
@@ -514,7 +518,7 @@ test('the bridge executes a tool through the host pipeline with the resolved age
         schemas: () => [{ name: 'read', description: 'r', parameters: { type: 'object', properties: {} } }],
         async execute(exec) {
           executions.push(exec)
-          return { isError: false, value: 'file contents', content: [{ type: 'text', text: 'file contents' }] }
+          return batchOf(exec, { isError: false, value: 'file contents', content: [{ type: 'text', text: 'file contents' }] })
         },
       },
       sessionController: {
@@ -545,9 +549,9 @@ test('the bridge executes a tool through the host pipeline with the resolved age
     // what lets the host approval service route (or deny) the request.
     assert.equal(executions.length, 1)
     assert.equal(executions[0].agent, agent)
-    assert.equal(executions[0].name, 'read')
-    assert.deepEqual(executions[0].arguments, { path: 'a.txt' })
-    assert.ok(executions[0].callId, 'a correlation id is minted')
+    assert.equal(executions[0].calls[0].name, 'read')
+    assert.deepEqual(JSON.parse(executions[0].calls[0].arguments), { path: 'a.txt' })
+    assert.ok(executions[0].calls[0].id, 'a correlation id is minted')
 
     await bridge.dispose()
     assert.equal(webServer.routes.size, 0, 'dispose releases the route')
@@ -561,7 +565,7 @@ test('the bridge executes a tool through the host pipeline with the resolved age
 test('the bridge fails closed when the host carrier is unavailable', async () => {
   const bridge = await startDshMcpBridge({
     webServer: undefined,
-    tools: { schemas: () => [], execute: async () => ({ isError: false, value: null }) },
+    tools: { schemas: () => [], execute: async (exec) => batchOf(exec, { isError: false, value: null }) },
     serverVersion: '1.0.0',
   })
   assert.equal(bridge.active, false)
@@ -576,8 +580,8 @@ test('the bridge reports an error result instead of throwing when a tool fails',
       webServer,
       tools: {
         schemas: () => [{ name: 'read', description: 'r', parameters: { type: 'object' } }],
-        async execute() {
-          return { isError: true, error: { message: 'denied by host policy' }, content: [] }
+        async execute(exec) {
+          return batchOf(exec, { isError: true, error: { message: 'denied by host policy' }, content: [] })
         },
       },
       sessionController: { async resolveAgent() { return { agent: { id: 'a' } } } },
@@ -615,8 +619,8 @@ test('the bridge falls back to agentsLookup when sessionController rejects with 
             { name: 'ops_bash', description: 'b', parameters: { type: 'object' } },
           ]
           : [{ name: 'click', description: 'c', parameters: { type: 'object' } }],
-        async execute() {
-          return { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] }
+        async execute(exec) {
+          return batchOf(exec, { isError: false, value: 'ok', content: [{ type: 'text', text: 'ok' }] })
         },
       },
       sessionController: {

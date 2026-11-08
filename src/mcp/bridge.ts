@@ -33,14 +33,34 @@ import {
 import type { McpCallResult, McpTextContent, McpToolDescriptor } from './protocol.js'
 
 /** The subset of the DSH tool registry this bridge uses. */
+/**
+ * One raw model call, in the shape the host's batch executor reads: `id` and
+ * `name` verbatim, `arguments` as the model's JSON text (not a parsed object).
+ */
+export interface DshToolCallLike {
+  readonly id: unknown
+  readonly name: string
+  readonly arguments: string
+}
+
+/**
+ * Host 0.2.2+ settles a whole assistant step as one batch. Before that the
+ * runtime took a single call and returned the result directly, so the bridge
+ * accepts either shape at runtime — see `settledResultOf`.
+ */
+export interface DshToolBatchResultLike {
+  readonly results: readonly {
+    readonly callId: unknown
+    readonly result: DshToolExecutionResultLike
+  }[]
+}
+
 export interface DshToolRuntimeLike extends DshToolRegistryLike {
   execute(execution: {
-    readonly callId: unknown
-    readonly name: string
-    readonly arguments: unknown
+    readonly calls: readonly DshToolCallLike[]
     readonly agent?: unknown
     readonly signal: AbortSignal
-  }): Promise<DshToolExecutionResultLike>
+  }): Promise<DshToolBatchResultLike>
 }
 
 export interface DshToolExecutionResultLike {
@@ -377,14 +397,40 @@ async function executeDshTool(
     }
   }
   const controller = new AbortController()
-  const result = await options.tools.execute({
-    callId: randomUUID(),
-    name,
-    arguments: args,
+  const callId = randomUUID()
+  // The host executes tool calls as one batch per assistant step; a bridge call
+  // is a batch of exactly one. `arguments` travels as JSON text because that is
+  // what the host parses, and invalid JSON must reach the tool's own diagnostics
+  // instead of being swallowed here.
+  const batch = await options.tools.execute({
+    calls: [{ id: callId, name, arguments: JSON.stringify(args) }],
     ...(agent === undefined ? {} : { agent }),
     signal: controller.signal,
   })
-  return resultToCallResult(result)
+  const settled = settledResultOf(batch, callId)
+  if (settled === undefined) {
+    return { content: [{ type: 'text', text: `tool "${name}" produced no result` }], isError: true }
+  }
+  return resultToCallResult(settled)
+}
+
+/**
+ * Pick this call's settled result out of a host batch, tolerating the
+ * single-call shape older runtimes returned. A batch normally answers with one
+ * entry per call; if the ids do not line up, the only entry is this call's.
+ */
+function settledResultOf(
+  batch: DshToolBatchResultLike | DshToolExecutionResultLike,
+  callId: string,
+): DshToolExecutionResultLike | undefined {
+  const record = batch as { results?: unknown }
+  if (!Array.isArray(record.results)) return batch as DshToolExecutionResultLike
+  const entries = record.results as readonly { callId?: unknown; result?: unknown }[]
+  const match = entries.find(entry => entry.callId === callId) ?? entries[0]
+  if (match === undefined) return undefined
+  const result = match.result
+  if (typeof result !== 'object' || result === null) return undefined
+  return result as DshToolExecutionResultLike
 }
 
 /**

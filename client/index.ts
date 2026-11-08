@@ -836,8 +836,24 @@ export function apply(ctx: ClientContext): void {
 	// locale is declared in inject — cordis guarantees ctx.locale (issue #24).
 	const locale = ctx.locale;
 	ctx.effect(() => {
-		const disposePtBR = locale.addLanguage({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
-		const disposeEs = locale.addLanguage({ id: 'es', label: 'Español', fallback: 'en' });
+		// Host DSH ships its own language definitions (`es` among them) since
+		// 0.2.2-rc.1, and `addLanguage` throws on a duplicate id. A throw here
+		// aborted the whole apply() before any slot was registered, which left
+		// the web fiber in LOADING forever and failed the host's boot audit.
+		// Registering our extra languages is therefore idempotent: an id the
+		// host already defines is simply left to the host.
+		const addLanguageOnce = (input: Parameters<typeof locale.addLanguage>[0]): (() => void) => {
+			try {
+				return locale.addLanguage(input);
+			}
+			catch (error) {
+				if (String((error as Error)?.message ?? error).includes('is already registered'))
+					return () => {};
+				throw error;
+			}
+		};
+		const disposePtBR = addLanguageOnce({ id: 'pt-BR', label: 'Português (Brasil)', fallback: 'en' });
+		const disposeEs = addLanguageOnce({ id: 'es', label: 'Español', fallback: 'en' });
 		// Untyped single-locale form: 'agy-link' is not in the host LocaleNamespaceMap merge table.
 		const disposeZh = locale.register(NS, 'zh', zh);
 		const disposeEn = locale.register(NS, 'en', en);

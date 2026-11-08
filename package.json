@@ -71,7 +71,8 @@
     "build:windows-launcher": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-launcher.ps1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "dsh": ">=0.1.7-rc.2 <0.3.0-0"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4"
