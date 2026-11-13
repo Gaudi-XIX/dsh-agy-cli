@@ -18,6 +18,10 @@ let _overridesPathOverride: string | undefined
 // default effort, so both read this one file (the panel writes it, see
 // src/web/router.ts). If the file is absent or unreadable the caller falls back
 // to its built-in default.
+// hiddenModels is likewise the single authority for hidden state: it is a
+// blacklist, and every consumer derives its visible catalog as catalog minus
+// hidden (see resolveModelCatalog in src/provider/config.ts). cordis.patch.yml
+// visibleModels is a derived compatibility value, never the authority.
 export function readAgyRuntimeOverrides(): AgyRuntimeOverrides | undefined {
   const p = _overridesPathOverride ?? RUNTIME_OVERRIDES_PATH
   if (!existsSync(p)) return undefined

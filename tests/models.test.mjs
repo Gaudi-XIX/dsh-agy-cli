@@ -142,3 +142,132 @@ test('AgyModelDiscovery exposes stable timeout and output-limit warning codes', 
   assert.equal((await timeout.discover([])).warningCode, 'MODEL_DISCOVERY_TIMEOUT')
   assert.equal((await outputLimit.discover([])).warningCode, 'MODEL_DISCOVERY_OUTPUT_LIMIT')
 })
+
+test('AgyModelDiscovery backs off across rounds instead of re-spawning every round', async () => {
+  let now = 0
+  let calls = 0
+  const configured = [{ id: 'configured' }]
+  const discovery = new AgyModelDiscovery({
+    cooldownBaseMs: 30_000,
+    cooldownMaxMs: 300_000,
+    now: () => now,
+    runCommand: async () => {
+      calls += 1
+      return result([], 1)
+    },
+  })
+  const codes = new Set()
+  const sources = new Set()
+  // Simulate 20 polling rounds five seconds apart: without a failure state
+  // every one of them would spawn `agy models` again.
+  for (let round = 0; round < 20; round += 1) {
+    const snapshot = await discovery.discover(configured)
+    assert.equal(snapshot.stale, true)
+    codes.add(snapshot.warningCode)
+    sources.add(snapshot.source)
+    now += 5_000
+  }
+  assert.ok(calls < 20, 'expected bounded spawns, got ' + calls)
+  assert.ok(calls <= 3, 'cooldown must cap respawns, got ' + calls)
+  assert.deepEqual([...codes], ['MODEL_DISCOVERY_FAILED'])
+  assert.ok([...sources].every(source => source === 'fallback' || source === 'cache'))
+})
+
+test('AgyModelDiscovery keeps the timeout mapping inside the negative-cache snapshot', async () => {
+  let now = 0
+  let calls = 0
+  const discovery = new AgyModelDiscovery({
+    cooldownBaseMs: 1_000,
+    now: () => now,
+    runCommand: async () => {
+      calls += 1
+      return {
+        exitCode: null,
+        signal: null,
+        termination: 'timeout',
+        stdoutLines: [],
+        stderr: '',
+        durationMs: 1,
+      }
+    },
+  })
+  const configured = [{ id: 'static' }]
+  const first = await discovery.discover(configured)
+  assert.equal(first.warningCode, 'MODEL_DISCOVERY_TIMEOUT')
+  assert.equal(first.stale, true)
+  for (let round = 0; round < 5; round += 1) {
+    now += 100
+    const snapshot = await discovery.discover(configured)
+    assert.equal(snapshot.warningCode, 'MODEL_DISCOVERY_TIMEOUT')
+    assert.equal(snapshot.stale, true)
+  }
+  assert.equal(calls, 1, 'a timeout failure must be served from the negative cache')
+})
+
+test('AgyModelDiscovery negative cache expires with the cooldown, leaving no spawn gap', async () => {
+  let now = 0
+  let calls = 0
+  const discovery = new AgyModelDiscovery({
+    cooldownBaseMs: 1_000,
+    negativeTtlMs: 50,
+    now: () => now,
+    runCommand: async () => {
+      calls += 1
+      return result([], 1)
+    },
+  })
+  const configured = [{ id: 'static' }]
+  const first = await discovery.discover(configured)
+  assert.equal(first.stale, true)
+  assert.equal(calls, 1)
+  now = 49
+  assert.equal((await discovery.discover(configured)).source, 'fallback')
+  assert.equal(calls, 1)
+  now = 50
+  await discovery.discover(configured)
+  assert.equal(calls, 2, 'cooldown and snapshot TTL share one clock; no gap re-spawns early')
+})
+
+test('AgyModelDiscovery clears failure state after a success', async () => {
+  let now = 0
+  let calls = 0
+  let mode = 'fail'
+  const configured = [{ id: 'configured' }]
+  const discovery = new AgyModelDiscovery({
+    ttlMs: 1,
+    cooldownBaseMs: 100,
+    cooldownMaxMs: 800,
+    now: () => now,
+    runCommand: async () => {
+      calls += 1
+      return mode === 'fail' ? result([], 1) : result(['gemini-live\tGemini Live'])
+    },
+  })
+  const first = await discovery.discover(configured)
+  assert.equal(first.source, 'fallback')
+  assert.equal(first.stale, true)
+  assert.equal(calls, 1)
+
+  now = 100
+  mode = 'success'
+  const recovered = await discovery.discover(configured)
+  assert.equal(recovered.source, 'merged')
+  assert.equal(recovered.stale, false)
+  assert.equal(recovered.warningCode, undefined)
+  assert.equal(calls, 2)
+  assert.ok(recovered.models.some(model => model.id === 'gemini-live'))
+
+  // A failure after recovery must restart at the base cooldown (100ms), not the
+  // doubled 200ms: that is the proof consecutiveFailures was cleared.
+  mode = 'fail'
+  now = 101
+  const failedAgain = await discovery.discover(configured)
+  assert.equal(failedAgain.stale, true)
+  assert.equal(calls, 3)
+  now = 150
+  await discovery.discover(configured)
+  assert.equal(calls, 3, 'a fresh failure must start at the base cooldown')
+  now = 201
+  await discovery.discover(configured)
+  assert.equal(calls, 4, 'base cooldown proves consecutiveFailures reset to 1')
+})

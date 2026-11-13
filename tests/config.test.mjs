@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Config, configuredModels, AGY_RETRYABLE_CODES } from '../lib/provider/config.js'
+import { Config, configuredModels, resolveModelCatalog, AGY_RETRYABLE_CODES } from '../lib/provider/config.js'
 import {
   Config as ExportedConfig,
   BundleConfig as ExportedBundleConfig,
@@ -329,4 +329,41 @@ test('readConfigFlag reads plain booleans and volatile references alike', async 
   // A reference whose getter throws must read as "off", never as "on": a broken
   // settings projection must not be able to enable a provider by accident.
   assert.equal(readConfigFlag({ get: () => { throw new Error('boom') } }), false)
+})
+
+test('resolveModelCatalog merges one catalog and derives hidden/visible from the blacklist', () => {
+  const configured = [
+    { id: 'gemini-3.8-flash-high', name: 'Flash' },
+    { id: 'gemini-3.1-pro' },
+  ]
+  const discovered = [
+    { id: 'claude-sonnet-4-6', name: 'Sonnet' },
+    { id: 'CLAUDE-SONNET-4-6', name: 'Duplicate case' },
+    { id: 'gpt-oss-120b' },
+  ]
+  const { catalog, hidden, visible } = resolveModelCatalog(configured, discovered, [
+    'Claude-Opus-4-6-Thinking-High',
+    'GEMINI-3.1-PRO',
+  ])
+
+  assert.deepEqual(catalog.map(m => m.id), [
+    'gemini-3.8-flash',
+    'gemini-3.1-pro',
+    'claude-sonnet-4-6',
+    'gpt-oss-120b',
+  ])
+  assert.equal(catalog[0].name, 'Flash')
+  assert.deepEqual(hidden, ['claude-opus-4-6-thinking', 'gemini-3.1-pro'])
+  assert.deepEqual(visible.map(m => m.id), [
+    'gemini-3.8-flash',
+    'claude-sonnet-4-6',
+    'gpt-oss-120b',
+  ])
+
+  // A newly discovered base id must become visible without any whitelist edit.
+  const emptyBlacklist = resolveModelCatalog(configured, discovered, [])
+  assert.deepEqual(emptyBlacklist.visible.map(m => m.id), catalog.map(m => m.id))
+  const noBlacklist = resolveModelCatalog(configured, discovered, undefined)
+  assert.deepEqual(noBlacklist.visible.map(m => m.id), catalog.map(m => m.id))
+  assert.deepEqual(noBlacklist.hidden, [])
 })

@@ -18,8 +18,9 @@ import {
 import type { ModelConfig, ToolPolicy } from './provider/config.js'
 import { MockAdapter } from './provider/mock.js'
 import { AgyModelDiscovery } from './agy/models.js'
+import { readAgyRuntimeOverrides } from './agy/overrides.js'
 import { appendAgyDiagnosticRecord, AGY_DIAGNOSTIC_LOG_PATH } from './agy/log.js'
-import { configuredModels, readConfigFlag } from './provider/config.js'
+import { configuredModels, readConfigFlag, resolveModelCatalog } from './provider/config.js'
 import { SessionRegistry } from './session/store.js'
 import { FileSessionStore, resolveSessionStorePath } from './session/file-store.js'
 import type { DshContextLookup } from './dsh/context.js'
@@ -227,10 +228,9 @@ export function apply(ctx: Context, config: ConfigType): void {
       // request.provider being 'agy' or undefined both mean this plugin owns the draft.
       if (request.provider !== undefined && request.provider !== 'agy') return []
       const configured = configuredModels(activeConfig)
-      const result = activeConfig.modelDiscovery === 'off'
-        ? { models: configured, source: 'static' as const, stale: false }
-        : await modelDiscovery!.discover(configured)
-      return result.models.map(m => ({
+      const discovered = modelDiscovery === undefined ? [] : (await modelDiscovery.discover(configured)).models
+      const { visible } = resolveModelCatalog(configured, discovered, readAgyRuntimeOverrides()?.hiddenModels)
+      return visible.map(m => ({
         id: m.id,
         ...(m.name === undefined ? {} : { name: m.name }),
         ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }),

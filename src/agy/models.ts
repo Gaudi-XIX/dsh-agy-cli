@@ -14,6 +14,8 @@ export type { ModelDiscoveryErrorCode } from '../provider/error-codes.js'
 export const DEFAULT_MODEL_DISCOVERY_TTL_MS = 5 * 60_000
 export const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
 export const MAX_MODEL_DISCOVERY_OUTPUT_BYTES = 1 * 1024 * 1024
+export const DEFAULT_MODEL_DISCOVERY_COOLDOWN_BASE_MS = 30_000
+export const DEFAULT_MODEL_DISCOVERY_COOLDOWN_MAX_MS = 300_000
 
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+@/-]{0,255}$/
 const MAX_MODEL_DISPLAY_LENGTH = 512
@@ -35,6 +37,9 @@ export interface AgyModelDiscoveryOptions {
   ttlMs?: number
   timeoutMs?: number
   maxOutputBytes?: number
+  cooldownBaseMs?: number
+  cooldownMaxMs?: number
+  negativeTtlMs?: number
   runCommand?: AgyModelDiscoveryCommand
   now?: () => number
 }
@@ -42,6 +47,22 @@ export interface AgyModelDiscoveryOptions {
 interface CachedModels {
   models: readonly ModelConfig[]
   expiresAt: number
+}
+
+interface FailureSnapshot {
+  models: readonly ModelConfig[]
+  source: 'fallback' | 'cache'
+  stale: true
+  warning: string
+  warningCode: ModelDiscoveryErrorCode
+  expiresAt: number
+}
+
+interface FailureState {
+  consecutiveFailures: number
+  lastFailureAt: number
+  cooldownUntil: number
+  snapshot: FailureSnapshot
 }
 
 class ModelDiscoveryFailure extends Error {
@@ -145,17 +166,23 @@ export function parseAgyModels(output: string): ModelConfig[] {
 
 /**
  * Discover AGY models without invoking a model request. Results are kept in
- * memory only. A refresh is single-flight and all failures fail open to the
- * last successful catalog or the caller's static catalog.
+ * memory only. A refresh is single-flight (concurrent callers share one spawn),
+ * while consecutive failures are tracked in failureState: an exponential
+ * cooldown plus a negative-cache snapshot bounded by the same window stops the
+ * per-round `agy models` re-spawn loop. A success clears the failure state.
  */
 export class AgyModelDiscovery {
   private readonly executable: string | undefined
   private readonly ttlMs: number
   private readonly timeoutMs: number
   private readonly maxOutputBytes: number
+  private readonly cooldownBaseMs: number
+  private readonly cooldownMaxMs: number
+  private readonly negativeTtlMs: number | undefined
   private readonly runCommand: AgyModelDiscoveryCommand
   private readonly now: () => number
   private cache: CachedModels | undefined
+  private failureState: FailureState | undefined
   private inFlight: Promise<AgyModelDiscoveryResult> | undefined
 
   constructor(options: AgyModelDiscoveryOptions = {}) {
@@ -163,6 +190,9 @@ export class AgyModelDiscovery {
     this.ttlMs = options.ttlMs ?? DEFAULT_MODEL_DISCOVERY_TTL_MS
     this.timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS
     this.maxOutputBytes = Math.min(options.maxOutputBytes ?? MAX_MODEL_DISCOVERY_OUTPUT_BYTES, MAX_MODEL_DISCOVERY_OUTPUT_BYTES)
+    this.cooldownBaseMs = options.cooldownBaseMs ?? DEFAULT_MODEL_DISCOVERY_COOLDOWN_BASE_MS
+    this.cooldownMaxMs = options.cooldownMaxMs ?? DEFAULT_MODEL_DISCOVERY_COOLDOWN_MAX_MS
+    this.negativeTtlMs = options.negativeTtlMs
     this.runCommand = options.runCommand ?? runProcess
     this.now = options.now ?? Date.now
   }
@@ -172,6 +202,21 @@ export class AgyModelDiscovery {
     if (this.cache !== undefined && this.cache.expiresAt > currentTime) {
       return { models: this.cache.models, source: 'cache', stale: false }
     }
+    const failure = this.failureState
+    if (failure !== undefined && failure.cooldownUntil > currentTime) {
+      // Negative cache hit: the cooldown window and snapshot.expiresAt are the
+      // same clock, so no gap can re-spawn `agy models` before the window ends.
+      const { models, source, stale, warning, warningCode } = failure.snapshot
+      return {
+        models,
+        source,
+        stale,
+        ...(warning === undefined ? {} : { warning }),
+        ...(warningCode === undefined ? {} : { warningCode }),
+      }
+    }
+    // inFlight only collapses concurrent refreshes into one spawn; it does not
+    // remember failures across rounds (that is failureState's job).
     if (this.inFlight !== undefined) return this.inFlight
 
     const refresh = this.refresh(configured)
@@ -219,6 +264,7 @@ export class AgyModelDiscovery {
         models,
         expiresAt: this.now() + this.ttlMs,
       }
+      this.failureState = undefined
       return {
         models,
         source: configured.length === 0 ? 'discovered' : 'merged',
@@ -226,22 +272,47 @@ export class AgyModelDiscovery {
       }
     } catch (error) {
       const warning = warningOf(error)
-      if (this.cache !== undefined) {
-        return {
+      const result: AgyModelDiscoveryResult = this.cache !== undefined
+        ? {
           models: this.cache.models,
           source: 'cache',
           stale: true,
           warning: warning.message,
           warningCode: warning.code,
         }
-      }
-      return {
-        models: configured,
-        source: 'fallback',
+        : {
+          models: configured,
+          source: 'fallback',
+          stale: true,
+          warning: warning.message,
+          warningCode: warning.code,
+        }
+      this.recordFailure(result)
+      return result
+    }
+  }
+
+  /** Consecutive failures back off exponentially (BASE*2^(n-1), capped at MAX).
+   * The negative snapshot lives for exactly the cooldown window, so the spawn
+   * loop cannot reappear when a TTL expires before the cooldown does. */
+  private recordFailure(result: AgyModelDiscoveryResult): void {
+    const now = this.now()
+    const consecutiveFailures = (this.failureState?.consecutiveFailures ?? 0) + 1
+    const backoff = Math.min(this.cooldownBaseMs * 2 ** (consecutiveFailures - 1), this.cooldownMaxMs)
+    const windowMs = this.negativeTtlMs ?? backoff
+    const cooldownUntil = now + windowMs
+    this.failureState = {
+      consecutiveFailures,
+      lastFailureAt: now,
+      cooldownUntil,
+      snapshot: {
+        models: result.models,
+        source: result.source === 'cache' ? 'cache' : 'fallback',
         stale: true,
-        warning: warning.message,
-        warningCode: warning.code,
-      }
+        warning: result.warning ?? 'AGY model discovery failed',
+        warningCode: result.warningCode ?? MODEL_DISCOVERY_FAILED_CODE,
+        expiresAt: cooldownUntil,
+      },
     }
   }
 }

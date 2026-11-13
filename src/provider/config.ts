@@ -485,3 +485,31 @@ export function filterVisibleModels(models: readonly ModelConfig[], visibleModel
   const allow = new Set(visibleModels.map(normalizeModelId))
   return models.filter(m => allow.has(normalizeModelId(m.id)))
 }
+
+/**
+ * Single source of truth for the model catalog. Pure: merges configured and
+ * discovered models, normalizes base ids, dedupes, then derives the hidden list
+ * and the visible catalog from the hiddenModels blacklist in
+ * runtime-overrides.json. The panel, the model dropdown and generation all call
+ * this, so a new discovered base id reaches every consumer without a code or
+ * YAML edit. No I/O and no Config schema reads.
+ */
+export function resolveModelCatalog(
+  configured: readonly ModelConfig[],
+  discovered: readonly ModelConfig[],
+  hiddenModels: readonly string[] | undefined,
+): { catalog: readonly ModelConfig[]; hidden: readonly string[]; visible: readonly ModelConfig[] } {
+  const catalog: ModelConfig[] = []
+  const seen = new Set<string>()
+  for (const model of [...configured, ...discovered]) {
+    const baseId = normalizeModelId(model.id)
+    const key = baseId.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    catalog.push({ ...model, id: baseId })
+  }
+  const hidden = [...new Set((hiddenModels ?? []).map(id => normalizeModelId(id).toLowerCase()))]
+  const blocked = new Set(hidden)
+  const visible = catalog.filter(m => !blocked.has(m.id.toLowerCase()))
+  return { catalog, hidden, visible }
+}

@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config as ConfigType } from '../provider/config.js'
-import { configuredModels, normalizeModelId, readConfigFlag } from '../provider/config.js'
+import { configuredModels, normalizeModelId, readConfigFlag, resolveModelCatalog } from '../provider/config.js'
 import type { AgyModelDiscovery } from '../agy/models.js'
 import { isLoopback, type DshWebServerLike } from '../mcp/endpoint.js'
 import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides, type AgyRuntimeOverrides } from '../agy/overrides.js'
@@ -650,11 +650,10 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
     }
 
     if (modelsRaw && typeof modelsRaw === 'object' && modelsRaw.models) {
-      // The upstream catalog response names ~19 models. The panel only ever
-      // shows DEFAULT_CATALOG_MODELS, so keep the per-model quota detail for
-      // those ids and drop the rest instead of shipping every upstream entry
-      // over the wire on each status poll.
-      const catalogIds = new Set(DEFAULT_CATALOG_MODELS.map((m) => m.id))
+      // The upstream catalog response names ~19 models. The panel keeps
+      // per-model quota detail only for ids in the configured catalog, and
+      // drops the rest instead of shipping every upstream entry on each poll.
+      const catalogIds = new Set(configuredModels(quotaConfig ?? {}).map((m) => m.id))
       for (const [id, m] of Object.entries(modelsRaw.models)) {
         if (!catalogIds.has(id)) continue
         const info = m?.quotaInfo
@@ -718,24 +717,14 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
 }
 
 /**
- * The catalog the panel shows. Gemini 3.8 Flash is the only model this account
- * can actually reach: `agy models` lists it (plus effort variants of the same
- * id), and the third-party families are drained — the 3p weekly bucket has read
- * remainingFraction 0 since 2026-10-20, and Google removes Claude/GPT from
- * promotional plans on 2026-11-02. Listing drained models only produces entries
- * that fail on send.
- *
- * The retired entries and a switch-back procedure are parked in
- * `docs/archived-model-catalog-20261020.md` — restoring any of them is a
- * config edit (`models` + `visibleModels` in the profile patch), not a code
- * change.
+ * The panel's catalog is resolved at request time from the configured catalog,
+ * the discovered models and the hiddenModels blacklist (see
+ * resolveModelCatalog in src/provider/config.ts). No model ids are hardcoded
+ * here, so a newly discovered base id reaches the panel without a code or YAML
+ * edit. Quota families below are a display concern only.
  */
-const DEFAULT_CATALOG_MODELS = [
-  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
-  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro' },
-]
 
-/** Quota families the panel renders. Same reasoning as above; see the doc. */
+/** Quota families the panel renders. */
 const DISPLAY_FAMILIES = ['google'] as const
 
 export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDiscovery?: AgyModelDiscovery): () => void {
@@ -904,29 +893,34 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       if (quotaAnswer === undefined) lastQuotaError = 'timeout'
       const quotas = quotaAnswer ?? cachedQuotas
 
-      let discovered = [...DEFAULT_CATALOG_MODELS]
+      const configured = configuredModels(activeConfig)
+      const hiddenModels = overrides.hiddenModels
+      let discoveredModels: ReturnType<typeof configuredModels> = []
+      let catalogSource: string = 'static'
+      let catalogStale = false
+      let catalogWarningCode: string | undefined
       let catalogError: string | null = null
-      if (modelDiscovery) {
+      if (modelDiscovery === undefined) {
+        catalogSource = 'static'
+      } else {
         try {
-          const configured = configuredModels(activeConfig)
           const disc = await withDeadline(modelDiscovery.discover(configured), DISCOVERY_AWAIT_MS)
-          if (disc?.models && disc.models.length > 0) {
-            const set = new Set(discovered.map((m) => m.id))
-            for (const dm of disc.models) {
-              if (!set.has(dm.id)) {
-                discovered.push({ id: dm.id, name: dm.name ?? dm.id })
-              }
-            }
+          if (disc === undefined) {
+            catalogSource = 'unavailable'
+            catalogError = 'model discovery timed out'
+          } else {
+            catalogSource = disc.source
+            catalogStale = disc.stale
+            catalogWarningCode = disc.warningCode
+            catalogError = disc.warning ?? null
+            discoveredModels = disc.models
           }
         } catch (error) {
+          catalogSource = 'unavailable'
           catalogError = error instanceof Error ? error.message : String(error)
         }
       }
-
-      let hidden = overrides.hiddenModels
-      if (hidden.length === 0 && Array.isArray(activeConfig.visibleModels) && activeConfig.visibleModels.length > 0) {
-        hidden = discovered.map((m) => m.id).filter((id) => !activeConfig.visibleModels!.includes(id))
-      }
+      const { catalog, hidden } = resolveModelCatalog(configured, discoveredModels, hiddenModels)
 
       const defaultModel = overrides.defaultModel ?? (activeConfig.model ? normalizeModelId(activeConfig.model) : 'gemini-3.8-flash')
       const defaultEffort = overrides.defaultEffort ?? 'high'
@@ -990,8 +984,14 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
             },
           ],
         },
-        catalog: { source: 'agy models', count: discovered.length, lastError: catalogError },
-        catalogModels: discovered,
+        catalog: {
+          source: catalogSource,
+          count: catalog.length,
+          ...(catalogStale ? { stale: true } : {}),
+          ...(catalogWarningCode === undefined ? {} : { warningCode: catalogWarningCode }),
+          lastError: catalogError,
+        },
+        catalogModels: catalog,
         hiddenModels: hidden,
         bindings: 1,
         lastRun: null,
@@ -1011,9 +1011,22 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
 
       if (key === 'hiddenModels' && Array.isArray(value)) {
         saveOverrides({ hiddenModels: value })
-        const discovered = DEFAULT_CATALOG_MODELS.map((m) => m.id)
-        const visible = discovered.filter((id) => !value.includes(id))
-        const patchError = updateCordisPatch(visible)
+        // visibleModels in cordis.patch.yml is a derived compatibility value,
+        // computed from the real catalog minus the hidden blacklist — never from
+        // a hardcoded two-item list. hiddenModels in runtime-overrides.json is
+        // the only authority consumed by panel, dropdown and generation.
+        const configured = configuredModels(activeConfig)
+        let discoveredModels: ReturnType<typeof configuredModels> = []
+        if (modelDiscovery !== undefined) {
+          try {
+            const disc = await withDeadline(modelDiscovery.discover(configured), DISCOVERY_AWAIT_MS)
+            if (disc !== undefined) discoveredModels = disc.models
+          } catch {
+            // A failed discovery must not block the authoritative write above.
+          }
+        }
+        const { visible } = resolveModelCatalog(configured, discoveredModels, value)
+        const patchError = updateCordisPatch(visible.map(m => m.id))
         if (patchError !== undefined) {
           sendJson(res, 500, { ok: false, key, error: patchError })
           return

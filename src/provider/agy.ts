@@ -87,8 +87,8 @@ import {
   DEFAULT_AGENT,
   DEFAULT_MODEL,
   extractModelEffort,
-  filterVisibleModels,
   normalizeModelId,
+  resolveModelCatalog,
   type AgyRetryableCode,
   type AgyRetryPolicyConfig,
   type Config,
@@ -1187,7 +1187,6 @@ export class AgyAdapter extends LlmAdapter {
   private readonly resolveToolBridge: (() => DshToolBridgeHandle | undefined) | undefined
   private readonly mcpBridgeEnabled: boolean
   private readonly discovery: AgyModelDiscovery | undefined
-  private readonly visibleModels: readonly string[]
   private currentModels: readonly ModelConfig[]
   private modelDiscoveryResult: AgyModelDiscoveryResult | undefined
 
@@ -1196,7 +1195,6 @@ export class AgyAdapter extends LlmAdapter {
     // Normalize default model to base (strip -high/-medium/-low) for effort split
     this.model = normalizeModelId(config.model ?? DEFAULT_MODEL)
     this.models = configuredModels(config).map(m => ({ ...m, id: normalizeModelId(m.id) }))
-    this.visibleModels = (config.visibleModels ?? []).map(normalizeModelId)
     this.toolPolicy = config.toolPolicy === 'agy-owned'
       ? 'agy-owned'
       : config.toolPolicy === 'dsh-owned' ? 'dsh-owned' : 'reject'
@@ -1792,16 +1790,20 @@ export class AgyAdapter extends LlmAdapter {
   }
 
     private async effectiveModels(): Promise<readonly ModelConfig[]> {
+    // hiddenModels in runtime-overrides.json is the only authority for hidden
+    // state; config.visibleModels is a derived value and must not gate new ids.
+    const hiddenModels = readAgyRuntimeOverrides()?.hiddenModels
     if (this.discovery === undefined) {
-      this.currentModels = filterVisibleModels(this.models, this.visibleModels)
+      const { visible } = resolveModelCatalog(this.models, [], hiddenModels)
+      this.currentModels = visible
       this.modelDiscoveryResult = undefined
       return this.currentModels
     }
     const result = await this.discovery.discover(this.models)
-    // result.models already normalized to base via mergeModelCatalog; apply visible filter
-    const filtered = filterVisibleModels(result.models, this.visibleModels)
-    this.currentModels = filtered
-    this.modelDiscoveryResult = { ...result, models: filtered }
+    // result.models already normalized to base via mergeModelCatalog
+    const { visible } = resolveModelCatalog(this.models, result.models, hiddenModels)
+    this.currentModels = visible
+    this.modelDiscoveryResult = { ...result, models: visible }
     return this.currentModels
   }
 
