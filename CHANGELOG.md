@@ -1,4 +1,17 @@
 # Changelog
+## [0.12.6] - 2026-11-14
+
+### Fixed
+
+- **模型名单权威统一**：此前 `visibleModels` 配置与 `runtime-overrides.json` 的 `hiddenModels` 两处都能决定名单，新发现的模型 id 会被旧配置闸门拦掉；现在 `hiddenModels` 是唯一权威，`visibleModels` 改为派生值、不再当闸门（`src/web/router.ts`、`src/provider/agy.ts`、`src/index.ts`）。
+- **模型发现负缓存**：`agy models` 连续失败时此前每轮重新派生子进程；`src/agy/models.ts` 新增失败态跟踪（连续失败计数＋指数冷却 30s 起、封顶 300s＋负缓存快照，标 `stale: true`、来源 `fallback | cache`），冷却窗内直接返回上一份目录；任一次成功即清失败态。并发刷新仍 single-flight。
+- **配置透传**：`src/provider/config.ts` 与 `src/agy/overrides.ts` 把冷却基时、封顶、负缓存 TTL 三参从配置层接到发现器。
+- **回归测试**：`tests/models.test.mjs`、`tests/web-router.test.mjs`、`tests/config.test.mjs` 钉住上述行为。
+
+### Changed
+
+- 版本升至 0.12.6。
+
 
 ## [0.12.5] - 2026-11-06
 
