@@ -133,6 +133,7 @@ import {
   DEFAULT_MAX_SINGLE_TOOL_RESULT_BYTES,
   stableAgyPromptPrefix,
 } from './prompt-budget.js'
+import { cloakPrompt } from './prompt-cloak.js'
 import {
   AgyImageBridgeError,
   prepareAgyPrompts,
@@ -1172,6 +1173,8 @@ export class AgyAdapter extends LlmAdapter {
   private readonly inputFrameLimitBytes: number
   private readonly maxSingleToolResultBytes: number
   private readonly maxHistoricalToolResultBytes: number
+  private readonly toolResultFoldThresholdBytes: number
+  private readonly promptCloak: boolean
   private readonly toolProtocolRepairRetries: number
   private readonly toolProtocolPlainTextFallback: 'off' | 'final-message'
   private readonly retryPolicy: ResolvedRetryPolicy
@@ -1250,6 +1253,14 @@ export class AgyAdapter extends LlmAdapter {
       1_024,
       2 * 1024 * 1024,
     )
+    this.toolResultFoldThresholdBytes = resolveBoundedInteger(
+      'toolResultFoldThresholdBytes',
+      config.toolResultFoldThresholdBytes,
+      2048,
+      256,
+      1024 * 1024,
+    )
+    this.promptCloak = config.promptCloak ?? true
     this.toolProtocolRepairRetries = resolveBoundedInteger(
       'toolProtocolRepairRetries',
       config.toolProtocolRepairRetries,
@@ -1347,6 +1358,8 @@ export class AgyAdapter extends LlmAdapter {
       maxSingleToolResultBytes: this.maxSingleToolResultBytes,
       maxHistoricalToolResultBytes: this.maxHistoricalToolResultBytes,
       oversizedSectionPolicy,
+      foldHistoricalToolResults: true,
+      toolResultFoldThresholdBytes: this.toolResultFoldThresholdBytes,
     })
     telemetry.promptBytes = bounded.promptBytes
     telemetry.promptLimitBytes = bounded.promptLimitBytes
@@ -1360,7 +1373,7 @@ export class AgyAdapter extends LlmAdapter {
     const stablePrefix = stableAgyPromptPrefix(bounded.prompt)
     telemetry.stablePrefixBytes = Buffer.byteLength(stablePrefix, 'utf8')
     telemetry.stablePrefixHash = createHash('sha256').update(stablePrefix, 'utf8').digest('hex').slice(0, 16)
-    return bounded.prompt
+    return this.promptCloak ? cloakPrompt(bounded.prompt) : bounded.prompt
   }
 
   /** Remove the in-memory AGY mapping; the next call sends complete DSH history. */

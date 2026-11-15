@@ -38,6 +38,13 @@ export interface ToolProjectionOptions {
    * hands AGY the UI/memory tools and silently drops every file and shell tool.
    */
   readonly scope?: unknown
+  /**
+   * When true (and allowlist is not provided), projects only base tools plus any explicitly mounted tools,
+   * along with the discovery tool descriptor, keeping prompt schemas lean.
+   */
+  readonly adaptiveBaseOnly?: boolean
+  /** Tool names explicitly mounted in the current session. */
+  readonly mountedTools?: ReadonlySet<string>
 }
 
 export interface ToolProjectionResult {
@@ -67,6 +74,39 @@ export const NEVER_PROJECTED_TOOLS: ReadonlySet<string> = new Set([
   'acp_status',
   'acp_cache',
 ])
+
+/**
+ * Test whether a tool name represents an essential base execution or file operation tool.
+ * Evaluates dynamically across arbitrary host environments without tying to specific plugins.
+ */
+export function isBaseDshTool(name: string): boolean {
+  if (NEVER_PROJECTED_TOOLS.has(name)) return false
+  const lower = name.toLowerCase()
+  if (/^(ops_bash|pwsh|bash|cmd|exec|terminal|command|run_command|run_code|execute)$/.test(lower)) return true
+  if (/^(ops_inspect_local_file|ops_read_files|ops_grep|read|cat|grep|glob|find|search_files)$/.test(lower)) return true
+  if (/^(write|edit|replace|patch)$/.test(lower)) return true
+  return false
+}
+
+export const DISCOVER_TOOLS_DESCRIPTOR: McpToolDescriptor = Object.freeze({
+  name: 'dsh_discover_tools',
+  description: 'Search available DSH tools in the host registry and mount them into the session on demand.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'Optional keyword to search across available tool names and descriptions.',
+      },
+      mount: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional array of specific tool names to mount into the session immediately.',
+      },
+    },
+    additionalProperties: false,
+  },
+})
 
 const FALLBACK_SCHEMA: Record<string, unknown> = Object.freeze({
   type: 'object',
@@ -181,6 +221,14 @@ export function projectDshTools(
       excluded.push(name)
       continue
     }
+    if (options.adaptiveBaseOnly === true && allow === undefined) {
+      const isBase = isBaseDshTool(name)
+      const isMounted = options.mountedTools?.has(name) === true
+      if (!isBase && !isMounted) {
+        excluded.push(name)
+        continue
+      }
+    }
     if (tools.length >= maxTools) {
       excluded.push(name)
       continue
@@ -203,6 +251,9 @@ export function projectDshTools(
         : description,
       inputSchema: parameters,
     })
+  }
+  if (options.adaptiveBaseOnly === true && allow === undefined && tools.length < maxTools) {
+    tools.push(DISCOVER_TOOLS_DESCRIPTOR)
   }
   tools.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
   return { tools, excluded }

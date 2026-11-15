@@ -186,6 +186,9 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     // MCP tool bridge: on by default, empty allowlist means every DSH tool
     mcpBridge: true,
     mcpToolAllowlist: [],
+    mcpAdaptiveBaseOnly: true,
+    toolResultFoldThresholdBytes: 2048,
+    promptCloak: true,
     agent: 'dsh-agy-mcp-executor',
     agentPreset: 'workspace-write',
     workspaceRoot: 'C:\\workspace',

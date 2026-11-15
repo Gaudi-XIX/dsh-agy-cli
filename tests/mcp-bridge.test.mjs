@@ -651,3 +651,167 @@ test('the bridge falls back to agentsLookup when sessionController rejects with 
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('tool projection in adaptiveBaseOnly mode projects only base tools and discovery', () => {
+  const projection = projectDshTools({
+    schemas: () => [
+      { name: 'pwsh', description: 'p', parameters: { type: 'object' } },
+      { name: 'read', description: 'r', parameters: { type: 'object' } },
+      { name: 'write', description: 'w', parameters: { type: 'object' } },
+      { name: 'wechat_send', description: 'ws', parameters: { type: 'object' } },
+      { name: 'schedule_create', description: 'sc', parameters: { type: 'object' } },
+    ],
+  }, { adaptiveBaseOnly: true })
+  assert.deepEqual(projection.tools.map(tool => tool.name), ['dsh_discover_tools', 'pwsh', 'read', 'write'])
+  assert.ok(projection.excluded.includes('wechat_send'))
+  assert.ok(projection.excluded.includes('schedule_create'))
+})
+
+test('tool projection in adaptiveBaseOnly mode honors mounted tools', () => {
+  const projection = projectDshTools({
+    schemas: () => [
+      { name: 'pwsh', description: 'p', parameters: { type: 'object' } },
+      { name: 'read', description: 'r', parameters: { type: 'object' } },
+      { name: 'wechat_send', description: 'ws', parameters: { type: 'object' } },
+    ],
+  }, { adaptiveBaseOnly: true, mountedTools: new Set(['wechat_send']) })
+  assert.deepEqual(projection.tools.map(tool => tool.name), ['dsh_discover_tools', 'pwsh', 'read', 'wechat_send'])
+})
+
+test('the bridge supports dsh_discover_tools and on-demand tool mounting', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agy-mcp-discover-'))
+  try {
+    const webServer = fakeWebServer()
+    const executions = []
+    const bridge = await startDshMcpBridge({
+      webServer,
+      adaptiveBaseOnly: true,
+      tools: {
+        schemas: () => [
+          { name: 'pwsh', description: 'Terminal execution', parameters: { type: 'object' } },
+          { name: 'read', description: 'Read files', parameters: { type: 'object' } },
+          { name: 'wechat_send', description: 'Send wechat message', parameters: { type: 'object', properties: { msg: { type: 'string' } } } },
+        ],
+        async execute(exec) {
+          executions.push(exec)
+          return batchOf(exec, { isError: false, value: 'sent' })
+        },
+      },
+      serverVersion: '1.0.0',
+      agyConfigRoot: root,
+      agySettingsRoot: root,
+    })
+
+    const path = new URL(bridge.url).pathname
+    const list1 = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+      params: {},
+    }))
+    assert.equal(list1.status, 200)
+    const initialList = JSON.parse(list1.body).result
+    const toolNames = initialList.tools.map(t => t.name)
+    assert.deepEqual(toolNames, ['dsh_discover_tools', 'pwsh', 'read'])
+
+    // Query discovery and mount wechat_send
+    const call1 = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'dsh_discover_tools',
+        arguments: { query: 'wechat', mount: ['wechat_send'] },
+      },
+    }))
+    assert.equal(call1.status, 200)
+    const discoverResult = JSON.parse(call1.body).result
+    assert.equal(discoverResult.isError, false)
+    const payload = JSON.parse(discoverResult.content[0].text)
+    assert.equal(payload.matchingCount, 1)
+    assert.deepEqual(payload.newlyMounted, ['wechat_send'])
+
+    // Next list shows wechat_send mounted
+    const list2 = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/list',
+      params: {},
+    }))
+    assert.equal(list2.status, 200)
+    const secondList = JSON.parse(list2.body).result
+    assert.ok(secondList.tools.some(t => t.name === 'wechat_send'))
+
+    // Now call wechat_send through DSH
+    const call2 = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: {
+        name: 'wechat_send',
+        arguments: { msg: 'hello' },
+      },
+    }))
+    assert.equal(call2.status, 200)
+    assert.equal(JSON.parse(call2.body).result.isError, false)
+    assert.equal(executions.length, 1)
+
+    await bridge.dispose()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('the bridge auto-mounts an unprojected host tool on call', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agy-mcp-automount-'))
+  try {
+    const webServer = fakeWebServer()
+    const executions = []
+    const bridge = await startDshMcpBridge({
+      webServer,
+      adaptiveBaseOnly: true,
+      tools: {
+        schemas: () => [
+          { name: 'pwsh', description: 'Terminal execution', parameters: { type: 'object' } },
+          { name: 'special_action', description: 'Special action', parameters: { type: 'object' } },
+        ],
+        async execute(exec) {
+          executions.push(exec)
+          return batchOf(exec, { isError: false, value: 'done' })
+        },
+      },
+      serverVersion: '1.0.0',
+      agyConfigRoot: root,
+      agySettingsRoot: root,
+    })
+
+    const path = new URL(bridge.url).pathname
+    // Calling special_action directly auto-mounts it and executes
+    const call1 = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'special_action',
+        arguments: {},
+      },
+    }))
+    assert.equal(call1.status, 200)
+    assert.equal(JSON.parse(call1.body).result.isError, false)
+    assert.equal(executions.length, 1)
+
+    // And now it is projected in listTools
+    const list = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    }))
+    assert.equal(list.status, 200)
+    assert.ok(JSON.parse(list.body).result.tools.some(t => t.name === 'special_action'))
+
+    await bridge.dispose()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

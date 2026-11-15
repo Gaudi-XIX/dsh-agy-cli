@@ -349,6 +349,7 @@ export function apply(ctx: Context, config: ConfigType): void {
           sessionControllerLookup: () => ctx.get('sessionController') as DshSessionControllerLike | undefined,
           agentsLookup: () => ctx.get('agents') as { get(sessionId: unknown): unknown } | undefined,
           ...((activeConfig.mcpToolAllowlist ?? []).length > 0 ? { toolAllowlist: activeConfig.mcpToolAllowlist } : {}),
+          adaptiveBaseOnly: activeConfig.mcpAdaptiveBaseOnly ?? true,
           serverVersion: '0.0.0',
           logger: message => {
             logger.info(message)

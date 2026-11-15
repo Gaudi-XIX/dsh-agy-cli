@@ -4,6 +4,7 @@ import {
   AgyPromptBudgetError,
   boundAgyPrompt,
   stableAgyPromptPrefix,
+  foldToolResultText,
 } from '../lib/provider/prompt-budget.js'
 import {
   encodeAgyUserMessage,
@@ -229,4 +230,41 @@ test('prompt budget reports a stable error when non-tool prompt content cannot f
       && error.actualBytes > error.limitBytes
       && error.message.includes('bytes'),
   )
+})
+
+test('foldToolResultText compresses verbose multi-line output with summary marker', () => {
+  const lines = Array.from({ length: 50 }, (_, i) => `line ${i + 1}: detailed compilation or test log entry`)
+  const rawText = lines.join('\n')
+  const folded = foldToolResultText(rawText, 500, 5, 5)
+  assert.equal(folded.folded, true)
+  assert.ok(folded.text.includes('line 1:'))
+  assert.ok(folded.text.includes('line 5:'))
+  assert.ok(folded.text.includes('line 46:'))
+  assert.ok(folded.text.includes('line 50:'))
+  assert.ok(folded.text.includes('FOLDED: 40 lines'))
+  assert.ok(Buffer.byteLength(folded.text, 'utf8') < Buffer.byteLength(rawText, 'utf8'))
+})
+
+test('boundAgyPrompt folds verbose historical tool results while preserving newest', () => {
+  const verboseOutput = Array.from({ length: 60 }, (_, i) => `npm test step ${i + 1} pass`).join('\n')
+  const prompt = [
+    '=== SYSTEM ===\nFollow the instructions.',
+    `=== USER ===\n[DSH TOOL RESULT]\n${verboseOutput}`,
+    '=== ASSISTANT ===\nI examined the tests, now running second step.',
+    `=== USER ===\n[DSH TOOL RESULT]\nLATEST_RESULT_LINE_1\n${verboseOutput}`,
+    '=== USER ===\nWhat is the status?',
+  ].join('\n\n')
+
+  const bounded = boundAgyPrompt(prompt, {
+    maxFrameBytes: 64 * 1024,
+    maxPromptBytes: 32 * 1024,
+    foldHistoricalToolResults: true,
+    toolResultFoldThresholdBytes: 500,
+  })
+
+  // Historical result must be folded
+  assert.match(bounded.prompt, /\[\.\.\. FOLDED: \d+ lines/)
+  // Newest tool result must retain its content or head
+  assert.match(bounded.prompt, /LATEST_RESULT_LINE_1/)
+  assert.match(bounded.prompt, /What is the status\?/)
 })

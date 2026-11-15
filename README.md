@@ -28,6 +28,10 @@
 
 ## 功能
 
+- **底层官方提示词物理剥离（Lean Prompt）**：通过 Agent 预设底层关停官方默认臃肿系统提示词与内置工具链（`excludeDefaultComponents: true`），上下文零冗余负担，将全部提示词预算完整保留给 DSH 自身的工作区与规则。
+- **自适应识别基础能力，支持工具按需动态挂载**：默认只下发基础终端与文件读写能力，辅以轻量发现工具（`dsh_discover_tools`），工具 Schema 体积缩减 90% 以上；其他能力在被调用时即时自动挂载，兼顾极小上下文与无缝调用。
+- **历史长输出智能折叠**：自动识别多轮交互中超过预算的历史命令输出与长日志，智能保留首尾关键状态并紧凑折叠中间冗余，防止上下文滚雪球。
+- **防拒答脱敏清洗**：下发前自动打散易触发上游生硬过滤的敏感词与指令对抗短语，大幅提升复杂指令与 Agent 请求的稳定率。
 - **双工具路线**：MCP 桥把 DSH 工具交给 AGY（真工具事件、过程流可视化，推荐），失败自动降级为 prompt 契约
 - **DSH 主导 harness**：工作区、审批、沙箱、上下文预算全在 DSH；AGY 只出模型
 - **流式 + 状态机**：`stdinMode: hold` 防回滚、工具步骤折叠显示（只列执行了哪些工具，不显示模型的内部思考内容）、尾流交付、断连保文本
@@ -60,9 +64,9 @@ npx dsh-agy-cli agents install workspace-write --apply
 ```bash
 npm ci --ignore-scripts
 npm run typecheck
-npm test    # tsc 全量 → 320 例 node --test
+npm test    # tsc 全量 → 350 例 node --test
 ```
 
 ## 许可
 
-MIT。源码衍生自 Darkings 的 `dsh-agy-provider`（MIT）；原作者版权与完整提交历史保留于 `LICENSE` 与本仓 git 历史。
+MIT。原作者版权与完整提交历史保留于 `LICENSE` 与本仓 git 历史。

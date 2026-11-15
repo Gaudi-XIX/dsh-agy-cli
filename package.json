@@ -5,7 +5,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Run the locally authenticated AGY CLI as a DSH model provider. Official-binary-only transport; tool execution, approvals and sandbox stay in DSH.",
+  "description": "Run the locally authenticated AGY CLI as a DSH model provider. Official-binary-only transport; lean prompts, adaptive tool projection, and DSH-governed security boundary.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -108,7 +108,9 @@
     "agy",
     "antigravity",
     "provider",
-    "cli"
+    "cli",
+    "lean-prompt",
+    "tool-projection"
   ],
   "author": "",
   "bugs": {

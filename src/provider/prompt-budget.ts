@@ -54,6 +54,16 @@ export interface AgyPromptBudgetOptions {
    * what a summary needs, and failing them outright only stalls the panel.
    */
   oversizedSectionPolicy?: 'reject' | 'clamp'
+  /**
+   * Whether to fold verbose historical tool result segments into compact head/tail summaries.
+   * Default: false (raw truncation).
+   */
+  foldHistoricalToolResults?: boolean
+  /**
+   * Byte threshold above which a tool result output is folded.
+   * Default: 2048 (2 KiB).
+   */
+  toolResultFoldThresholdBytes?: number
 }
 
 export interface AgyPromptBudgetResult {
@@ -329,15 +339,68 @@ function replaceSegments(
   return output + prompt.slice(cursor)
 }
 
+/**
+ * Intelligently fold verbose tool results (such as compiler outputs, test runners, diffs)
+ * by preserving the leading head lines and trailing tail lines, while compressing intermediate
+ * lines into a compact summary marker.
+ */
+export function foldToolResultText(
+  text: string,
+  thresholdBytes = 2048,
+  headLines = 8,
+  tailLines = 8,
+): { text: string; folded: boolean } {
+  if (byteLength(text) <= thresholdBytes) return { text, folded: false }
+
+  const lines = text.split('\n')
+  if (lines.length <= headLines + tailLines + 2) {
+    const headBytes = Math.floor(thresholdBytes / 2)
+    const tailBytes = Math.floor(thresholdBytes / 2)
+    const prefix = prefixForBytes(text, headBytes)
+    const suffix = suffixForBytes(text, tailBytes)
+    const omittedBytes = byteLength(text) - byteLength(prefix) - byteLength(suffix)
+    return {
+      text: `${prefix}\n[... FOLDED: ${omittedBytes} bytes omitted to preserve context ...]\n${suffix}`,
+      folded: true,
+    }
+  }
+
+  const head = lines.slice(0, headLines).join('\n')
+  const tail = lines.slice(-tailLines).join('\n')
+  const omittedLines = lines.length - headLines - tailLines
+  const omittedBytes = byteLength(text) - byteLength(head) - byteLength(tail)
+  return {
+    text: `${head}\n[... FOLDED: ${omittedLines} lines (${omittedBytes} bytes) omitted to preserve context ...]\n${tail}`,
+    folded: true,
+  }
+}
+
 function truncateToolResults(
   prompt: string,
   maxSingleToolResultBytes: number,
   maxHistoricalToolResultBytes: number,
+  options: {
+    foldHistoricalToolResults?: boolean | undefined
+    toolResultFoldThresholdBytes?: number | undefined
+  } = {},
 ): { prompt: string; truncatedCount: number } {
   let candidate = prompt
   let truncatedCount = 0
   let segments = collectToolResultSegments(candidate)
   if (segments.length === 0) return { prompt: candidate, truncatedCount }
+
+  if (options.foldHistoricalToolResults === true) {
+    const threshold = options.toolResultFoldThresholdBytes ?? 2048
+    const foldReplacements = segments.map((segment, index) => {
+      const isHistorical = index < segments.length - 1
+      const effectiveThreshold = isHistorical ? threshold : Math.max(threshold * 4, 8192)
+      const folded = foldToolResultText(segment.text, effectiveThreshold)
+      if (folded.folded) truncatedCount += 1
+      return folded.text
+    })
+    candidate = replaceSegments(candidate, segments, foldReplacements)
+    segments = collectToolResultSegments(candidate)
+  }
 
   const replacements = segments.map(segment => {
     const replacement = truncateUtf8(segment.text, maxSingleToolResultBytes)
@@ -705,6 +768,10 @@ export function boundAgyPrompt(
     prompt,
     maxSingleToolResultBytes,
     maxHistoricalToolResultBytes,
+    {
+      foldHistoricalToolResults: options.foldHistoricalToolResults,
+      toolResultFoldThresholdBytes: options.toolResultFoldThresholdBytes,
+    },
   )
   const history = compactSerializedHistory(
     compacted.prompt,

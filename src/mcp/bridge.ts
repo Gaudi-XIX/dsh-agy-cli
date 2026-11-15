@@ -27,6 +27,8 @@ import {
   projectDshTools,
   validateToolArguments,
   NEVER_PROJECTED_TOOLS,
+  DISCOVER_TOOLS_DESCRIPTOR,
+  isBaseDshTool,
   type DshToolRegistryLike,
   type ToolProjectionResult,
 } from './tool-projection.js'
@@ -93,6 +95,11 @@ export interface DshMcpBridgeOptions {
   readonly agentsLookup?: (() => { get(sessionId: unknown): unknown } | undefined) | undefined
   /** Optional allowlist of DSH tool names exposed to AGY. */
   readonly toolAllowlist?: readonly string[] | undefined
+  /**
+   * Adaptive base-tools mode: when true, projects only base terminal and file operations along
+   * with dynamic discovery, keeping MCP schemas minimal while enabling on-demand tool mounting.
+   */
+  readonly adaptiveBaseOnly?: boolean | undefined
   readonly serverVersion: string
   /** Overrides the AGY MCP-config root; tests pass a temporary directory. */
   readonly agyConfigRoot?: string | undefined
@@ -158,6 +165,18 @@ function resultToCallResult(result: DshToolExecutionResultLike): McpCallResult {
  * reason instead of throwing, so the provider can fall back to the prompt
  * contract path when the carrier or the tool registry is not available.
  */
+const sessionMountedTools = new Map<string, Set<string>>()
+
+function getSessionMountedTools(sessionHandle?: string): Set<string> {
+  const key = sessionHandle ?? 'default'
+  let set = sessionMountedTools.get(key)
+  if (set === undefined) {
+    set = new Set<string>()
+    sessionMountedTools.set(key, set)
+  }
+  return set
+}
+
 export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<DshMcpBridge> {
   const inactive = (reason: string): DshMcpBridge => {
     options.logger?.(`dsh mcp bridge inactive: ${reason}`)
@@ -194,7 +213,7 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
       instructions: INSTRUCTIONS,
       listTools: async (sessionHandle) => {
         const agent = await agentOf(options, sessionHandle)
-        const projection = projectVisibleTools(options, agent)
+        const projection = projectVisibleTools(options, agent, sessionHandle)
         const dropped = projection.excluded.filter(name => !NEVER_PROJECTED_TOOLS.has(name))
         options.logger?.(
           `dsh mcp bridge: listTools session="${sessionHandle}" agent=${agent === undefined ? 'none' : 'resolved'} tools=${projection.tools.length}${dropped.length === 0 ? '' : ` dropped=${dropped.join(',')}`}`,
@@ -241,6 +260,7 @@ export async function startDshMcpBridge(options: DshMcpBridgeOptions): Promise<D
     url: endpoint.url,
     setSession: handle => endpoint.setSession(handle),
     dispose: async () => {
+      sessionMountedTools.clear()
       endpoint.dispose()
       await unregisterAgyMcpServer({
         ...(options.agyConfigRoot === undefined ? {} : { configRoot: options.agyConfigRoot }),
@@ -360,6 +380,49 @@ async function executeDshTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<McpCallResult> {
+  if (name === DISCOVER_TOOLS_DESCRIPTOR.name) {
+    const agent = await agentOf(options, sessionHandle)
+    const fullProjection = projectDshTools(options.tools, { scope: agent })
+    const record = (typeof args === 'object' && args !== null && !Array.isArray(args)) ? args : {}
+    const query = typeof record.query === 'string' ? record.query.trim().toLowerCase() : ''
+    const requestedMount = Array.isArray(record.mount)
+      ? record.mount.filter((item): item is string => typeof item === 'string')
+      : []
+
+    const mountedSet = getSessionMountedTools(sessionHandle)
+    const newlyMounted: string[] = []
+    for (const toolName of requestedMount) {
+      if (fullProjection.tools.some(t => t.name === toolName)) {
+        mountedSet.add(toolName)
+        newlyMounted.push(toolName)
+      }
+    }
+
+    let matched = fullProjection.tools
+    if (query.length > 0) {
+      matched = fullProjection.tools.filter(t =>
+        t.name.toLowerCase().includes(query) || (typeof t.description === 'string' && t.description.toLowerCase().includes(query)),
+      )
+    }
+
+    const payload = {
+      totalAvailable: fullProjection.tools.length,
+      matchingCount: matched.length,
+      currentlyMounted: Array.from(mountedSet).sort(),
+      newlyMounted,
+      tools: matched.map(t => ({
+        name: t.name,
+        description: t.description,
+        mounted: isBaseDshTool(t.name) || mountedSet.has(t.name),
+      })),
+    }
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+      isError: false,
+    }
+  }
+
   // Bridge-level gates first, independent of agent resolution: a tool the
   // projection layer refuses to show must never execute through this bridge.
   // Without this, a session whose agent could not be resolved (subagent
@@ -373,26 +436,25 @@ async function executeDshTool(
     && !options.toolAllowlist.includes(name)) {
     return { content: [{ type: 'text', text: `unknown tool "${name}"` }], isError: true }
   }
-  // No resolvable agent means fail closed, never silently open: the call still
-  // goes through `tools.execute()` so the host guard chain sees it, but the host
-  // itself decides what an unscoped call may do.
   const agent = await agentOf(options, sessionHandle)
-  const projected = projectVisibleTools(options, agent).tools
-  const descriptor = projected.find(entry => entry.name === name)
+  let projected = projectVisibleTools(options, agent, sessionHandle).tools
+  let descriptor = projected.find(entry => entry.name === name)
+  if (descriptor === undefined && options.adaptiveBaseOnly === true) {
+    const full = projectDshTools(options.tools, { scope: agent }).tools
+    const fullMatch = full.find(entry => entry.name === name)
+    if (fullMatch !== undefined) {
+      getSessionMountedTools(sessionHandle).add(name)
+      projected = projectVisibleTools(options, agent, sessionHandle).tools
+      descriptor = projected.find(entry => entry.name === name)
+    }
+  }
   if (descriptor === undefined) {
-    // Only assert "unknown tool" when the projection is the one AGY was shown.
-    // With no resolvable agent the scoped list degenerates to the global view,
-    // so a legitimate file tool can be missing from it; that call still has to
-    // reach the host, which denies it on its own terms instead of us inventing a
-    // rejection for a tool we merely failed to see.
     if (agent !== undefined) {
       return { content: [{ type: 'text', text: `unknown tool "${name}"` }], isError: true }
     }
   } else {
     const problems = validateToolArguments(descriptor.inputSchema, args)
     if (problems.length > 0) {
-      // Wording mirrors the host's own rejection so AGY sees one consistent
-      // failure shape whether the bridge or DSH catches the call.
       return { content: [{ type: 'text', text: `invalid arguments: ${problems.join('; ')}` }], isError: true }
     }
   }
@@ -441,10 +503,14 @@ function settledResultOf(
 function projectVisibleTools(
   options: DshMcpBridgeOptions,
   agent: unknown,
+  sessionHandle?: string,
 ): ToolProjectionResult {
+  const mounted = sessionHandle === undefined ? undefined : sessionMountedTools.get(sessionHandle)
   return projectDshTools(options.tools, {
     ...(options.toolAllowlist === undefined ? {} : { allowlist: options.toolAllowlist }),
     scope: agent,
+    ...(options.adaptiveBaseOnly === undefined ? {} : { adaptiveBaseOnly: options.adaptiveBaseOnly }),
+    ...(mounted === undefined ? {} : { mountedTools: mounted }),
   })
 }
 
