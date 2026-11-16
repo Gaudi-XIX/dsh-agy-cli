@@ -3,8 +3,8 @@
 
 ### Added
 
-- **基础工具自适应与工具按需动态挂载**：工具投影层新增 `adaptiveBaseOnly` 与 `mountedTools` 两个选项，默认只向 AGY 下发基础执行与文件读写工具（由 `isBaseDshTool()` 按宿主注册表动态判定，不绑具体插件），并附一个轻量发现工具 `dsh_discover_tools`；其余工具在模型调用时即时挂载（`src/mcp/tool-projection.ts`、`src/mcp/bridge.ts`）。
-- **历史长输出智能折叠**：新增 `foldHistoricalToolResults` 与 `toolResultFoldThresholdBytes`（默认 2 KiB）两个配置，把超预算的历史工具输出折成首尾摘要，替代原先的硬截断（`src/provider/prompt-budget.ts`、`src/provider/config.ts`）。
+- **基础工具自适应与工具按需动态挂载**：工具投影层新增 `adaptiveBaseOnly` 与 `mountedTools` 两个选项，默认只向 AGY 下发基础执行与文件读写工具（`isBaseDshTool()` 按工具名正则判定，不绑具体插件），并附一个轻量发现工具 `dsh_discover_tools`；其余工具在模型调用时即时挂载（`src/mcp/tool-projection.ts`、`src/mcp/bridge.ts`）。
+- **历史长输出智能折叠**：新增配置项 `toolResultFoldThresholdBytes`（默认 2048 字节），配合 `foldHistoricalToolResults` 选项（主回合固定开启）把超阈值的历史工具输出折成首尾摘要，替代原先的硬截断（`src/provider/prompt-budget.ts`、`src/provider/config.ts`、`src/provider/agy.ts`）。
 - **下发前脱敏清洗**：新增 `cloakPrompt()`，把上游钝过滤会命中的对抗式指令短语改写为同义表述，并对外部 agent 关键词插入零宽字符打散字面匹配；`breakCompetitorKeywords` 与 `softenOverrideDirectives` 两个开关默认开启（`src/provider/prompt-cloak.ts`、`src/provider/agy.ts`）。
 - **回归测试**：`tests/mcp-bridge.test.mjs`、`tests/prompt-budget.test.mjs`、`tests/prompt-cloak.test.mjs`、`tests/config.test.mjs`。
 
