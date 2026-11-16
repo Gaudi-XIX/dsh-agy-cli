@@ -32,6 +32,11 @@ Evidence for the endpoint semantics and identity-header behaviour: `docs/prod-ge
 - **Antigravity Cloak / prompt desensitization**: Softens upstream trigger patterns and agent signatures before sending, maximizing stability.
 - **Dual tool paths**: MCP bridge surfaces DSH tools to AGY (real tool events, visualized transcript, recommended); falls back to prompt contract automatically on bridge failure.
 - **DSH owns harness**: Workspaces, approvals, sandboxing, and context limits 100% inside DSH.
+- **Streaming + state machine**: `stdinMode: hold` means text already delivered is never rolled back; tool steps collapse into a step list (only which tools ran, never the model's internal reasoning); the tail streams as it arrives; a dropped connection keeps the text already delivered.
+- **Session management + history fingerprint chain**: `resume` and `full` modes; after each successful turn the plugin records a DSH history fingerprint and compares the prefix locally before `resume`. If history was edited, compressed or truncated, the stale session is discarded and rebuilt from full history, so a delta prompt never lands on outdated context. Dead sessions replay automatically; the session map is on disk and can be moved.
+- **Image input (experimental)**: attachments land on disk through the image bridge and are viewed by a minimal-permission `view_file` agent.
+- **Quota panel & credential keep-alive**: loopback-only; the panel shows the real two-window quota, and a token close to expiry triggers one renewal through the official CLI.
+- **Security hardening**: prototype-pollution guard, MCP bridge gate, loopback-only panel with atomic writes, credential redaction — all backed by tests.
 
 ## Install
 
