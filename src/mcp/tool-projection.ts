@@ -84,7 +84,7 @@ export function isBaseDshTool(name: string): boolean {
   const lower = name.toLowerCase()
   if (/^(ops_bash|pwsh|bash|cmd|exec|terminal|command|run_command|run_code|execute)$/.test(lower)) return true
   if (/^(ops_inspect_local_file|ops_read_files|ops_grep|read|cat|grep|glob|find|search_files)$/.test(lower)) return true
-  if (/^(write|edit|replace|patch)$/.test(lower)) return true
+  if (/^(ops_write_file|ops_edit_file|write|edit|replace|patch)$/.test(lower)) return true
   return false
 }
 

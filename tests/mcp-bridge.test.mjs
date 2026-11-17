@@ -678,6 +678,33 @@ test('tool projection in adaptiveBaseOnly mode honors mounted tools', () => {
   assert.deepEqual(projection.tools.map(tool => tool.name), ['dsh_discover_tools', 'pwsh', 'read', 'wechat_send'])
 })
 
+test('tool projection preserves both ops tools and raw fallback tools, keeping subagent in drawer', () => {
+  const projection = projectDshTools({
+    schemas: () => [
+      { name: 'ops_bash', description: 'b', parameters: { type: 'object' } },
+      { name: 'ops_read_files', description: 'r', parameters: { type: 'object' } },
+      { name: 'ops_write_file', description: 'w', parameters: { type: 'object' } },
+      { name: 'ops_edit_file', description: 'e', parameters: { type: 'object' } },
+      { name: 'pwsh', description: 'p', parameters: { type: 'object' } },
+      { name: 'read', description: 'r', parameters: { type: 'object' } },
+      { name: 'write', description: 'w', parameters: { type: 'object' } },
+      { name: 'subagent', description: 'sa', parameters: { type: 'object' } },
+    ],
+  }, { adaptiveBaseOnly: true })
+  // subagent must stay in drawer (excluded), ops and raw base tools projected
+  assert.ok(projection.excluded.includes('subagent'))
+  assert.deepEqual(projection.tools.map(tool => tool.name), [
+    'dsh_discover_tools',
+    'ops_bash',
+    'ops_edit_file',
+    'ops_read_files',
+    'ops_write_file',
+    'pwsh',
+    'read',
+    'write',
+  ])
+})
+
 test('the bridge supports dsh_discover_tools and on-demand tool mounting', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agy-mcp-discover-'))
   try {

@@ -137,3 +137,18 @@
 - [x] npm Trusted Publishing workflow 成功完成 `npm publish --access public`；run `32230568514`。
 - [x] registry 回读确认 `dsh-agy-cli@0.6.1` 与 `latest=0.6.1`，tarball 可访问。
 - [x] 全新 DSH Web/headless profile 安装 `0.6.1`，确认 loader 不再出现 `cannot get property "attachments" without inject`，并完成 cleanup；`quotaUsed=false`。
+
+## `0.13.1` subagent 白名单修复版
+
+### 源码与本地门禁
+
+- [x] `src/mcp/tool-projection.ts:87` 基础工具正则补入 `ops_write_file`、`ops_edit_file`；`agents/dsh-agy-mcp-executor.md` 放开经 DSH MCP 的 subagent 委托；`tests/mcp-bridge.test.mjs` 新增回归用例。
+- [x] `package.json` 与 `package-lock.json` 版本 bump 到 `0.13.1`，未复用 `0.13.0`（0.13.0 已发 npm／tag／Release）。
+- [x] 仓库内 `agents/dsh-agy-mcp-executor.md` 与生效副本 `C:\Users\toast\.gemini\antigravity-cli\gemini-root-config\agents\dsh-agy-mcp-executor.md` sha256 一致。
+- [x] `npm run verify`（typecheck + 全量 tests + `npm pack --dry-run`）与 `git diff --check` 通过。
+
+### Trusted Publishing 与 registry（待用户点名后执行）
+
+- [ ] 创建并推送精确 `v0.13.1` tag（不复用 `v0.13.0`）。
+- [ ] `npm publish --access public` 成功，回读 registry `latest=0.13.1`。
+- [ ] GitHub Release `v0.13.1` 创建并置 Latest。

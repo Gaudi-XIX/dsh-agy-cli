@@ -1,4 +1,19 @@
 # Changelog
+## [0.13.1] - 2026-11-18
+
+### Fixed
+
+- **工具投影补齐 ops 文件工具**：`isBaseDshTool()` 的基础工具正则补入 `ops_write_file`、`ops_edit_file`，此前只认 `write|edit|replace|patch`，导致 MCP 环境下两个 ops 写/改文件工具被误归入按需挂载抽屉（`src/mcp/tool-projection.ts:87`）。
+- **执行体说明放开经 DSH MCP 的 subagent 委托**：`agents/dsh-agy-mcp-executor.md` 改写「不使用内置组件」段——排除的只是 AGY 自带工具、直连命令、内置联网与 AGY 原生 subagent；所有动作（含 subagent、session dispatch、专用工具）统一经 DSH MCP server（`dsh`）执行，未在初始 schema 内的工具由 bridge 按需自动挂载。旧措辞会把经 DSH MCP 的 subagent 委托一并禁掉。
+
+### Added
+
+- **回归测试**：`tests/mcp-bridge.test.mjs` 新增用例，断言 ops 工具与 raw fallback 工具同时投影、`subagent` 保留在抽屉（`projection.excluded`）。
+
+### Changed
+
+- 版本升至 0.13.1。
+
 ## [0.13.0] - 2026-11-16
 
 ### Added

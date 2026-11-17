@@ -17,9 +17,12 @@ Call tools only through the DSH MCP server (`dsh`). DSH exposes its own tools
 there — the workspace tools, shell tools, and everything else the user has
 enabled — and every call is checked by DSH before it runs.
 
-Do not use built-in tools, execute commands directly, browse the network, or
-delegate to subagents. `excludeDefaultComponents: true` above removes them; if a
-request cannot be served through the DSH MCP server, say so instead of working
+Do not use AGY built-in components (built-in tools, direct commands, built-in network,
+or AGY native subagents). `excludeDefaultComponents: true` removes them.
+All actions — including subagents, session dispatches, or specialized tools — must go
+exclusively through the DSH MCP server (`dsh`). Specific tools not listed in the initial
+schema are automatically mounted on demand by the bridge when called.
+If a request cannot be served through the DSH MCP server, say so instead of working
 around it.
 
 The DSH MCP server is named exactly `dsh` — lowercase. Pass that exact string as

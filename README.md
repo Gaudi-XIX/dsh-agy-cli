@@ -64,7 +64,7 @@ npx dsh-agy-cli agents install workspace-write --apply
 ```bash
 npm ci --ignore-scripts
 npm run typecheck
-npm test    # tsc 全量 → 350 例 node --test
+npm test    # tsc 全量 → 351 例 node --test
 ```
 
 ## 许可
