@@ -1,4 +1,15 @@
 # Changelog
+## [0.14.0] - 2026-11-18
+
+### Fixed
+
+- **慢订阅者掉流误判为不可重试**：`src/agy/errors.ts` 的 `classifyAgyFailure()` 新增两条 TRANSPORT 判据——`subscriber fell behind updates` / `killing slow subscriber` 与 `conversation update stream lost`。agy 上游 Go pubsub 对超过 7s 的订阅者直接 kill，`conversation_manager.go` 的 AddStep 失败落为纯 stderr 文本且无 `retryable` 尾标，旧逻辑落到默认 `AGY_EXIT`（不在重试白名单），当轮直接失败。归入 `TRANSPORT`（已在 `AGY_RETRYABLE_CODES`）后宿主可重试一次即恢复。未把 `AGY_EXIT` 加入白名单，未知文案仍走原 fallback，不会把全部未知错误变成可重试。
+
+### Changed
+
+- 版本升至 0.14.0（minor：新增可重试错误分类，不改变既有行为契约）。
+- README 中英版按「痛点与触动 / 技术路线与取舍 / 人无我有 / 人有我优 / 人有我有」五轴重写产品定位段，逐字引入市场简介。
+
 ## [0.13.1] - 2026-11-18
 
 ### Fixed

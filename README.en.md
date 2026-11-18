@@ -5,6 +5,8 @@
 
 Runs the locally authenticated **Google Antigravity CLI (`agy`)** as a first-class model provider for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
+> Reject the account-ban risk of reverse proxies and protocol spoofing, and leave opaque wrapper shells behind. The plugin takes a native pass-through route through the local official CLI: no reverse proxy, no forged request headers, credentials stay on your machine, the account is completely safe from bans; DSH takes full control of tool dispatch, with execution steps visible in real time; long tasks are deeply optimized with built-in tool compression, long-log folding and anti-false-positive redaction, keeping context clean and stable over long runs from the ground up.
+
 **What this plugin does, in three points:**
 
 1. **Generation is signed by the official binary.** Every model request goes out through the official `agy.exe`; the plugin does not sign it, proxy it, or replace its generation path, so the model-side risk surface matches the official client.
@@ -12,6 +14,28 @@ Runs the locally authenticated **Google Antigravity CLI (`agy`)** as a first-cla
 3. **AGY is only the model; DSH owns the harness.** Tool execution, approvals, sandbox and context budgeting stay 100% inside DSH; AGY's own agent loop is stripped.
 
 > **Platform: Windows only.** The quota panel and credential keep-alive depend on Windows Credential Manager. The other features have no cross-platform implementation and are untested on macOS/Linux.
+
+## Product positioning: the five axes
+
+### ① Pain & Trigger
+
+Three real problems drove this plugin: **account-ban risk** (inherent to reverse-proxy and protocol-spoofing setups), **opaque wrapper shells** (generation and execution hidden from view), and **long-task context snowballing** (history and long logs piling up until the budget collapses).
+
+### ② Tech Route & Trade-offs
+
+A **native local-CLI channel**: every turn is issued and signed by the official `agy.exe`; the plugin only bridges. Two things are deliberately given up — cloud one-click sign-in and zero-friction setup, traded for full compliance and credentials that never leave the machine; and tampering with the model generation mechanism, so the model-side risk surface matches the official client exactly.
+
+### ③ Unique
+
+**No reverse proxy, no forged request headers** — zero ban risk at the root. **DSH takes full control of the harness**: tool dispatch, approvals, sandbox and context budgeting all live in DSH, with execution steps streaming transparently — only which tools actually ran, never the model's internal thinking.
+
+### ④ Better
+
+Deep hardening for long tasks: base tools **mounted on demand** (schema size cut by over 90%), **intelligent folding of long historical outputs**, **sensitive-term replacement before dispatch to prevent false-positive refusals**, and **fault-tolerant streaming with retry and text-preservation on disconnect** — keeping context clean and stable from the ground up.
+
+### ⑤ Table Stakes
+
+**Full support for the official model matrix**, with long-context and deep-thinking capability leveled up; model visibility and reasoning effort follow the official capabilities, with nothing artificially disabled.
 
 ---
 
