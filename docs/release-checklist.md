@@ -152,3 +152,10 @@
 - [ ] 创建并推送精确 `v0.13.1` tag（不复用 `v0.13.0`）。
 - [ ] `npm publish --access public` 成功，回读 registry `latest=0.13.1`。
 - [ ] GitHub Release `v0.13.1` 创建并置 Latest。
+
+## 发布通道（`0.14.0` 之后现役）
+
+- [x] `0.14.0` 实际走本地 `npm publish --access public --registry=https://registry.npmjs.org` 发布；tag 触发的 `Publish Package` run `44307648266` 失败，与 `v0.13.1` 的 run `44142581510` 同一签名 `npm error code E404` / `PUT https://registry.npmjs.org/dsh-agy-cli`。
+- [x] 根因：npm 侧 Trusted Publisher 记的是旧归属 `darkings/dsh-agy-cli`（本文件 `0.5.0` 节、`docs/v0.5.0-development-plan.md:282`），仓库现属 `Gaudi-XIX/dsh-agy-cli`，OIDC 主体对不上，npm 侧不存在可发的授权。
+- [x] `publish.yml` 文件本身不改：GitHub 侧用 `gh workflow disable publish.yml` 把 `Publish Package`（workflow id `396196258`）置为 `disabled_manually`，打 tag 不再触发注定失败的发包 job；远端文件保持 tag 触发原样，一条 `gh workflow enable publish.yml` 即可恢复。
+- [ ] 恢复 OIDC 自动发布（需本人操作）：npmjs.com → `dsh-agy-cli` → Settings → Trusted Publisher 改指 `Gaudi-XIX/dsh-agy-cli` + `publish.yml`，然后 `gh workflow enable publish.yml`，打 tag 即按原设计自动发包。
