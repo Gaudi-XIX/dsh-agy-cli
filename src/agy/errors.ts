@@ -70,6 +70,8 @@ export function classifyAgyFailure(detail: string, fallback: string): string {
   if (/\bEOF\b|wsarecv|forcibly\s+closed|connection\s+(?:reset|aborted|closed)|broken\s+pipe|EPIPE|ECONNRESET|stream\s+was\s+interrupted/i.test(value)) {
     return 'TRANSPORT'
   }
+  if (/subscriber\s+fell\s+behind\s+updates|killing\s+slow\s+subscriber/i.test(value)) return 'TRANSPORT'
+  if (/conversation\s+update\s+stream\s+lost/i.test(value)) return 'TRANSPORT'
   if (/(?:model|deployment).{0,48}(?:not\s+found|unknown|invalid|unavailable|does\s+not\s+exist)|no\s+such\s+model/i.test(value)) {
     return 'MODEL_NOT_FOUND'
   }

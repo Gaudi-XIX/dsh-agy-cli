@@ -43,6 +43,24 @@ test('classifyAgyFailure maps authentication, quota, model, and context details'
   for (const [detail, expected] of cases) assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), expected)
 })
 
+test('classifyAgyFailure maps slow-subscriber stream drops to retryable TRANSPORT', () => {
+  // agy's Go pubsub kills a subscriber that stalls past its 7s threshold, and
+  // conversation_manager.go logs the failed AddStep as plain stderr text with no
+  // retryable trailer. The default AGY_EXIT fallback is non-retryable, so the turn
+  // dies instead of the host retrying once. These texts must land in TRANSPORT,
+  // which is already in AGY_RETRYABLE_CODES; unrelated unknowns stay AGY_EXIT.
+  const transport = [
+    'Publish killing slow subscriber slow-consumer: stalled for 7s',
+    'conversation update stream lost',
+    'subscriber fell behind updates, disconnecting',
+  ]
+  for (const detail of transport) {
+    assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'TRANSPORT', detail)
+  }
+  assert.equal(classifyAgyFailure('some unrelated provider hiccup', 'AGY_EXIT'), 'AGY_EXIT')
+  assert.equal(classifyAgyFailure('Publish killed a subscriber but nothing matched', 'CUSTOM_FALLBACK'), 'CUSTOM_FALLBACK')
+})
+
 test('classifyAgyFailure separates a drained bucket from a billing failure', () => {
   // The distinction is what makes the bounded retry correct: a drained 5h/weekly
   // bucket sits on a boundary value where ~1 in 5 attempts succeeds
