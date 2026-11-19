@@ -141,7 +141,10 @@ export function mountMcpEndpoint(
       // Snapshot the session handle before any await: setSession() re-points
       // the closure variable when the next AGY turn starts, and a request
       // suspended inside readBody must not wake up holding another session's
-      // agent scope.
+      // agent scope. This snapshot is only the fallback attribution for
+      // requests that carry no `_meta.sessionId`; with `_meta` present the
+      // request is self-identifying and the concurrent-overwrite window
+      // documented here is closed (see resolveSession in protocol.ts).
       const requestedSession = sessionHandle
       const body = await readBody(req)
       if (body.trim().length === 0) {

@@ -210,14 +210,17 @@ export class McpServerSession {
   }
 
   /**
-   * Resolve which AGY conversation a request belongs to. The transport-level
-   * handle (the secret path segment) wins, because it is what the endpoint
-   * minted for this bridge; `_meta.sessionId` is the client's own hint and is
-   * used only when the transport supplies nothing.
+   * Resolve which AGY conversation a request belongs to. The client's own
+   * `_meta.sessionId` wins: AGY stamps every request with the conversation it
+   * belongs to, so a request carries its own identity and stays correct even
+   * when the transport-level handle has already been re-pointed at the next
+   * turn. The transport handle is only the fallback for clients that send no
+   * `_meta` at all.
    */
   private resolveSession(params: Record<string, unknown>): string {
-    if (this.sessionHandle.length > 0) return this.sessionHandle
-    return sessionOf(params)
+    const requested = sessionOf(params)
+    if (requested.length > 0) return requested
+    return this.sessionHandle
   }
 }
 
@@ -238,7 +241,9 @@ export class McpRpcError extends Error {
 /**
  * AGY passes its own session handle as `_meta.sessionId` on every request; the
  * HTTP route also carries it in the path. Both are read here so one server can
- * serve several concurrent AGY conversations.
+ * serve several concurrent AGY conversations. `_meta.sessionId` is the
+ * authoritative per-request identity and is preferred by `resolveSession`;
+ * the transport handle only covers clients that send no `_meta`.
  */
 function sessionOf(params: Record<string, unknown>): string {
   const meta = params._meta
