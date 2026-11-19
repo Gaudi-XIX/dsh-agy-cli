@@ -11,6 +11,7 @@
  * JSON Schema keywords are allowed to leave the host.
  */
 import { sanitizeSchema, TOOL_PROTOCOL_LIMITS } from '../provider/tool-protocol.js'
+import { fitTools } from '../provider/tool-budget.js'
 import type { McpToolDescriptor } from './protocol.js'
 
 /** The subset of `ctx.tools` this module needs. */
@@ -255,6 +256,7 @@ export function projectDshTools(
   if (options.adaptiveBaseOnly === true && allow === undefined && tools.length < maxTools) {
     tools.push(DISCOVER_TOOLS_DESCRIPTOR)
   }
-  tools.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
-  return { tools, excluded }
+  const fitted = fitTools(tools)
+  fitted.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+  return { tools: fitted, excluded }
 }

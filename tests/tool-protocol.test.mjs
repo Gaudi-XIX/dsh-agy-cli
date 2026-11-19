@@ -5,6 +5,7 @@ import {
   appendToolProtocolPrompt,
   parseStructuredEnvelope,
   renderToolProtocolPrompt,
+  sanitizeSchema,
   StructuredResponseAccumulator,
   ToolProtocolError,
   TOOL_PROTOCOL_LIMITS,
@@ -449,5 +450,279 @@ test('structured tool schema staging is private, outside the workspace, and clea
     await staged.cleanup()
     await assert.rejects(() => access(staged.path))
     await staged.cleanup()
+  }
+})
+
+// --- RE2 pattern guard (mechanism 2) --------------------------------------
+
+test('structured tool protocol RE2 unicode translate joins escapes and surrogate pairs', () => {
+  const out = sanitizeSchema({ type: 'string', pattern: '\\u0041\\uD83D\\uDE00' }, 0, 't')
+  assert.equal(out.pattern, '\\x{0041}\\x{1F600}')
+
+  // Literal backslash then u0000 is not an escape and stays untouched.
+  const literal = sanitizeSchema({ type: 'string', pattern: '\\\\u0000' }, 0, 't')
+  assert.equal(literal.pattern, '\\\\u0000')
+
+  // Mixed escaped high surrogate + raw low surrogate code unit.
+  const mixed = sanitizeSchema({ type: 'string', pattern: '\\uD83D\uDE00' }, 0, 't')
+  assert.equal(mixed.pattern, '\\x{1F600}')
+
+  // Raw surrogate pair joins too.
+  const raw = sanitizeSchema({ type: 'string', pattern: '\u{1F600}' }, 0, 't')
+  assert.equal(raw.pattern, '\\x{1F600}')
+
+  // Translation is idempotent: a second pass leaves \x{...} alone.
+  const again = sanitizeSchema(out, 0, 't')
+  assert.deepEqual(again, out)
+})
+
+test('structured tool protocol RE2 degrade drops unsafe patterns into a description hint', () => {
+  // (a)\1 is a valid backreference: translated unchanged, then degraded.
+  // \z, \A, \Qabc\E are RE2-incompatible identity escapes: ECMA compiles
+  // them as identity escapes, so they degrade into a hint (design.md:27).
+  const unsafePatterns = ['(?=a)', '(a)\\1', '(?!a)', '(?<=a)b', '\\k<n>', '\\S+', '\\p{Script=Greek}']
+  for (const pattern of unsafePatterns) {
+    const input = {
+      type: 'string',
+      pattern,
+      description: 'field contract',
+      minLength: 1,
+    }
+    const out = sanitizeSchema(input, 0, 't')
+    assert.equal(Object.hasOwn(out, 'pattern'), false, `pattern key must be dropped for ${pattern}`)
+    assert.ok(out.description.includes(`pattern: ${pattern}`))
+    // Every other contract field stays byte-identical.
+    assert.equal(out.type, 'string')
+    assert.equal(out.minLength, 1)
+    // Idempotent: sanitizing the degraded output does not duplicate the hint.
+    const again = sanitizeSchema(out, 0, 't')
+    assert.deepEqual(again, out)
+  }
+  for (const pattern of ['\\z', '\\A', '\\Qabc\\E']) {
+    const out = sanitizeSchema({ type: 'string', pattern }, 0, 't')
+    assert.equal(Object.hasOwn(out, 'pattern'), false)
+    assert.ok(out.description.includes(`pattern: ${pattern}`))
+  }
+  // Contract fields around a degraded pattern in an object schema stay intact.
+  const out = sanitizeSchema({
+    type: 'object',
+    required: ['q'],
+    properties: { q: { type: 'string', pattern: '(?=a)' } },
+  }, 0, 't')
+  assert.deepEqual(out.required, ['q'])
+  assert.deepEqual(Object.keys(out.properties), ['q'])
+  assert.equal(out.properties.q.type, 'string')
+  assert.equal(Object.hasOwn(out.properties.q, 'pattern'), false)
+  assert.ok(out.properties.q.description.includes('pattern: (?=a)'))
+})
+
+test('structured tool protocol keeps common RE2-compatible patterns untouched', () => {
+  for (const pattern of ['^[a-z]+$', '\\d{3}-\\d{4}', '\\s+', '\\w+']) {
+    const out = sanitizeSchema({ type: 'string', pattern }, 0, 't')
+    assert.equal(out.pattern, pattern)
+  }
+})
+
+test('structured tool protocol still throws on ECMA-invalid patterns', () => {
+  assert.throws(
+    () => sanitizeSchema({ type: 'string', pattern: '[' }, 0, 't'),
+    error => error instanceof ToolProtocolError && error.code === 'TOOL_PROTOCOL_SCHEMA_INVALID',
+  )
+})
+
+test('structured tool protocol validates a unicode pattern argument with the u flag', () => {
+  const emojiTool = [{
+    name: 'emoji_tool',
+    description: 'accepts one emoji',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['s'],
+      properties: { s: { type: 'string', pattern: '^\\uD83D\\uDE00$' } },
+    },
+  }]
+  const protocol = createStructuredToolProtocol(emojiTool)
+  assert.deepEqual(
+    parseStructuredEnvelope({ kind: 'tool_call', name: 'emoji_tool', arguments: { s: '😀' } }, protocol),
+    { kind: 'tool_call', name: 'emoji_tool', arguments: { s: '😀' } },
+  )
+  assert.throws(
+    () => parseStructuredEnvelope({ kind: 'tool_call', name: 'emoji_tool', arguments: { s: 'A' } }, protocol),
+    error => error instanceof ToolProtocolError && error.code === 'TOOL_PROTOCOL_ARGUMENTS_INVALID',
+  )
+})
+
+test('structured tool protocol truncates an overlong degradation hint instead of throwing', () => {
+  const out = sanitizeSchema({
+    type: 'string',
+    description: 'd'.repeat(4090),
+    pattern: '(?=a)',
+  }, 0, 't')
+  assert.ok(out.description.length <= TOOL_PROTOCOL_LIMITS.maxDescriptionLength)
+  assert.equal(Object.hasOwn(out, 'pattern'), false)
+})
+
+// --- array items fill (mechanism 3) ----------------------------------------
+
+test('structured tool protocol fills permissive array items on bare arrays', () => {
+  const out = sanitizeSchema({ type: 'array' }, 0, 't')
+  assert.ok(out.items)
+  assert.ok(Array.isArray(out.items.anyOf))
+  assert.deepEqual(
+    out.items.anyOf.map(branch => branch.type),
+    ['string', 'number', 'integer', 'boolean', 'object', 'null', 'array'],
+  )
+  assert.ok(out.description.includes('array items were untyped'))
+  // Nested arrays are filled children-first.
+  const nested = sanitizeSchema({ type: 'array', items: { type: 'array' } }, 0, 't')
+  assert.ok(nested.items.items)
+  assert.ok(Array.isArray(nested.items.items.anyOf))
+  // Filled output survives a second sanitize pass unchanged (idempotence).
+  assert.deepEqual(sanitizeSchema(out, 0, 't'), out)
+  assert.deepEqual(sanitizeSchema(nested, 0, 't'), nested)
+  // A type union including array is filled too.
+  const union = sanitizeSchema({ type: ['array', 'null'] }, 0, 't')
+  assert.ok(union.items)
+})
+
+test('structured tool protocol infers array items from combinators and enums', () => {
+  // One definite branch items schema is used directly.
+  const single = sanitizeSchema({
+    type: 'array',
+    anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
+  }, 0, 't')
+  assert.deepEqual(single.items, { type: 'string' })
+
+  // Distinct definite items merge into anyOf; duplicates dedupe.
+  const multi = sanitizeSchema({
+    type: 'array',
+    anyOf: [
+      { type: 'array', items: { type: 'string' } },
+      { type: 'array', items: { type: 'number' } },
+      { type: 'array', items: { type: 'string' } },
+    ],
+  }, 0, 't')
+  assert.deepEqual(multi.items, { anyOf: [{ type: 'string' }, { type: 'number' }] })
+
+  // Pure enum items schema infers a single type; number+integer merge to number.
+  const enumInts = sanitizeSchema({ type: 'array', items: { enum: [1, 2, 3] } }, 0, 't')
+  assert.deepEqual(enumInts.items, { enum: [1, 2, 3], type: 'integer' })
+  const enumMixed = sanitizeSchema({ type: 'array', items: { enum: [1, 2.5] } }, 0, 't')
+  assert.deepEqual(enumMixed.items, { enum: [1, 2.5], type: 'number' })
+
+  // Properties-only items schema is copied without stamping type.
+  const props = sanitizeSchema({
+    type: 'array',
+    items: { properties: { a: { type: 'string' } } },
+  }, 0, 't')
+  assert.deepEqual(props.items, { properties: { a: { type: 'string' } } })
+  assert.equal(Object.hasOwn(props.items, 'type'), false)
+
+  // Typed items are never touched.
+  const typed = sanitizeSchema({ type: 'array', items: { type: 'string' } }, 0, 't')
+  assert.deepEqual(typed.items, { type: 'string' })
+})
+
+test('structured tool protocol leaves typeless nodes without items (G3 guard)', () => {
+  const typeless = sanitizeSchema({ description: 'anything goes' }, 0, 't')
+  assert.equal(Object.hasOwn(typeless, 'items'), false)
+  const empty = sanitizeSchema({}, 0, 't')
+  assert.deepEqual(empty, {})
+})
+
+test('structured tool protocol skips items fill when anyOf has a typeless array branch (G4 guard)', () => {
+  const open = sanitizeSchema({
+    type: 'array',
+    anyOf: [{ type: 'array', items: { type: 'string' } }, {}],
+  }, 0, 't')
+  assert.equal(Object.hasOwn(open, 'items'), false)
+  const oneOfOpen = sanitizeSchema({
+    type: 'array',
+    oneOf: [{ type: 'array', items: { type: 'string' } }, { description: 'open' }],
+  }, 0, 't')
+  assert.equal(Object.hasOwn(oneOfOpen, 'items'), false)
+  // allOf branches all apply, so a typeless allOf sibling does not block fill.
+  const allOfFill = sanitizeSchema({
+    type: 'array',
+    allOf: [{ type: 'array', items: { type: 'string' } }, {}],
+  }, 0, 't')
+  assert.deepEqual(allOfFill.items, { type: 'string' })
+})
+
+// --- schema depth gate on filled arrays (MINOR-1 regression) ----------------
+
+function nestedObject(depth, leaf) {
+  let node = leaf
+  for (let i = 0; i < depth; i++) node = { type: 'object', properties: { a: node } }
+  return node
+}
+
+function walkDepth(node, levels) {
+  let cur = node
+  for (let i = 0; i < levels; i++) cur = cur.properties.a
+  return cur
+}
+
+test('structured tool protocol fills a bare array at object depth 8 and stays idempotent', () => {
+  const out = sanitizeSchema(nestedObject(8, { type: 'array' }), 0, 't')
+  const arr = walkDepth(out, 8)
+  assert.ok(arr.items)
+  assert.ok(Array.isArray(arr.items.anyOf))
+  assert.deepEqual(sanitizeSchema(out, 0, 't'), out)
+})
+
+test('structured tool protocol leaves a bare array at object depth 9 typeless instead of throwing', () => {
+  const out = sanitizeSchema(nestedObject(9, { type: 'array' }), 0, 't')
+  const arr = walkDepth(out, 9)
+  assert.equal(arr.items, undefined)
+  // No injected subtree, so a second pass must not hit the depth gate.
+  assert.deepEqual(sanitizeSchema(out, 0, 't'), out)
+})
+
+test('structured tool protocol accepts deeply nested arguments with a bare array leaf', () => {
+  const tools = [{
+    name: 'deep_tool',
+    description: 'accepts deeply nested objects ending in a bare array',
+    parameters: nestedObject(9, { type: 'array' }),
+  }]
+  const protocol = createStructuredToolProtocol(tools)
+  let value = []
+  for (let i = 0; i < 9; i++) value = { a: value }
+  const parsed = parseStructuredEnvelope(
+    { kind: 'tool_call', name: 'deep_tool', arguments: value },
+    protocol,
+  )
+  assert.deepEqual(parsed.arguments, value)
+})
+
+// --- legacy pattern fallback fidelity (MAJOR-2 regression) ------------------
+
+test('structured tool protocol keeps escaped-backslash patterns faithful in the legacy fallback', () => {
+  // The pattern literal is backslash, backslash, x{41}, backslash, minus:
+  // an escaped backslash followed by a quantified literal x, not a
+  // code-point escape. The legacy fallback must keep that meaning.
+  const tools = [{
+    name: 'pattern_tool',
+    description: 'accepts strings matching an escaped-backslash pattern',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['s'],
+      properties: { s: { type: 'string', pattern: '\\\\x{41}\\-' } },
+    },
+  }]
+  const protocol = createStructuredToolProtocol(tools)
+  const accepted = '\\' + 'x'.repeat(41) + '-'
+  assert.deepEqual(
+    parseStructuredEnvelope({ kind: 'tool_call', name: 'pattern_tool', arguments: { s: accepted } }, protocol),
+    { kind: 'tool_call', name: 'pattern_tool', arguments: { s: accepted } },
+  )
+  // Neither the rewritten reading (\\u0041 = 'A') nor other nearby strings
+  // may be accepted: the fallback must not reverse the contract.
+  for (const rejected of ['A-', '\\u0041-', 'x'.repeat(41) + '-']) {
+    assert.throws(
+      () => parseStructuredEnvelope({ kind: 'tool_call', name: 'pattern_tool', arguments: { s: rejected } }, protocol),
+      error => error instanceof ToolProtocolError && error.code === 'TOOL_PROTOCOL_ARGUMENTS_INVALID',
+    )
   }
 })
