@@ -474,6 +474,12 @@ function isRE2Safe(source: string): boolean {
     }
     if (next === 'x') {
       if (i < length && source.charAt(i) === '{') {
+        // Behind an escaped backslash pair, `\\x{...}` is a code point to RE2
+        // but a quantified identity `x` to non-u ECMA: no rewrite keeps both,
+        // so reject it and let the pattern degrade into a hint instead.
+        let escapedBackslashes = 0
+        for (let back = i - 3; back >= 0 && source.charAt(back) === '\\'; back--) escapedBackslashes++
+        if (escapedBackslashes >= 2) return null
         i++
         let hex = ''
         while (i < length && isHex(source.charAt(i))) hex += source.charAt(i++)
@@ -1223,11 +1229,14 @@ function matchesType(value: unknown, type: string): boolean {
  * `\x{...}` escapes need code-point semantics; ECMA u mode rejects them
  * (`\x` takes exactly two hex digits), and non-u mode reads `\x{41}` as a
  * quantified identity `x` — so the fallback re-encodes each `\x{...}` as
- * `\uXXXX`/surrogate pairs and compiles without the flag. Escaped
- * backslashes (`\\`) are consumed by the alternation and never trigger a
- * rewrite, so a literal `\\x{41}\-` keeps its non-u ECMA meaning
- * (backslash, 41×x, dash) instead of being silently reinterpreted —
- * rewriting those would reverse the acceptance contract.
+ * `\uXXXX`/surrogate pairs and compiles without the flag. Only an escape
+ * introduced by an unescaped backslash reaches that rewrite: escaped
+ * backslashes (`\\`) are consumed by the alternation in pairs, so a literal
+ * `\\x{41}\-` keeps its non-u ECMA meaning (backslash, 41×x, dash) instead of
+ * being silently reinterpreted — rewriting those would reverse the acceptance
+ * contract. A `\x{...}` behind an escaped backslash pair (an odd run of three
+ * or more) has no single meaning to preserve, so isRE2Safe rejects it and the
+ * pattern degrades into a description hint before it can reach this fallback.
  */
 function patternRegExp(pattern: string): RegExp {
   if (!pattern.includes('\\x{')) return new RegExp(pattern)

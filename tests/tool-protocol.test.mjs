@@ -726,3 +726,49 @@ test('structured tool protocol keeps escaped-backslash patterns faithful in the 
     )
   }
 })
+// --- odd backslash runs before x{ (fail-closed disambiguation) ---
+
+test('structured tool protocol keeps even backslash runs and degrades odd ones', () => {
+  const BS = String.fromCharCode(92)
+  // [run, kept]: even runs stay byte-identical, odd runs degrade.
+  const runs = [[1, true], [2, true], [3, false], [4, true], [5, false]]
+  for (const [k, kept] of runs) {
+    const pattern = BS.repeat(k) + 'x{41}' + BS + '-'
+    const out = sanitizeSchema({ type: 'string', pattern }, 0, 't')
+    if (kept) {
+      assert.equal(out.pattern, pattern)
+    } else {
+      assert.equal(Object.hasOwn(out, 'pattern'), false)
+      assert.ok(out.description.includes(`pattern: ${pattern}`))
+      // Degrading is idempotent: a second pass is a fixed point.
+      assert.deepEqual(sanitizeSchema(out, 0, 't'), out)
+    }
+  }
+})
+
+test('structured tool protocol disambiguates odd runs by dropping the pattern', () => {
+  const BS = String.fromCharCode(92)
+  // P3 = 3 backslashes + x{41} + escaped dash; the odd run makes
+  // sanitizeSchema drop the pattern, so both readings are accepted.
+  const p3 = BS.repeat(3) + 'x{41}' + BS + '-'
+  const tools = [{
+    name: 'pattern_tool',
+    description: 'accepts strings matching an escaped-backslash pattern',
+    parameters: {
+      type: 'object', additionalProperties: false, required: ['s'],
+      properties: { s: { type: 'string', pattern: p3 } },
+    },
+  }]
+  const protocol = createStructuredToolProtocol(tools)
+  for (const reading of [BS + 'x'.repeat(41) + '-', BS + 'A-']) {
+    assert.deepEqual(
+      parseStructuredEnvelope({ kind: 'tool_call', name: 'pattern_tool', arguments: { s: reading } }, protocol),
+      { kind: 'tool_call', name: 'pattern_tool', arguments: { s: reading } },
+    )
+  }
+  // The translated twin (3 backslashes + u0041) must degrade too.
+  const twin = BS.repeat(3) + 'u0041'
+  const out = sanitizeSchema({ type: 'string', pattern: twin }, 0, 't')
+  assert.equal(Object.hasOwn(out, 'pattern'), false)
+  assert.ok(out.description.includes(`pattern: ${twin}`))
+})
