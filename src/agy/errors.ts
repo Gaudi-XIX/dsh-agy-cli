@@ -1,6 +1,58 @@
 import { CONTEXT_WINDOW_EXCEEDED_CODE, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import { redactText } from './redact.js'
 
+// Retry-After parsing rewritten in TypeScript after the MIT-licensed reference
+// implementation `upstream-error.mjs` from
+// https://github.com/DylanLIiii/opencode-antigravity-bridge (absorbed, not copied).
+/** Upper bound on an upstream Retry-After window we are willing to trust. */
+export const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000
+
+// Numeric form: `retry-after: 30`, `Retry-After 5m`, `retry_after: 500ms`.
+const RETRY_AFTER_SECONDS_RE = /retry[ _-]*after(?:\s*[:=]\s*|\s+)(\d{1,9})(ms|s|m)?\b/i
+// HTTP-date form (IMF-fixdate, RFC 7231): `Retry-After: Fri, 01 Jan 2021 00:00:00 GMT`.
+const RETRY_AFTER_HTTP_DATE_RE = /retry[ _-]*after(?:\s*[:=]\s*|\s+)([A-Za-z]{3}, \d{1,2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT)/i
+
+function boundedRetryAfterMs(ms: number): number | null {
+  // Over the cap (or otherwise not a trustworthy positive integer) the value is
+  // discarded, not truncated: a fabricated 24h cap would invent a window the
+  // upstream never gave, and the host falls back to its default backoff instead.
+  // Zero is discarded for the same reason: LlmError's providerRetryAfterMs
+  // contract is a positive finite number (its constructor throws on 0), so a
+  // `retry-after: 0` hint must degrade to "no hint" instead of replacing the
+  // classified error with a raw constructor throw.
+  if (!Number.isSafeInteger(ms) || ms <= 0 || ms > MAX_RETRY_AFTER_MS) return null
+  return ms
+}
+
+/**
+ * Extract the Retry-After window (in ms) from upstream error detail, or null.
+ * Accepts a numeric form (seconds by default, optional `ms`/`s`/`m` unit) and
+ * an IMF-fixdate HTTP-date form (expired dates yield null). Output is a number
+ * only — the input detail is never echoed back.
+ */
+export function parseAgyRetryAfterMs(detail: string, nowMs: number): number | null {
+  const value = detail.trim().slice(0, 2_048)
+  if (value.length === 0) return null
+  const numeric = RETRY_AFTER_SECONDS_RE.exec(value)
+  if (numeric) {
+    const [, digits, unit] = numeric
+    const amount = Number(digits)
+    // The regex matches the unit case-insensitively but captures the source
+    // text, so normalise it before the comparison: `Retry-After: 5M` is five
+    // minutes, and `5MS` is five milliseconds, not five seconds.
+    const normalisedUnit = (unit ?? 's').toLowerCase()
+    const multiplier = normalisedUnit === 'ms' ? 1 : normalisedUnit === 'm' ? 60_000 : 1_000
+    return boundedRetryAfterMs(amount * multiplier)
+  }
+  const httpDate = RETRY_AFTER_HTTP_DATE_RE.exec(value)
+  if (httpDate) {
+    const timestamp = Date.parse(httpDate[1] ?? '')
+    if (Number.isNaN(timestamp) || timestamp < nowMs) return null
+    return boundedRetryAfterMs(timestamp - nowMs)
+  }
+  return null
+}
+
 /** Stable provider-neutral codes emitted after classifying AGY text/status details. */
 export type AgyClassifiedErrorCode =
   | typeof CONTEXT_WINDOW_EXCEEDED_CODE

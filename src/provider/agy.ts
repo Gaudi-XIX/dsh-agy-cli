@@ -56,7 +56,7 @@ import {
   type AgyTelemetry,
   type AgyUsageSource,
 } from '../agy/log.js'
-import { classifyAgyFailure, safeAgyFailureMessage } from '../agy/errors.js'
+import { classifyAgyFailure, parseAgyRetryAfterMs, safeAgyFailureMessage } from '../agy/errors.js'
 import { readAgyRuntimeOverrides } from '../agy/overrides.js'
 import {
   AgyParserError,
@@ -802,10 +802,14 @@ function asLlmError(error: unknown): LlmError {
       // refuses to retry. Classification keeps the loud failures loud: an AUTH,
       // quota or context-window error inside this frame still maps to its own
       // non-retryable code instead of being retried five times.
+      const code = classifyAgyFailure(error.message, 'AGY_WORKER_ERROR')
       return new LlmError(
         error.message,
-        classifyAgyFailure(error.message, 'AGY_WORKER_ERROR'),
-        { cause: error },
+        code,
+        {
+          cause: error,
+          ...agyRetryAfterOptions(error.message, code, Date.now()),
+        },
       )
     }
     return new LlmError(error.message, `AGY_${error.code}`, { cause: error })
@@ -820,6 +824,18 @@ function asLlmError(error: unknown): LlmError {
   return new LlmError('AGY provider request failed', 'AGY_REQUEST', {
     cause: error instanceof Error ? error : new Error(String(error)),
   })
+}
+
+/**
+ * Build LlmError options carrying the upstream Retry-After window, but only
+ * for retryable codes with a parseable value: QUOTA and friends stay
+ * fail-closed, and an unparseable window falls back to the host's default
+ * backoff instead of hinting a fabricated one.
+ */
+function agyRetryAfterOptions(detail: string, code: string, nowMs: number): { providerRetryAfterMs?: number } {
+  if (!(AGY_RETRYABLE_CODES as readonly string[]).includes(code)) return {}
+  const retryAfterMs = parseAgyRetryAfterMs(detail, nowMs)
+  return retryAfterMs === null ? {} : { providerRetryAfterMs: retryAfterMs }
 }
 
 function processFailure(result: ProcessResult): LlmError | undefined {
@@ -844,6 +860,7 @@ function processFailure(result: ProcessResult): LlmError | undefined {
         ? `AGY exited unsuccessfully (exit code ${result.exitCode ?? 'unknown'})`
         : safeAgyFailureMessage('AGY exited unsuccessfully', stderr),
       code,
+      agyRetryAfterOptions(stderr, code, Date.now()),
     )
   }
   return undefined
@@ -1752,7 +1769,11 @@ export class AgyAdapter extends LlmAdapter {
     if (finalStatus !== undefined && !isSuccessStatus(finalStatus) && !streamedPartialAnswer) {
       const detail = [finalStatus, finalErrorDetail].filter(value => value !== undefined).join(' ')
       const code = classifyAgyFailure(detail, 'AGY_STATUS')
-      throw new LlmError(safeAgyFailureMessage(`AGY returned status ${finalStatus}`, detail), code)
+      throw new LlmError(
+        safeAgyFailureMessage(`AGY returned status ${finalStatus}`, detail),
+        code,
+        agyRetryAfterOptions(detail, code, Date.now()),
+      )
     }
     if (streamedPartialAnswer) telemetry.partialAnswerDelivered = true
     const appendFinalResponse = !streamedPartialAnswer && finalResponse !== undefined && finalResponse.trim().length > 0
@@ -2483,11 +2504,19 @@ export class AgyAdapter extends LlmAdapter {
     if (resultSeen && !isSuccessStatus(finalStatus) && !streamedPartialAnswer) {
       const detail = [finalStatus, finalErrorDetail].filter(value => value !== undefined).join(' ')
       const code = classifyAgyFailure(detail, 'AGY_STATUS')
-      throw new LlmError(safeAgyFailureMessage(`AGY returned status ${finalStatus}`, detail), code)
+      throw new LlmError(
+        safeAgyFailureMessage(`AGY returned status ${finalStatus}`, detail),
+        code,
+        agyRetryAfterOptions(detail, code, Date.now()),
+      )
     }
     if (!resultSeen && finalErrorDetail !== undefined) {
       const code = classifyAgyFailure(finalErrorDetail, 'AGY_STATUS')
-      throw new LlmError(safeAgyFailureMessage('AGY reported a failure', finalErrorDetail), code)
+      throw new LlmError(
+        safeAgyFailureMessage('AGY reported a failure', finalErrorDetail),
+        code,
+        agyRetryAfterOptions(finalErrorDetail, code, Date.now()),
+      )
     }
 
     if (toolProtocol !== undefined) {

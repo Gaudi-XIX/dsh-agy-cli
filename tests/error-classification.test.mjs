@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { AgyAdapter } from '../lib/provider/agy.js'
-import { classifyAgyFailure } from '../lib/agy/errors.js'
+import { classifyAgyFailure, MAX_RETRY_AFTER_MS, parseAgyRetryAfterMs } from '../lib/agy/errors.js'
 
 function processResult(stderr = '', exitCode = 0, termination = exitCode === 0 ? 'completed' : 'non-zero') {
   return {
@@ -290,4 +290,50 @@ test('AgyAdapter delivers partial answer when timeout occurs after streaming tex
   assert.match(reasoning, /AGY request exceeded the configured wall-clock timeout/)
   assert.equal(chunks.at(-1)?.type, 'finish')
   assert.equal(chunks.at(-1)?.reason.kind, 'stop')
+})
+
+test('parseAgyRetryAfterMs parses numeric seconds with optional units', () => {
+  const now = 1_000_000
+  assert.equal(parseAgyRetryAfterMs('retry-after: 30', now), 30_000)
+  assert.equal(parseAgyRetryAfterMs('Retry-After 5m', now), 300_000)
+  assert.equal(parseAgyRetryAfterMs('retry_after: 500ms', now), 500)
+  assert.equal(parseAgyRetryAfterMs('  Retry-After: 2s  ', now), 2_000)
+  // Units match case-insensitively; the capture keeps the source case, so the
+  // multiplier has to normalise before comparing.
+  assert.equal(parseAgyRetryAfterMs('Retry-After: 5M', now), 300_000)
+  assert.equal(parseAgyRetryAfterMs('Retry-After: 5MS', now), 5)
+})
+
+test('parseAgyRetryAfterMs parses future HTTP-date and rejects expired ones', () => {
+  const future = 'Fri, 01 Jan 2021 00:00:00 GMT'
+  const now = Date.parse('Thu, 31 Dec 2020 23:00:00 GMT')
+  assert.equal(parseAgyRetryAfterMs(`retry-after: ${future}`, now), 3_600_000)
+  const after = Date.parse('Fri, 01 Jan 2021 00:00:01 GMT')
+  assert.equal(parseAgyRetryAfterMs(`retry-after: ${future}`, after), null)
+})
+
+test('parseAgyRetryAfterMs returns null for missing or empty hints', () => {
+  const now = 1_000_000
+  assert.equal(parseAgyRetryAfterMs('no retry hint in this text', now), null)
+  assert.equal(parseAgyRetryAfterMs('', now), null)
+  assert.equal(parseAgyRetryAfterMs('   ', now), null)
+})
+
+test('parseAgyRetryAfterMs discards windows over the 24h cap', () => {
+  const now = 1_000_000
+  assert.equal(parseAgyRetryAfterMs('retry-after: 86401', now), null)
+  assert.equal(parseAgyRetryAfterMs('retry-after: 86400', now), 86_400_000)
+  assert.equal(MAX_RETRY_AFTER_MS, 86_400_000)
+})
+
+test('parseAgyRetryAfterMs discards non-positive windows', () => {
+  // LlmError's providerRetryAfterMs contract is a positive finite number and its
+  // constructor throws on 0, so a zero window has to read as "no hint" — a
+  // `retry-after: 0` on the wire must not turn a classified error into a raw
+  // constructor throw.
+  const now = 1_000_000
+  assert.equal(parseAgyRetryAfterMs('retry-after: 0', now), null)
+  assert.equal(parseAgyRetryAfterMs('retry_after: 0ms', now), null)
+  assert.equal(parseAgyRetryAfterMs('retry-after: 0.5', now), null)
+  assert.equal(parseAgyRetryAfterMs('retry-after: Thu, 01 Jan 1970 00:16:40 GMT', now), null)
 })
