@@ -86,7 +86,7 @@ Evidence for the endpoint semantics and identity-header behaviour: `docs/prod-ge
 dsh plugin --profile <your profile> add dsh-agy-cli
 ```
 
-Requires Windows, the official Antigravity CLI installed and signed in locally, and Node ≥ 22.
+Requires Windows, the official Antigravity CLI installed and signed in locally, and Node ≥ 20.
 
 **One more step, or AGY will report an unknown agent** (the bundled agent presets are not copied into AGY's agent directory by the install alone):
 

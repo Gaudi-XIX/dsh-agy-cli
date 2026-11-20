@@ -88,7 +88,7 @@
 dsh plugin --profile <你的 profile> add dsh-agy-cli
 ```
 
-前置要求：Windows；本机已安装并登录官方 Antigravity CLI（`agy`）；Node ≥ 22。
+前置要求：Windows；本机已安装并登录官方 Antigravity CLI（`agy`）；Node ≥ 20。
 
 **装完必须再跑一步**（否则 AGY 会报 unknown agent——插件自带的 Agent 预设没有装进 AGY 的 agent 目录）：
 

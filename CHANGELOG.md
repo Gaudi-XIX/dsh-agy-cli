@@ -1,4 +1,23 @@
 # Changelog
+
+## [0.15.0] - 2026-11-20
+
+### Added
+
+- **AGY 工具 schema 护栏**：`src/provider/tool-budget.ts` 新增 18,000 token 预算与 `fitTools()`；`src/provider/tool-protocol.ts` 增加 schema guards、RE2 fallback 与 array items 校验；`src/mcp/tool-projection.ts` 同步投影。对应 `87b9d41`。
+- **Retry-After 退避提示**：`src/agy/errors.ts` 新增 `parseAgyRetryAfterMs()`，识别秒数与 HTTP-date 两形，超过 24h 的窗口丢弃不截断；`src/provider/agy.ts` 在可重试错误上透传提示。对应 `218dd64`。
+- **thinking_tokens 计数映射**：`src/provider/agy.ts:737` 键表纳入 `thinking_tokens`，`:749` 输出 `reasoningTokens`；只映射计数，stream-json 无思考正文。对应 `ac0b20e`。
+
+### Fixed
+
+- **MCP 会话串话**：`src/mcp/endpoint.ts`、`src/mcp/protocol.ts` 先取 `_meta.sessionId` 再回退 transport handle；新增 `tests/mcp-session-crosstalk.test.mjs`。对应 `d28460b`。
+- **奇数反斜杠 + `x{` 的 RE2 语义分歧**：`src/provider/tool-protocol.ts` 在 `isRE2Safe()` 拒绝无单一语义的形态，让模式降级为描述提示；`tests/tool-protocol.test.mjs` 覆盖。对应 `862a861`。
+
+### Changed
+
+- **版本升至 0.15.0**：`package.json` 与 `package-lock.json` 同步；minor 因新增 Retry-After、工具 schema 护栏与 `thinking_tokens` 计数映射，不破坏既有契约。
+- **中英 README 四维重构与 About 正本**：`README.md`、`README.en.md` 已按四维框架重写，`ABOUT.txt` 新增 139 字正本；本次发布把两处 Node 前置要求从 `Node ≥ 22` 对齐为 `Node ≥ 20`，依据 `package.json` `engines.node = ">=20"` 与 CI matrix。对应 `2006c16` 与本卡工单 3。
+
 ## [0.14.0] - 2026-11-18
 
 ### Fixed
