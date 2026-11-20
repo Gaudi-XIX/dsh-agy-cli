@@ -49,6 +49,7 @@
 | AGY 内部工具事件 | `step_update.step_type=tool` | AGY 试图自行执行 | `agy-owned` legacy 仅计数；`dsh-owned` fail closed，不伪装成 DSH tool chunk |
 | DSH-owned tool-call | Provider final envelope | AGY 只做文本推理 | 本地严格校验后产生 DSH tool chunk，由 DSH ToolRuntime 执行 |
 | permission event | 终止 headless 请求并返回 `PERMISSION_REQUIRED` |
+| 思考正文（thinking 文本） | stream-json 通道只发计数（usage 的 `thinking_tokens`），没有思考正文文本；正文只能走 AGY 的 ACP/localharness 通道（`agent_thought_chunk`），本仓未接该通道 |
 
 ## 稳定错误分类
 

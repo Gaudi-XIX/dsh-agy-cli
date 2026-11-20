@@ -734,7 +734,7 @@ export function mapAgyUsage(raw: Record<string, unknown>): TokenUsage {
   const output = firstNumber(raw, ['outputTokens', 'output_tokens', 'completionTokens', 'completion_tokens'])
   const cacheRead = firstNumber(raw, ['cacheReadTokens', 'cache_read_tokens', 'cacheReadInputTokens'])
   const cacheWrite = firstNumber(raw, ['cacheWriteTokens', 'cache_write_tokens', 'cacheCreationInputTokens'])
-  const reasoning = firstNumber(raw, ['reasoningTokens', 'reasoning_tokens'])
+  const reasoning = firstNumber(raw, ['reasoningTokens', 'reasoning_tokens', 'thinkingTokens', 'thinking_tokens'])
   const total = firstNumber(raw, ['totalTokens', 'total_tokens'])
 
   // AGY 1.1.13 exposes totalTokens in the observed result. Preserve that

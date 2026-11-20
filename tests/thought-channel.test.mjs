@@ -3,7 +3,10 @@
  * content in this checkout and that DSH-owned text deltas are never filtered.
  *
  * Scope: static + fixture level only, no live AGY session (quota not
- * authorized). The three conclusions are recorded in handoff/apply-implementer-1.md.
+ * authorized). The three conclusions are archived in the change card
+ * `2026-11-19-feat-agy-thought-channel-real-verify`
+ * (F:\AgentData\.agents\flow\changes\2026-11-19-feat-agy-thought-channel-real-verify);
+ * proposal.md carries the evidence chain.
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
