@@ -33,6 +33,7 @@ import {
   type ToolProjectionResult,
 } from './tool-projection.js'
 import type { McpCallResult, McpTextContent, McpToolDescriptor } from './protocol.js'
+import { dispatchBatchTool, BATCH_TOOL_DESCRIPTORS } from './batch-tools.js'
 import { filterToolOutput } from './output-filter.js'
 
 /** The subset of the DSH tool registry this bridge uses. */
@@ -460,6 +461,26 @@ async function executeDshTool(
     const problems = validateToolArguments(descriptor.inputSchema, args)
     if (problems.length > 0) {
       return { content: [{ type: 'text', text: `invalid arguments: ${problems.join('; ')}` }], isError: true }
+    }
+  }
+  // Composite batch tools (apply_edits / read_slices) execute locally: the
+  // host has no same-named implementation, so they must not fall through to
+  // `tools.execute`. The name check (rather than a `projected` re-check) is
+  // safe: a scoped session whose projection dropped the name already exited
+  // at the `descriptor === undefined` branch above, and the global view always
+  // projects the batch tools. The local executor grants no host privileges.
+  if (BATCH_TOOL_DESCRIPTORS.some(batchDescriptor => batchDescriptor.name === name)) {
+    try {
+      const result = await dispatchBatchTool(name, args)
+      return {
+        content: [{ type: 'text', text: filterToolOutput(JSON.stringify(result, null, 2)) }],
+        isError: false,
+      }
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
+        isError: true,
+      }
     }
   }
   const controller = new AbortController()
