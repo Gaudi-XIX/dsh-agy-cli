@@ -139,3 +139,18 @@ export function safeAgyFailureMessage(prefix: string, detail: string | undefined
   const safeDetail = detail === undefined ? '' : redactText(detail.trim(), 512)
   return safeDetail.length === 0 ? prefix : `${prefix}: ${safeDetail}`
 }
+
+/** Longest stderr excerpt attached to a launch-failure error message. */
+const SPAWN_STDERR_DETAIL_MAX_LENGTH = 200
+
+/**
+ * Redacted single-line stderr excerpt for process-launch failures. AGY writes
+ * its fatal reason last, so the last non-empty line wins; an empty stderr
+ * yields undefined so callers can omit the field entirely.
+ */
+export function spawnStderrDetail(stderr: string, max = SPAWN_STDERR_DETAIL_MAX_LENGTH): string | undefined {
+  const lines = stderr.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0)
+  const chosen = lines.at(-1)
+  if (chosen === undefined) return undefined
+  return redactText(chosen, max)
+}
