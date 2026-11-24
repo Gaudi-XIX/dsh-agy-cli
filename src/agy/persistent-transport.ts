@@ -566,6 +566,12 @@ class PersistentAgyWorker {
           DSH_AGY_EXPERIMENTAL_SESSION: this.sessionId,
           // Force-last: agy's updater only honours the literal lowercase 'true'.
           AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
+          // Telemetry kill switches, forced last like the auto-update flag:
+          // AGY's Clearcut client retries every 5s with no backoff when offline.
+          DO_NOT_TRACK: '1',
+          ANTIGRAVITY_DISABLE_TELEMETRY: 'true',
+          GOOGLE_CLOUD_DISABLE_TELEMETRY: 'true',
+          DISABLE_TELEMETRY: 'true',
         },
         shell: false,
         detached: process.platform !== 'win32',
