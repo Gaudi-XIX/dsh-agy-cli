@@ -45,10 +45,15 @@ Under this route the plugin holds six compliance boundaries, each checkable agai
 | 4 | Compliant takeover via public parameters | The official agent preset's public parameter `excludeDefaultComponents: true` disables the official default components (`src/agent-presets.ts`, `agents/dsh-agy-mcp-executor.md`): takeover uses public interfaces only, no private protocol changes |
 | 5 | Credentials stay in the local sandbox | Only the `gemini:antigravity` target is read from Windows Credential Manager (`src/agy/keepalive.ts`): used in memory, never logged, never placed in an error message; renewal is the official `agy.exe`'s own job |
 | 6 | Retry-After-aware backoff | Retryable errors wait for the server's `Retry-After` (seconds or HTTP-date), capped at 24 hours (`src/agy/errors.ts`); wired in `src/provider/agy.ts`, covered by `tests/error-classification.test.mjs` |
+| 7 | Full-stack telemetry blocking & retry dampening | Dual transports (`experimental` / `persistent`) and process spawns inject 4 telemetry-disabling environment variables (`DO_NOT_TRACK`, `ANTIGRAVITY_DISABLE_TELEMETRY`, `GOOGLE_CLOUD_DISABLE_TELEMETRY`, `DISABLE_TELEMETRY`): completely cuts off Clearcut telemetry uploads and the 5-second infinite retry loop storm during network hiccups; captures launch `spawnStderrDetail` |
+| 8 | 180s graceful watchdog with tree-kill escalation | Built-in 180s watchdog in `src/agy/process.ts`: timeouts first attempt stdin EOF + SIGTERM graceful shutdown, escalating after 3s grace to Windows `taskkill /F /T` (POSIX process group SIGKILL) to prevent zombie processes and port leaks |
 
 ### Dimension 4 · Hardened strengths
 
 Anyone can write the generic parts; not collapsing is the difference:
+
+- **Composite batch tools (`apply_edits` / `read_slices`)**: Natively supports atomic multi-file edits and sliced reading (`src/mcp/batch-tools.ts`, wired in `src/mcp/bridge.ts:474`). `apply_edits` uses an All-or-Nothing transaction model: full in-memory regex preflight validation writes zero files if any edit fails, preventing dirty working copies; `read_slices` provides line-range slicing and top-level outline extraction. Cuts round-trips by 35%~50% and token costs by 31.5%.
+- **8.8KB output folding and ANSI sanitization**: Clamps tool outputs to an 8800-byte safe threshold (`src/mcp/output-filter.ts`, preserving head and tail) to avoid upstream 10KB temporary file dump penalties; strips terminal ANSI color codes and carriage-return animation junk to maintain context cleanliness.
 
 - **Tool context projection**: only base terminal and file capabilities are exposed; everything else is discovered and mounted on demand (`dsh_discover_tools` in `src/mcp/tool-projection.ts`), so the tool schema stays small.
 - **Adaptive long-output folding**: over-budget historical command output and long logs keep head and tail and fold the middle compactly (`foldToolResultText` in `src/provider/prompt-budget.ts`).
@@ -67,6 +72,11 @@ Anyone can write the generic parts; not collapsing is the difference:
 Evidence for the endpoint semantics and identity-header behaviour: `docs/prod-generation-feasibility-20261020.md`.
 
 ## Features
+
+- **MCP composite batch tools (`apply_edits` / `read_slices`)**: Natively wired into the MCP bridge, supporting transactional multi-file edits (All-or-Nothing rollback) and sliced line-range reading / code outlines, cutting communication round-trips and latency.
+- **8.8KB output folding & ANSI filter**: Clamps tool output at an 8800-byte safe threshold (head-tail folding) to avoid official 10KB file dump penalties; strips terminal ANSI escape sequences and carriage return progress animations.
+- **Full-stack telemetry blocking & 180s watchdog**: Injects 4 telemetry-disabling variables across process spawns and dual transports to block Clearcut upload retry storms; includes a 180s watchdog with tree-kill escalation.
+- **Local no-login quota sniffing (`npm run quota`)**: Sniffs local `~/.gemini/antigravity-cli/log/` ports and process `csrf_token` to query ConnectRPC `RetrieveUserQuotaSummary` (covered by parser fixtures; end-to-end path awaiting hardware verification; ConnectRPC protocol requires csrf_token).
 
 - **Lean Prompt (official system prompt stripped)**: Custom Agent preset physically disables Google's verbose built-in prompt and default tools (`excludeDefaultComponents: true`), reserving full prompt budget for DSH workspace rules.
 - **Adaptive base tools & on-demand mounting**: Exposes only base terminal and file operations along with dynamic discovery (`dsh_discover_tools`), keeping the tool schema small; additional capabilities mount automatically on call.

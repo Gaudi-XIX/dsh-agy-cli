@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.16.0] - 2026-11-25
+
+### Added
+
+- **MCP 批处理工具原生接线（`apply_edits` / `read_slices`）**：`src/mcp/batch-tools.ts` 实现 All-or-Nothing 事务性多文件正则编辑（任一 edit 失败 0 文件落盘全回滚）与按行切片读取/大纲提取；并在 `src/mcp/bridge.ts:474` 完成底层接线，模型可直接原生调用，大幅减少短轮次交互与通信延迟。对应 `16aa39d` 与 `ab1a738`。
+- **全链路遥测禁用与启动异常增强**：`src/agy/process.ts`、`src/agy/experimental-transport.ts`、`src/agy/persistent-transport.ts` 在拉起 `agy.exe` 时统一注入 4 个环境变量（`DO_NOT_TRACK`、`ANTIGRAVITY_DISABLE_TELEMETRY`、`GOOGLE_CLOUD_DISABLE_TELEMETRY`、`DISABLE_TELEMETRY`），阻断 Google Clearcut 客户端后台上传与网络波动时的死循环重试风暴；并在 spawn 失败时在错误对象挂载 `spawnStderrDetail`。对应 `cf8c020` 与 `a6c9a01`。
+- **MCP 输出 8.8KB 硬截断与 ANSI 清洗**：`src/mcp/output-filter.ts` 设定 8800 字节折叠阈值（保留首尾），避开上游 10KB 强制落盘惩罚；清洗 ANSI 转义码与 `` 终端动画，保持上下文纯净。对应 `4522c1f`。
+- **180s 阶梯超时看门狗与进程树清理**：`src/agy/process.ts` 内置 180s 超时监控，超时先触发 stdin EOF + SIGTERM 优雅退出，3s 宽限后升级为 Windows `taskkill /F /T` 树状强杀，彻底杜绝孤儿进程悬挂。对应 `6c30c23`。
+- **本地免登录配额嗅探命令**：新增 `npm run quota`（`src/quota/` 与 `scripts/check-quota.mjs`），嗅探 `~/.gemini/antigravity-cli/log/` 活跃端口与 `csrf_token`，走 ConnectRPC 拉取 `RetrieveUserQuotaSummary`，单行直看各模型配额与重置倒计时（解析层 fixture 覆盖，端到端路径待真机验证；协议采用 ConnectRPC 且必须带 csrf_token）。对应 `949cfe5`。
+
+### Changed
+
+- **版本升至 0.16.0**：`package.json` 与 `package-lock.json` 同步。
+- **README 与市场简介更新**：`README.md` 与 `README.en.md` 补全批处理工具、遥测防护、8.8KB 截断与配额嗅探等能力；`ABOUT.txt` 蒸馏更新至 130 字。
+
 ## [0.15.0] - 2026-11-20
 
 ### Added
