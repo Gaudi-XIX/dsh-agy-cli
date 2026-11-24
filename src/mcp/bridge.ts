@@ -33,6 +33,7 @@ import {
   type ToolProjectionResult,
 } from './tool-projection.js'
 import type { McpCallResult, McpTextContent, McpToolDescriptor } from './protocol.js'
+import { filterToolOutput } from './output-filter.js'
 
 /** The subset of the DSH tool registry this bridge uses. */
 /**
@@ -145,17 +146,20 @@ function resultToCallResult(result: DshToolExecutionResultLike): McpCallResult {
     const detail = Array.isArray(result.content)
       ? result.content.map(textOf).filter((part): part is string => part !== undefined).join('\n')
       : ''
-    return { content: [{ type: 'text', text: detail.length > 0 ? `${message}\n${detail}` : message }], isError: true }
+    return {
+      content: [{ type: 'text', text: filterToolOutput(detail.length > 0 ? `${message}\n${detail}` : message) }],
+      isError: true,
+    }
   }
   const blocks: McpTextContent[] = []
   if (Array.isArray(result.content)) {
     for (const block of result.content) {
       const text = textOf(block)
-      blocks.push({ type: 'text', text: text ?? JSON.stringify(block) })
+      blocks.push({ type: 'text', text: filterToolOutput(text ?? JSON.stringify(block)) })
     }
   }
   if (blocks.length === 0) {
-    blocks.push({ type: 'text', text: result.value === undefined ? '' : JSON.stringify(result.value) })
+    blocks.push({ type: 'text', text: result.value === undefined ? '' : filterToolOutput(JSON.stringify(result.value)) })
   }
   return { content: blocks, isError: false }
 }
@@ -418,7 +422,7 @@ async function executeDshTool(
     }
 
     return {
-      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+      content: [{ type: 'text', text: filterToolOutput(JSON.stringify(payload, null, 2)) }],
       isError: false,
     }
   }
