@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'n
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
+import { spawnStderrDetail } from './errors.js'
 import { redactText } from './redact.js'
 import { AgyStreamProtocolError, encodeAgyUserMessage } from './stream-protocol.js'
 import { buildWindowsNoConsoleLaunch } from './windows-launcher.js'
@@ -381,7 +382,18 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
       cwd: request.cwd,
       // agy's background updater spawns a visible console window. Upstream only
       // honours the literal lowercase 'true', so force it last on every agy spawn.
-      env: { ...process.env, ...request.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
+      // Telemetry-kill flags are forced last for the same reason: AGY's Clearcut
+      // client hammers the network every 5s with no backoff when offline, and no
+      // caller env may re-enable it.
+      env: {
+        ...process.env,
+        ...request.env,
+        AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
+        DO_NOT_TRACK: '1',
+        ANTIGRAVITY_DISABLE_TELEMETRY: 'true',
+        GOOGLE_CLOUD_DISABLE_TELEMETRY: 'true',
+        DISABLE_TELEMETRY: 'true',
+      },
       shell: false,
       detached: process.platform !== 'win32',
       windowsHide: true,
@@ -533,11 +545,18 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
       if (timeout !== undefined) clearTimeout(timeout)
       if (idle !== undefined) clearTimeout(idle)
       request.signal?.removeEventListener('abort', abortListener)
+      // Attach whatever stderr made it out before the failure so the fatal
+      // reason AGY printed is visible instead of a bare exit-code black box.
+      const stderrDetail = spawnStderrDetail(stderr)
+      const diagnostic = processDiagnosticFor(error, 'spawn', {
+        stderrBytes,
+        ...(stderrDetail === undefined ? {} : { stderrSummary: stderrDetail }),
+      })
       rejectResult(new AgyProcessError(
-        `Unable to start AGY executable (${error.code ?? 'unknown'})${diagnosticLabel(processDiagnosticFor(error, 'spawn'))}`,
+        `Unable to start AGY executable (${error.code ?? 'unknown'})${diagnosticLabel(diagnostic)}`,
         'SPAWN_FAILED',
         { cause: error },
-        processDiagnosticFor(error, 'spawn'),
+        diagnostic,
       ))
     })
     child.once('close', (exitCode, signal) => {
