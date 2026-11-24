@@ -25,6 +25,20 @@ export type ProcessTermination = 'completed' | 'non-zero' | 'signaled' | 'aborte
  * goes silent, so a turn can never hang forever on an unclosed pipe.
  */
 export type AgyStdinMode = 'close' | 'hold'
+
+/**
+ * Default wall-clock watchdog for a `runProcess` run whose caller did not pass
+ * a positive `timeoutMs`. A hung AGY process (network drop, dead upstream) must
+ * never hold a port or a resource lock forever.
+ */
+export const DEFAULT_WATCHDOG_MS = 180_000
+
+/**
+ * Grace period between the watchdog's cancel signal (stdin close + a signal to
+ * the direct child) and the escalating tree kill. Injectable per request via
+ * `gracefulKillMs` so tests can drive the ladder deterministically.
+ */
+export const WATCHDOG_GRACEFUL_MS = 3_000
 /** Maps a termination to the code the retry classifier sees, so a silence kill
  * and a wall-clock kill are distinguishable in telemetry without changing the
  * DSH-facing code (`TIMEOUT` either way). */
@@ -180,8 +194,18 @@ export interface ProcessRequest {
   stdinMode?: AgyStdinMode
   cwd?: string
   env?: NodeJS.ProcessEnv
-  /** Hard wall-clock ceiling for the whole run. Omitted means unbounded. */
+  /**
+   * Hard wall-clock ceiling for the whole run. A positive value wins;
+   * omitted or non-positive falls back to the 180s default watchdog
+   * (`DEFAULT_WATCHDOG_MS`) — a run is never unbounded.
+   */
   timeoutMs?: number
+  /**
+   * Grace period (ms) after the watchdog's cancel signal before the process
+   * tree is force-killed. Omitted means `WATCHDOG_GRACEFUL_MS` (3s); 0 means
+   * escalate immediately. Test seam for driving the ladder deterministically.
+   */
+  gracefulKillMs?: number
   /**
    * Inactivity budget: the run is killed when no stdout/stderr line arrives for
    * this long. Re-armed on every delivered line, so a turn that keeps producing
@@ -480,9 +504,40 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
 
     const abortListener = (): void => kill('aborted')
     request.signal?.addEventListener('abort', abortListener, { once: true })
-    const timeout = request.timeoutMs !== undefined && request.timeoutMs > 0
-      ? setTimeout(() => kill('timeout'), request.timeoutMs)
-      : undefined
+    // Wall-clock watchdog. Explicit positive timeoutMs wins; anything else
+    // falls back to the default 180s ceiling, so no run is ever unbounded.
+    const watchdogMs = request.timeoutMs !== undefined && request.timeoutMs > 0
+      ? request.timeoutMs
+      : DEFAULT_WATCHDOG_MS
+    const gracefulKillMs = request.gracefulKillMs !== undefined && request.gracefulKillMs >= 0
+      ? request.gracefulKillMs
+      : WATCHDOG_GRACEFUL_MS
+    let gracefulTimer: ReturnType<typeof setTimeout> | undefined
+    // Graceful ladder on expiry: cancel first (close the request pipe — the
+    // stream-json "no next turn" cue — and signal the direct child), then
+    // escalate to a tree kill only when the process outlived the grace period,
+    // leaving no orphan behind.
+    const timeout = setTimeout(() => {
+      if (termination === undefined) termination = 'timeout'
+      // Cancel first: close the request pipe — the stream-json "no next turn"
+      // cue — and, on POSIX, signal the direct child with SIGTERM. On Windows
+      // child.kill() would already be TerminateProcess (the hard kill), so the
+      // pipe EOF is the only graceful cancel cue available there.
+      endStdin()
+      if (process.platform !== 'win32') {
+        try {
+          child.kill('SIGTERM')
+        } catch {
+          // already dead — the close handler settles the run
+        }
+      }
+      gracefulTimer = setTimeout(() => {
+        // Unconditional tree kill: the graceful signal may have taken down the
+        // direct child while a grandchild lingers — the tree sweep is what
+        // guarantees no orphan survives.
+        terminateProcessTree(child)
+      }, gracefulKillMs)
+    }, watchdogMs)
     // Idle watchdog: re-armed on every stdout/stderr chunk, so long reasoning
     // or a long tool step is not mistaken for a hung process. A turn that keeps
     // producing output outlives `timeoutMs`; only real silence trips it.
@@ -543,6 +598,9 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
       if (settled) return
       settled = true
       if (timeout !== undefined) clearTimeout(timeout)
+      // gracefulTimer is deliberately NOT cleared here: when the watchdog
+      // fired, the tree sweep must run even if the process exited on its own
+      // in between — that is what guarantees no orphan grandchild survives.
       if (idle !== undefined) clearTimeout(idle)
       request.signal?.removeEventListener('abort', abortListener)
       // Attach whatever stderr made it out before the failure so the fatal
@@ -564,6 +622,8 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
       settled = true
       endStdin()
       if (timeout !== undefined) clearTimeout(timeout)
+      // gracefulTimer stays armed here too, for the same orphan guarantee as
+      // in the error handler above.
       if (idle !== undefined) clearTimeout(idle)
       request.signal?.removeEventListener('abort', abortListener)
       if (termination !== 'output-limit') flushStdout(true)
