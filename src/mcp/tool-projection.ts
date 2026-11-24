@@ -13,6 +13,7 @@
 import { sanitizeSchema, TOOL_PROTOCOL_LIMITS } from '../provider/tool-protocol.js'
 import { fitTools } from '../provider/tool-budget.js'
 import type { McpToolDescriptor } from './protocol.js'
+import { BATCH_TOOL_DESCRIPTORS } from './batch-tools.js'
 
 /** The subset of `ctx.tools` this module needs. */
 export interface DshToolRegistryLike {
@@ -255,6 +256,36 @@ export function projectDshTools(
   }
   if (options.adaptiveBaseOnly === true && allow === undefined && tools.length < maxTools) {
     tools.push(DISCOVER_TOOLS_DESCRIPTOR)
+  }
+  // Composite batch tools (apply_edits / read_slices): projected like the
+  // discovery descriptor — exempt from the base-tool gate, but still subject
+  // to the allowlist and the cap. A name the registry already provides wins:
+  // dedupe runs before the cap so a registry tool is never reported as both
+  // projected and excluded. The literal descriptors go through the same
+  // sanitizer as registry schemas, so MCP exposure cannot carry a keyword the
+  // structured tool protocol drops.
+  for (const descriptor of BATCH_TOOL_DESCRIPTORS) {
+    if (seen.has(descriptor.name)) continue
+    if (allow !== undefined && !allow.has(descriptor.name)) {
+      excluded.push(descriptor.name)
+      continue
+    }
+    if (tools.length >= maxTools) {
+      excluded.push(descriptor.name)
+      continue
+    }
+    seen.add(descriptor.name)
+    // Same fail-open rule as the registry path above: an unsupported keyword
+    // must not take down projection (and with it every tool listed from this
+    // call), so the batch schema falls back to an open object.
+    let batchParameters: Record<string, unknown>
+    try {
+      const sanitized = sanitizeSchema(descriptor.inputSchema, 0, `tool ${descriptor.name}.parameters`)
+      batchParameters = isRecord(sanitized) && sanitized.type === 'object' ? sanitized : { ...FALLBACK_SCHEMA }
+    } catch {
+      batchParameters = { ...FALLBACK_SCHEMA }
+    }
+    tools.push({ ...descriptor, inputSchema: batchParameters })
   }
   const fitted = fitTools(tools)
   fitted.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
