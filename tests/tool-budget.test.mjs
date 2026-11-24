@@ -123,7 +123,7 @@ test('projection applies the budget and keeps a degraded RE2 pattern tool', () =
     },
   })
   const projection = projectDshTools({ schemas: () => tools })
-  assert.equal(projection.tools.length, tools.length)
+  assert.equal(projection.tools.length, tools.length + 2) // + batch tools
   assert.ok(totalTokens(projection.tools) <= TOOL_TOKEN_BUDGET)
   const guarded = projection.tools.find(tool => tool.name === 'guarded')
   assert.ok(guarded)
@@ -140,6 +140,7 @@ test('projection fast path leaves small sets untouched', () => {
       { name: 'write', description: 'w', parameters: { type: 'object' } },
     ],
   })
-  assert.deepEqual(projection.tools.map(tool => tool.name), ['read', 'write'])
-  assert.equal(projection.tools[0].inputSchema.properties.path.type, 'string')
+  assert.deepEqual(projection.tools.map(tool => tool.name), ['apply_edits', 'read', 'read_slices', 'write'])
+  const read = projection.tools.find(tool => tool.name === 'read')
+  assert.equal(read.inputSchema.properties.path.type, 'string')
 })

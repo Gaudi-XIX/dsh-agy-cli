@@ -147,8 +147,8 @@ test('tool projection sorts names and reuses the protocol schema gate', () => {
       { name: 'grep', description: 'g', parameters: { type: 'object', properties: {} } },
     ],
   })
-  assert.deepEqual(projection.tools.map(tool => tool.name), ['grep', 'read', 'write'])
-  assert.equal(projection.tools[1].inputSchema.type, 'object')
+  assert.deepEqual(projection.tools.map(tool => tool.name), ['apply_edits', 'grep', 'read', 'read_slices', 'write'])
+  assert.equal(projection.tools[2].inputSchema.type, 'object')
 })
 
 test('tool projection drops host-internal control tools and honours the allowlist', () => {
@@ -168,8 +168,9 @@ test('tool projection degrades an unusable schema to an open object instead of d
   const projection = projectDshTools({
     schemas: () => [{ name: 'odd', description: 'o', parameters: 'not-a-schema' }],
   })
-  assert.equal(projection.tools.length, 1)
-  assert.deepEqual(projection.tools[0].inputSchema, {
+  assert.equal(projection.tools.length, 3)
+  const odd = projection.tools.find(tool => tool.name === 'odd')
+  assert.deepEqual(odd.inputSchema, {
     type: 'object',
     properties: {},
     additionalProperties: false,
@@ -188,7 +189,7 @@ test('tool projection honours an explicit maxTools cap and names what it dropped
   // so which tools a future overflow costs is decided by registry order rather
   // than by importance. The sorted output is what AGY actually sees.
   assert.deepEqual(projection.tools.map(tool => tool.name), ['grep', 'read', 'write'])
-  assert.deepEqual([...projection.excluded].sort(), ['edit', 'glob', 'pwsh'])
+  assert.deepEqual([...projection.excluded].sort(), ['apply_edits', 'edit', 'glob', 'pwsh', 'read_slices'])
 })
 
 test('tool projection leaves the default cap far above this machine\'s tool count', () => {
@@ -196,7 +197,7 @@ test('tool projection leaves the default cap far above this machine\'s tool coun
   const projection = projectDshTools({
     schemas: () => names.map(name => ({ name, description: name, parameters: { type: 'object' } })),
   })
-  assert.equal(projection.tools.length, 73)
+  assert.equal(projection.tools.length, 75)
   assert.deepEqual(projection.excluded, [])
 })
 
@@ -280,7 +281,7 @@ test('the bridge resolves the session controller late, so a later mount is not l
       jsonrpc: '2.0', id, method: 'tools/list', params: {},
     }))).body).result.tools.map(tool => tool.name)
 
-    assert.deepEqual(await list(21), ['click'], 'no controller means the global view')
+    assert.deepEqual(await list(21), ['apply_edits', 'click', 'read_slices'], 'no controller means the global view')
 
     mounted = true
     assert.ok((await list(22)).includes('read'), 'a controller mounted later still scopes the view')
@@ -662,7 +663,7 @@ test('tool projection in adaptiveBaseOnly mode projects only base tools and disc
       { name: 'schedule_create', description: 'sc', parameters: { type: 'object' } },
     ],
   }, { adaptiveBaseOnly: true })
-  assert.deepEqual(projection.tools.map(tool => tool.name), ['dsh_discover_tools', 'pwsh', 'read', 'write'])
+  assert.deepEqual(projection.tools.map(tool => tool.name), ['apply_edits', 'dsh_discover_tools', 'pwsh', 'read', 'read_slices', 'write'])
   assert.ok(projection.excluded.includes('wechat_send'))
   assert.ok(projection.excluded.includes('schedule_create'))
 })
@@ -675,7 +676,7 @@ test('tool projection in adaptiveBaseOnly mode honors mounted tools', () => {
       { name: 'wechat_send', description: 'ws', parameters: { type: 'object' } },
     ],
   }, { adaptiveBaseOnly: true, mountedTools: new Set(['wechat_send']) })
-  assert.deepEqual(projection.tools.map(tool => tool.name), ['dsh_discover_tools', 'pwsh', 'read', 'wechat_send'])
+  assert.deepEqual(projection.tools.map(tool => tool.name), ['apply_edits', 'dsh_discover_tools', 'pwsh', 'read', 'read_slices', 'wechat_send'])
 })
 
 test('tool projection preserves both ops tools and raw fallback tools, keeping subagent in drawer', () => {
@@ -694,6 +695,7 @@ test('tool projection preserves both ops tools and raw fallback tools, keeping s
   // subagent must stay in drawer (excluded), ops and raw base tools projected
   assert.ok(projection.excluded.includes('subagent'))
   assert.deepEqual(projection.tools.map(tool => tool.name), [
+    'apply_edits',
     'dsh_discover_tools',
     'ops_bash',
     'ops_edit_file',
@@ -701,6 +703,7 @@ test('tool projection preserves both ops tools and raw fallback tools, keeping s
     'ops_write_file',
     'pwsh',
     'read',
+    'read_slices',
     'write',
   ])
 })
@@ -739,7 +742,7 @@ test('the bridge supports dsh_discover_tools and on-demand tool mounting', async
     assert.equal(list1.status, 200)
     const initialList = JSON.parse(list1.body).result
     const toolNames = initialList.tools.map(t => t.name)
-    assert.deepEqual(toolNames, ['dsh_discover_tools', 'pwsh', 'read'])
+    assert.deepEqual(toolNames, ['apply_edits', 'dsh_discover_tools', 'pwsh', 'read', 'read_slices'])
 
     // Query discovery and mount wechat_send
     const call1 = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
