@@ -64,6 +64,7 @@
     "tool:protocol": "npm run build && node scripts/tool-protocol-experiment.mjs",
     "agy:tool-contract": "npm run build && node scripts/tool-prompt-contract-experiment.mjs",
     "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "quota": "npm run -s build && node scripts/check-quota.mjs",
     "quota:experiment": "npm run build && node scripts/quota-experiment.mjs",
     "image:experiment": "npm run build && node scripts/image-protocol-experiment.mjs",
     "verify": "npm run typecheck && npm test && npm pack --dry-run",
