@@ -845,3 +845,88 @@ test('the bridge auto-mounts an unprojected host tool on call', async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('the bridge routes apply_edits end-to-end and rolls back on failure', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agy-mcp-batch-'))
+  try {
+    await writeFile(join(root, 'a.txt'), 'hello world', 'utf8')
+    await writeFile(join(root, 'b.txt'), 'second file', 'utf8')
+    const webServer = fakeWebServer()
+    let hostCalled = false
+    const bridge = await startDshMcpBridge({
+      webServer,
+      tools: {
+        schemas: () => [{ name: 'read', description: 'r', parameters: { type: 'object' } }],
+        async execute() {
+          hostCalled = true
+          return batchOf({ calls: [{ id: 'x' }] }, { isError: false, value: '', content: [] })
+        },
+      },
+      serverVersion: '1.0.0',
+      agyConfigRoot: root,
+    })
+    bridge.setSession('session-batch')
+    const path = new URL(bridge.url).pathname
+    const call = args => postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'apply_edits', arguments: args },
+    }))
+
+    // Success: both files rewritten in one transaction.
+    const ok = await call({ edits: [
+      { file: join(root, 'a.txt'), pattern: 'world', replacement: 'bridge' },
+      { file: join(root, 'b.txt'), pattern: '^second file$', replacement: '2nd' },
+    ] })
+    const okResult = JSON.parse(ok.body).result
+    assert.equal(okResult.isError, false)
+    const payload = JSON.parse(okResult.content[0].text)
+    assert.deepEqual(payload.files, [join(root, 'a.txt'), join(root, 'b.txt')])
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'hello bridge')
+    assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), '2nd')
+
+    // Failure (zero matches): isError result, zero files touched.
+    const bad = await call({ edits: [
+      { file: join(root, 'a.txt'), pattern: 'hello', replacement: 'HELLO' },
+      { file: join(root, 'b.txt'), pattern: 'no-such-token', replacement: 'x' },
+    ] })
+    const badResult = JSON.parse(bad.body).result
+    assert.equal(badResult.isError, true)
+    assert.match(badResult.content[0].text, /apply_edits/)
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'hello bridge', 'rollback: first file untouched')
+    assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), '2nd')
+    assert.equal(hostCalled, false, 'batch tools must not fall through to the host executor')
+    await bridge.dispose()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('the bridge routes read_slices end-to-end', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agy-mcp-batch-'))
+  try {
+    await writeFile(join(root, 'c.ts'), 'line1\nfunction f() {}\nline3', 'utf8')
+    const webServer = fakeWebServer()
+    const bridge = await startDshMcpBridge({
+      webServer,
+      tools: {
+        schemas: () => [{ name: 'read', description: 'r', parameters: { type: 'object' } }],
+        async execute() { throw new Error('host must not be called for read_slices') },
+      },
+      serverVersion: '1.0.0',
+      agyConfigRoot: root,
+    })
+    bridge.setSession('session-slices')
+    const path = new URL(bridge.url).pathname
+    const res = await postRoute(webServer, path, bridge.endpoint.token, JSON.stringify({
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'read_slices', arguments: { file: join(root, 'c.ts'), slices: [{ start: 1, end: 2 }], outline: true } },
+    }))
+    const result = JSON.parse(res.body).result
+    assert.equal(result.isError, false)
+    const payload = JSON.parse(result.content[0].text)
+    assert.equal(payload.slices[0].text, 'line1\nfunction f() {}')
+    assert.ok(payload.outline.some(entry => entry.text.includes('function f() {}')))
+    await bridge.dispose()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
