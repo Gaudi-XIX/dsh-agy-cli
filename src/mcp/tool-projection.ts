@@ -92,7 +92,7 @@ export function isBaseDshTool(name: string): boolean {
 
 export const DISCOVER_TOOLS_DESCRIPTOR: McpToolDescriptor = Object.freeze({
   name: 'dsh_discover_tools',
-  description: 'Search available DSH tools in the host registry and mount them into the session on demand.',
+  description: 'The host may have more tools beyond the ones projected here (for example web search, page fetching, or other capabilities), especially when only base tools are shown. If a task seems blocked by a missing capability, call dsh_discover_tools with keywords to search the full host registry and mount matching tools into the session by name; mounted tools become immediately usable in the same session.',
   inputSchema: {
     type: 'object',
     properties: {

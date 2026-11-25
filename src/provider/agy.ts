@@ -290,6 +290,18 @@ const DEFAULT_MAX_EVENT_LINE_LENGTH = 1_048_576
 const IMAGE_TOOL_PATH_KEYS = new Set(['AbsolutePath', 'absolutePath', 'path', 'file_path', 'filePath'])
 const IMAGE_TOOL_JSON_KEYS = new Set(['args', 'arguments', 'input', 'parameters', 'tool_input', 'toolInput'])
 
+// Defect mitigation (2026-11-25): AGY print mode soft-denies tool confirmations
+// (`Print mode: soft-denying tool confirmation "ReadFile" at step N`), the model
+// then idles and the turn ends with no text and no tool calls, which the host
+// retries as EMPTY_RESPONSE. The AGY CLI exposes no per-tool pre-approval flag
+// for print mode (only the all-tools `--dangerously-skip-permissions`, which is
+// too broad), so on the retry after an EMPTY_RESPONSE we append a short hint at
+// the prompt TAIL — it must not enter the stable prompt prefix (see
+// stableAgyPromptPrefix) so prefix cache hits are preserved.
+const EMPTY_RESPONSE_RETRY_HINT = 'Note: the previous attempt produced no text (a tool confirmation was likely denied in print mode). Reply directly with text now, or use only tools that run without permission confirmation.'
+const EMPTY_RESPONSE_HINT_TTL_MS = 5 * 60_000
+const EMPTY_RESPONSE_HINT_MAX_SESSIONS = 64
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -1205,6 +1217,7 @@ export class AgyAdapter extends LlmAdapter {
   private readonly imageAgent: AgyAgentRuntime | undefined
   private readonly resolveAttachmentStore: () => AgyImageAttachmentStore | undefined
   private readonly resolveToolBridge: (() => DshToolBridgeHandle | undefined) | undefined
+  private readonly emptyResponseSessions = new Map<string, number>()
   private readonly mcpBridgeEnabled: boolean
   private readonly discovery: AgyModelDiscovery | undefined
   private currentModels: readonly ModelConfig[]
@@ -1398,6 +1411,26 @@ export class AgyAdapter extends LlmAdapter {
     return this.sessions.delete(sessionId)
   }
 
+  /** Record that this session just ended in an EMPTY_RESPONSE (bounded, timestamped). */
+  private markEmptyResponse(sessionKey: string | undefined): void {
+    if (sessionKey === undefined) return
+    this.emptyResponseSessions.set(sessionKey, Date.now())
+    if (this.emptyResponseSessions.size > EMPTY_RESPONSE_HINT_MAX_SESSIONS) {
+      const oldest = this.emptyResponseSessions.keys().next().value
+      if (oldest !== undefined) this.emptyResponseSessions.delete(oldest)
+    }
+  }
+
+  /** Consume the retry hint for this session, if one is fresh (one-shot use). */
+  private takeEmptyResponseHint(sessionKey: string | undefined): string | undefined {
+    if (sessionKey === undefined) return undefined
+    const markedAt = this.emptyResponseSessions.get(sessionKey)
+    if (markedAt === undefined) return undefined
+    this.emptyResponseSessions.delete(sessionKey)
+    if (Date.now() - markedAt > EMPTY_RESPONSE_HINT_TTL_MS) return undefined
+    return EMPTY_RESPONSE_RETRY_HINT
+  }
+
   /** Inspect the detached mapping for diagnostics and tests. */
   getSession(sessionId: string): SessionRecord | undefined {
     return this.sessions.get(sessionId)
@@ -1540,7 +1573,8 @@ export class AgyAdapter extends LlmAdapter {
     const basePrompt = hasConversation
       ? (prepared.turnPrompt ?? serializeAgyTurnPrompt(options))
       : prepared.fullPrompt
-    const prompt = this.preparePrompt(basePrompt, toolProtocol, protocolRepair, protocolRepairHint, protocolRepairReason, telemetry)
+    const emptyResponseHint = this.takeEmptyResponseHint(sessionKey)
+    const prompt = this.preparePrompt(emptyResponseHint === undefined ? basePrompt : `${basePrompt}\n\n${emptyResponseHint}`, toolProtocol, protocolRepair, protocolRepairHint, protocolRepairReason, telemetry)
     // Persistent worker is session-affine, single active turn, reuse AGY conversation
     telemetry.dispatch = 'persistent'
     const dispatchStartedAt = Date.now()
@@ -1816,6 +1850,7 @@ export class AgyAdapter extends LlmAdapter {
     } else if (!blockStarted && telemetry.toolCallCount === 0) {
       // Same invariant as the one-shot path: a text-only turn that produced
       // nothing is a failure the host can retry, never a silent success.
+      this.markEmptyResponse(sessionKey)
       throw new LlmError('AGY completed without a text response', EMPTY_RESPONSE_CODE)
     }
     if (attemptUsage !== undefined) yield { type: 'usage', usage: attemptUsage }
@@ -2237,7 +2272,8 @@ export class AgyAdapter extends LlmAdapter {
     const basePrompt = requestedConversationId === undefined
       ? prepared.fullPrompt
       : prepared.turnPrompt ?? serializeAgyTurnPrompt(options)
-    const prompt = this.preparePrompt(basePrompt, toolProtocol, protocolRepair, protocolRepairHint, protocolRepairReason, telemetry)
+    const emptyResponseHint = this.takeEmptyResponseHint(sessionKey)
+    const prompt = this.preparePrompt(emptyResponseHint === undefined ? basePrompt : `${basePrompt}\n\n${emptyResponseHint}`, toolProtocol, protocolRepair, protocolRepairHint, protocolRepairReason, telemetry)
     const addDirs = [
       ...(this.addDirs ?? []),
       ...(prepared.imageDirectory === undefined ? [] : [prepared.imageDirectory]),
@@ -2628,6 +2664,7 @@ export class AgyAdapter extends LlmAdapter {
       }
       yield { type: 'block-end', index: 1, block: { type: 'reasoning', text: mcpStepsText } }
     } else if (!blockStarted && telemetry.toolCallCount === 0) {
+      this.markEmptyResponse(sessionKey)
       throw new LlmError('AGY completed without a text response', EMPTY_RESPONSE_CODE)
     }
     // A tool-only turn with no narration and no recorded step still succeeds:

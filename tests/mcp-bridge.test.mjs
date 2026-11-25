@@ -930,3 +930,22 @@ test('the bridge routes read_slices end-to-end', async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('dsh_discover_tools description guides two-step discovery without naming any concrete tool', () => {
+  const descriptor = projectDshTools({
+    schemas: () => [
+      { name: 'pwsh', description: 'p', parameters: { type: 'object' } },
+      { name: 'stub_nonbase_tool', description: 's', parameters: { type: 'object' } },
+    ],
+  }, { adaptiveBaseOnly: true }).tools.find(tool => tool.name === 'dsh_discover_tools')
+  assert.ok(descriptor)
+  const text = descriptor.description
+  // Guides discoverability: non-projected tools exist and can be found + mounted by name.
+  assert.match(text, /beyond|not.*(projected|shown)|more tools/i)
+  assert.match(text, /dsh_discover_tools/)
+  assert.match(text, /mount/i)
+  // Machine-agnostic: no concrete tool name other than dsh_discover_tools itself.
+  for (const name of ['pwsh', 'stub_nonbase_tool', 'web_search', 'web_fetch', 'ops_bash']) {
+    assert.ok(!text.includes(name), `description must not hardcode tool name: ${name}`)
+  }
+})

@@ -2315,3 +2315,51 @@ test('AgyAdapter serializes same-session calls while allowing separate sessions 
   await Promise.all([consume('one'), consume('two')])
   assert.equal(maximum, 2)
 })
+
+test('AgyAdapter appends the EMPTY_RESPONSE retry hint at the prompt tail of the next turn in the same session', async () => {
+  const captured = []
+  const hint = 'previous attempt produced no text'
+  const turns = [
+    // Turn 1: AGY ends the turn with no text and no tool calls (print-mode
+    // soft-deny pattern) -> provider must throw EMPTY_RESPONSE.
+    [
+      { event: 'init', init: { agent: 'deepseek-proxy' } },
+      { event: 'result', result: { status: 'SUCCESS', response: '', usage: { totalTokens: 0 } } },
+    ],
+    // Turn 2 (the host retry): normal text response.
+    [
+      { event: 'init', init: { agent: 'deepseek-proxy' } },
+      { event: 'step_update', step_update: { text_delta: 'ok', usage: { totalTokens: 1 } } },
+      { event: 'result', result: { status: 'SUCCESS', response: 'ok', usage: { totalTokens: 1 } } },
+    ],
+  ]
+  const adapter = new AgyAdapter({ model: 'gemini-test' }, {
+    runAgyProcess: async req => {
+      captured.push(req)
+      const events = turns.length > 1 ? turns.shift() : turns[0]
+      for (const event of events) {
+        await new Promise(resolve => setTimeout(resolve, 1))
+        req.onStdoutLine?.(JSON.stringify(event))
+      }
+      return result()
+    },
+  })
+  const sessionRequest = { ...request, sessionId: 'sess-empty-retry' }
+  await assert.rejects(async () => {
+    for await (const chunk of adapter.stream(sessionRequest)) chunk
+  }, /completed without a text response/)
+  // First turn: no hint yet.
+  assert.ok(!captured[0].prompt.includes(hint))
+  // Retry turn of the same session: hint appended at the prompt tail.
+  const chunks = []
+  for await (const chunk of adapter.stream(sessionRequest)) chunks.push(chunk)
+  assert.ok(captured[1].prompt.includes(hint))
+  assert.ok(captured[1].prompt.indexOf(hint) > captured[1].prompt.indexOf('reply 123'))
+  assert.equal(chunks.find(chunk => chunk.type === 'text-delta')?.text, 'ok')
+  // One-shot consumption: a third turn of the same session carries no hint.
+  for await (const chunk of adapter.stream(sessionRequest)) chunk
+  assert.ok(!captured[2].prompt.includes(hint))
+  // A different session never sees the hint.
+  for await (const chunk of adapter.stream({ ...request, sessionId: 'sess-other' })) chunk
+  assert.ok(!captured[3].prompt.includes(hint))
+})
