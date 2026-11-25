@@ -61,6 +61,7 @@ test('earlier-turn images become cached placeholders instead of a request-wide c
   touched.push(...prepared.imagePaths)
 
   assert.equal(prepared.bridgeActive, true)
+  assert.equal(prepared.turnHasImages, true)
   assert.equal(prepared.imageCacheDirectory, IMAGE_HISTORY_CACHE_DIR)
   assert.equal(prepared.imagePaths.length, 6)
   assert.equal(
@@ -145,6 +146,7 @@ test('a turn with only earlier images still activates the bridge', async () => {
   assert.equal(prepared.imageDirectory, undefined, 'nothing new to stage')
   assert.equal(prepared.imageCacheDirectory, IMAGE_HISTORY_CACHE_DIR)
   assert.equal(prepared.bridgeActive, true)
+  assert.equal(prepared.turnHasImages, false)
   assert.equal(prepared.imagePaths.length, 1)
 })
 

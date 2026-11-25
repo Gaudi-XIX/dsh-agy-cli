@@ -59,6 +59,8 @@ export interface PreparedAgyPrompts {
   imagePaths: readonly string[]
   /** True when this request replaced at least one image block with a placeholder. */
   bridgeActive: boolean
+  /** True when the turn being answered itself carries image blocks. */
+  turnHasImages: boolean
   cleanup: () => Promise<void>
 }
 
@@ -333,6 +335,7 @@ export async function prepareAgyPrompts(
       imageCacheDirectory: undefined,
       imagePaths: [],
       bridgeActive: false,
+      turnHasImages: false,
       cleanup: async () => undefined,
     }
   }
@@ -372,6 +375,7 @@ export async function prepareAgyPrompts(
       imageCacheDirectory: historyRefs.length === 0 ? undefined : IMAGE_HISTORY_CACHE_DIR,
       imagePaths: [...images.values()].flatMap(image => (image.path === undefined ? [] : [image.path])),
       bridgeActive: true,
+      turnHasImages: currentRefs.length > 0,
       cleanup: staged.cleanup,
     }
   } catch (error) {

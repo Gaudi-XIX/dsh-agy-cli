@@ -2285,7 +2285,7 @@ export class AgyAdapter extends LlmAdapter {
       ...(prepared.imageDirectory === undefined ? [] : [prepared.imageDirectory]),
       ...(prepared.imageCacheDirectory === undefined ? [] : [prepared.imageCacheDirectory]),
     ]
-    const imageRuntime = prepared.bridgeActive ? this.imageAgent : undefined
+    const imageRuntime = prepared.turnHasImages ? this.imageAgent : undefined
     const requestMode = imageRuntime?.mode ?? this.mode
     const requestDisableSlashCommands = imageRuntime?.disableSlashCommands ?? this.disableSlashCommands
     const queue = new AsyncQueue<AgyJsonEvent>()

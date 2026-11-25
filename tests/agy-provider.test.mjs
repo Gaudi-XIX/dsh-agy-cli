@@ -396,6 +396,47 @@ test('experimental image bridge stages AttachmentStore bytes, exposes a director
   assert.deepEqual(models[0]?.inputModalities, ['text', 'image'])
 })
 
+test('a history-only image turn keeps the normal agent', async () => {
+  const captured = []
+  const attachment = {
+    attachmentId: 'attachment-history-fixture',
+    mediaType: 'image/png',
+    bytes: 4,
+    width: 1,
+    height: 1,
+  }
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    toolPolicy: 'dsh-owned',
+    imageInput: 'experimental',
+  }, {
+    attachmentStore: {
+      readImage: async ref => ({ ref, data: new Uint8Array([137, 80, 78, 71]) }),
+    },
+    runAgyProcess: async requestValue => {
+      captured.push(requestValue)
+      requestValue.onStdoutLine?.(JSON.stringify({
+        event: 'result',
+        result: { status: 'SUCCESS', response: 'text answer' },
+      }))
+      return result()
+    },
+  })
+
+  for await (const _chunk of adapter.stream({
+    ...request,
+    system: 'system prompt',
+    messages: [
+      { role: 'user', content: [{ type: 'image', attachment }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'noted' }] },
+      { role: 'user', content: [{ type: 'text', text: 'plain question' }] },
+    ],
+  })) {}
+
+  assert.notEqual(captured[0]?.agent, 'dsh-agy-image-view')
+  assert.notEqual(captured[0]?.mode, 'plan')
+})
+
 test('experimental image bridge narrowly permits staged view_file events with DSH-owned tools', async () => {
   let stagedPath
   const chunks = []
