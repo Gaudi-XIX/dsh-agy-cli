@@ -1075,7 +1075,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         catalogSource = 'static'
       } else {
         try {
-          const disc = await withDeadline(modelDiscovery.discover(configured), DISCOVERY_AWAIT_MS)
+          const disc = await withDeadline(modelDiscovery.discover(configured, { force: true }), DISCOVERY_AWAIT_MS)
           if (disc === undefined) {
             catalogSource = 'unavailable'
             catalogError = 'model discovery timed out'

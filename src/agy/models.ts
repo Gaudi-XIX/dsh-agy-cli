@@ -32,6 +32,16 @@ export interface AgyModelDiscoveryResult {
 
 export type AgyModelDiscoveryCommand = (request: ProcessRequest) => Promise<ProcessResult>
 
+export interface AgyModelDiscoveryCallOptions {
+  /**
+   * Force a real re-discovery: skip the TTL cache and the failure-cooldown
+   * hit. Single-flight, cache writes and failure recording keep their usual
+   * semantics; a forced call shares an already forced in-flight refresh but
+   * never settles for an in-flight non-forced (warm-up) result.
+   */
+  force?: boolean
+}
+
 export interface AgyModelDiscoveryOptions {
   executable?: string
   ttlMs?: number
@@ -184,6 +194,8 @@ export class AgyModelDiscovery {
   private cache: CachedModels | undefined
   private failureState: FailureState | undefined
   private inFlight: Promise<AgyModelDiscoveryResult> | undefined
+  private forceInFlight: Promise<AgyModelDiscoveryResult> | undefined
+  private generation = 0
 
   constructor(options: AgyModelDiscoveryOptions = {}) {
     this.executable = options.executable?.trim() === '' ? undefined : options.executable?.trim()
@@ -197,13 +209,14 @@ export class AgyModelDiscovery {
     this.now = options.now ?? Date.now
   }
 
-  async discover(configured: readonly ModelConfig[]): Promise<AgyModelDiscoveryResult> {
+  async discover(configured: readonly ModelConfig[], options?: AgyModelDiscoveryCallOptions): Promise<AgyModelDiscoveryResult> {
+    const force = options !== undefined && options.force === true
     const currentTime = this.now()
-    if (this.cache !== undefined && this.cache.expiresAt > currentTime) {
+    if (!force && this.cache !== undefined && this.cache.expiresAt > currentTime) {
       return { models: this.cache.models, source: 'cache', stale: false }
     }
     const failure = this.failureState
-    if (failure !== undefined && failure.cooldownUntil > currentTime) {
+    if (!force && failure !== undefined && failure.cooldownUntil > currentTime) {
       // Negative cache hit: the cooldown window and snapshot.expiresAt are the
       // same clock, so no gap can re-spawn `agy models` before the window ends.
       const { models, source, stale, warning, warningCode } = failure.snapshot
@@ -215,11 +228,39 @@ export class AgyModelDiscovery {
         ...(warningCode === undefined ? {} : { warningCode }),
       }
     }
+    if (force) {
+      // A forced call must not settle for an in-flight warm-up result: wait
+      // for it, then run its own refresh. Concurrent forced calls share one
+      // forced refresh so repeated clicks cannot spawn without bound.
+      if (this.forceInFlight !== undefined) return this.forceInFlight
+      const forced = (async (): Promise<AgyModelDiscoveryResult> => {
+        if (this.inFlight !== undefined) {
+          try {
+            await this.inFlight
+          } catch {
+            // A prior refresh failure must not abort the forced one.
+          }
+        }
+        const refresh = this.refresh(configured, ++this.generation)
+        this.inFlight = refresh
+        try {
+          return await refresh
+        } finally {
+          if (this.inFlight === refresh) this.inFlight = undefined
+        }
+      })()
+      this.forceInFlight = forced
+      try {
+        return await forced
+      } finally {
+        if (this.forceInFlight === forced) this.forceInFlight = undefined
+      }
+    }
     // inFlight only collapses concurrent refreshes into one spawn; it does not
     // remember failures across rounds (that is failureState's job).
     if (this.inFlight !== undefined) return this.inFlight
 
-    const refresh = this.refresh(configured)
+    const refresh = this.refresh(configured, ++this.generation)
     this.inFlight = refresh
     try {
       return await refresh
@@ -228,7 +269,7 @@ export class AgyModelDiscovery {
     }
   }
 
-  private async refresh(configured: readonly ModelConfig[]): Promise<AgyModelDiscoveryResult> {
+  private async refresh(configured: readonly ModelConfig[], generation: number): Promise<AgyModelDiscoveryResult> {
     try {
       const request: ProcessRequest = {
         executable: resolveAgyExecutable(this.executable),
@@ -260,11 +301,15 @@ export class AgyModelDiscovery {
         MODEL_DISCOVERY_EMPTY_CODE,
       )
       const models = mergeModelCatalog(configured, discovered)
-      this.cache = {
-        models,
-        expiresAt: this.now() + this.ttlMs,
+      // A stale generation (e.g. a warm-up finishing after a forced refresh)
+      // must not overwrite the newer cached result.
+      if (generation === this.generation) {
+        this.cache = {
+          models,
+          expiresAt: this.now() + this.ttlMs,
+        }
+        this.failureState = undefined
       }
-      this.failureState = undefined
       return {
         models,
         source: configured.length === 0 ? 'discovered' : 'merged',
@@ -287,7 +332,7 @@ export class AgyModelDiscovery {
           warning: warning.message,
           warningCode: warning.code,
         }
-      this.recordFailure(result)
+      if (generation === this.generation) this.recordFailure(result)
       return result
     }
   }

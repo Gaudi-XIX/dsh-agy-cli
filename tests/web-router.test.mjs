@@ -422,3 +422,55 @@ test('web router: POST hiddenModels drives one catalog across panel, dropdown an
     rmSync(tmpPath, { force: true })
   }
 })
+
+test('web router: refresh-quota forces discovery past a /status warmed TTL cache', async () => {
+  const ws = fakeWebServer()
+  let spawns = 0
+  const discovery = new AgyModelDiscovery({
+    runCommand: async (request) => {
+      spawns += 1
+      assert.deepEqual(request.args, ['models'])
+      return {
+        exitCode: 0,
+        signal: null,
+        termination: 'completed',
+        stdoutLines: spawns === 1
+          ? ['claude-sonnet-4-6\tClaude Sonnet 4.6']
+          : ['claude-sonnet-4-6\tClaude Sonnet 4.6', 'm-new\tNew Model'],
+        stderr: '',
+        durationMs: 1,
+      }
+    },
+  })
+  const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' }, discovery)
+
+  // Mount warm-up: `/status` runs a plain discover and fills the 5-minute TTL.
+  const statusRoute = ws.routes.get('/plugins/agy-cli/status')
+  assert.ok(statusRoute)
+  const statusResp = fakeResponse()
+  await new Promise((resolve) => {
+    statusResp.res.on('finish', resolve)
+    statusRoute.handler(fakeRequest('GET', '/plugins/agy-cli/status'), statusResp.res)
+  })
+  assert.equal(spawns, 1)
+  const warmedIds = statusResp.json.catalogModels.map(m => m.id)
+  assert.ok(!warmedIds.includes('m-new'), 'the warm-up must not already carry the new id')
+
+  // A click inside the TTL: the forced discover must re-spawn `agy models` and
+  // answer with the model the second run saw.
+  const route = ws.routes.get('/plugins/agy-cli/pool/refresh-quota')
+  assert.ok(route)
+  const resp = fakeResponse()
+  await new Promise((resolve) => {
+    resp.res.on('finish', resolve)
+    route.handler(fakeRequest('POST', '/plugins/agy-cli/pool/refresh-quota'), resp.res)
+  })
+  assert.equal(resp.status, 200)
+  assert.equal(resp.json.ok, true)
+  assert.equal(spawns, 2, 'refresh-quota must re-run `agy models` inside the TTL')
+  assert.equal(resp.json.catalog.source, 'merged')
+  const ids = resp.json.catalogModels.map(m => m.id)
+  assert.ok(ids.includes('m-new'), 'the forced catalog must carry the newly discovered id')
+  assert.equal(resp.json.catalog.count, resp.json.catalogModels.length)
+  dispose()
+})

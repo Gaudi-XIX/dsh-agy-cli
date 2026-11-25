@@ -87,7 +87,7 @@ interface StatusPayload {
 		browserOpened?: boolean;
 		code?: string;
 	};
-	catalog?: { source: string; count: number; lastError: string | null };
+	catalog?: { source: string; count: number; lastError: string | null; stale?: boolean; warningCode?: string };
 	catalogModels?: ReadonlyArray<{ id: string; name: string }>;
 	hiddenModels?: readonly string[];
 	bindings?: number;
@@ -997,17 +997,32 @@ export function apply(ctx: ClientContext): void {
 			// (the click owns the sequence number; a concurrent mount fetch is
 			// discarded) instead of asking `/status` again — that second round trip
 			// re-reads the keyring and refetches the quotas just sent, and it is the
-			// slow one the user feels. `/status` is still asked for everything the
-			// pool does not carry (auth phase, catalog, overrides).
+			// slow one the user feels. When the response also carries the model
+			// catalog (it comes from the same forced discovery), adopt it too so the
+			// dropdown reflects the models seen by this very click; `/status` is
+			// only asked when the catalog fields are missing (older server).
 			const pool = (res as any)?.pool as StatusPayload['pool'] | undefined;
-			if (pool !== undefined && pool !== null && statusCache !== null) {
+			const resCatalog = (res as any)?.catalog as StatusPayload['catalog'] | undefined;
+			const resCatalogModels = (res as any)?.catalogModels as StatusPayload['catalogModels'] | undefined;
+			const resHiddenModels = (res as any)?.hiddenModels as StatusPayload['hiddenModels'] | undefined;
+			const canAdoptCatalog = Array.isArray(resCatalogModels) && statusCache !== null;
+			if (canAdoptCatalog) {
+				statusCache = {
+					...statusCache!,
+					...(pool !== undefined && pool !== null ? { pool } : {}),
+					...(resCatalog !== undefined ? { catalog: resCatalog } : {}),
+					catalogModels: resCatalogModels,
+					...(Array.isArray(resHiddenModels) ? { hiddenModels: resHiddenModels } : {}),
+				};
+				if (seq === statusFetchSeq) notifyStatus(statusCache);
+			} else if (pool !== undefined && pool !== null && statusCache !== null) {
 				statusCache = { ...statusCache, pool };
-				for (const fn of [...statusListeners]) {
-					try { fn(statusCache); } catch { /* a dead consumer must not kill the load */ }
-				}
+				if (seq === statusFetchSeq) notifyStatus(statusCache);
 			}
-			const st = await getStatus();
-			if (st !== null && seq === statusFetchSeq) notifyStatus(st);
+			if (!canAdoptCatalog) {
+				const st = await getStatus();
+				if (st !== null && seq === statusFetchSeq) notifyStatus(st);
+			}
 			setLoadingAction(null);
 			showToast(t('quota.refreshed'), 'success');
 		};

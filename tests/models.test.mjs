@@ -271,3 +271,127 @@ test('AgyModelDiscovery clears failure state after a success', async () => {
   await discovery.discover(configured)
   assert.equal(calls, 4, 'base cooldown proves consecutiveFailures reset to 1')
 })
+
+test('AgyModelDiscovery force re-spawns inside the TTL and takes over the cache', async () => {
+  let now = 1_000
+  let calls = 0
+  const configured = [{ id: 'configured' }]
+  const discovery = new AgyModelDiscovery({
+    ttlMs: 300_000,
+    now: () => now,
+    runCommand: async (request) => {
+      calls += 1
+      assert.deepEqual(request.args, ['models'])
+      return result(['m-' + calls + '\tModel ' + calls])
+    },
+  })
+
+  const warm = await discovery.discover(configured)
+  assert.equal(warm.source, 'merged')
+  assert.deepEqual(warm.models.map(model => model.id), ['configured', 'm-1'])
+  assert.equal(calls, 1)
+
+  // Inside the TTL a plain discover is a cache hit; a forced one must not be.
+  now = 2_000
+  const cached = await discovery.discover(configured)
+  assert.equal(cached.source, 'cache')
+  assert.equal(calls, 1)
+
+  const forced = await discovery.discover(configured, { force: true })
+  assert.equal(calls, 2, 'force must run a real `agy models` inside the TTL')
+  assert.equal(forced.source, 'merged')
+  assert.equal(forced.stale, false)
+  assert.deepEqual(forced.models.map(model => model.id), ['configured', 'm-2'])
+
+  // The forced result must have replaced the cache, not merely been returned.
+  const recached = await discovery.discover(configured)
+  assert.equal(recached.source, 'cache')
+  assert.deepEqual(recached.models.map(model => model.id), ['configured', 'm-2'])
+  assert.equal(calls, 2)
+})
+
+test('AgyModelDiscovery force re-spawns inside the failure cooldown and records failures', async () => {
+  let now = 0
+  let calls = 0
+  let mode = 'fail'
+  const configured = [{ id: 'configured' }]
+  const discovery = new AgyModelDiscovery({
+    ttlMs: 1,
+    cooldownBaseMs: 30_000,
+    cooldownMaxMs: 300_000,
+    now: () => now,
+    runCommand: async () => {
+      calls += 1
+      return mode === 'fail' ? result([], 1) : result(['m-recovered\tRecovered Model'])
+    },
+  })
+
+  const failed = await discovery.discover(configured)
+  assert.equal(failed.source, 'fallback')
+  assert.equal(failed.warningCode, 'MODEL_DISCOVERY_FAILED')
+
+  // The cooldown serves the negative snapshot to plain callers...
+  now = 1_000
+  const snapshot = await discovery.discover(configured)
+  assert.equal(snapshot.source, 'fallback')
+  assert.equal(snapshot.warningCode, 'MODEL_DISCOVERY_FAILED')
+  assert.equal(calls, 1)
+
+  // ...while force retries for real and clears the failure state on success.
+  mode = 'success'
+  const forced = await discovery.discover(configured, { force: true })
+  assert.equal(calls, 2, 'force must run a real `agy models` inside the cooldown')
+  assert.equal(forced.source, 'merged')
+  assert.equal(forced.stale, false)
+  assert.equal(forced.warningCode, undefined)
+  assert.ok(forced.models.some(model => model.id === 'm-recovered'))
+
+  // A forced failure still records the cooldown like any other failure.
+  mode = 'fail'
+  now = 1_100
+  const forcedFailure = await discovery.discover(configured, { force: true })
+  assert.equal(calls, 3)
+  assert.equal(forcedFailure.source, 'cache')
+  assert.equal(forcedFailure.stale, true)
+  assert.equal(forcedFailure.warningCode, 'MODEL_DISCOVERY_FAILED')
+  now = 1_200
+  const cooled = await discovery.discover(configured)
+  assert.equal(cooled.warningCode, 'MODEL_DISCOVERY_FAILED')
+  assert.equal(calls, 3, 'a forced failure must enter the cooldown')
+})
+
+test('AgyModelDiscovery forced calls share one spawn and never reuse a warm-up in flight', async () => {
+  const releases = []
+  let calls = 0
+  const configured = [{ id: 'configured' }]
+  const discovery = new AgyModelDiscovery({
+    ttlMs: 1,
+    now: () => 0,
+    runCommand: async () => {
+      calls += 1
+      await new Promise((resolve) => { releases.push(resolve) })
+      return result(['m-' + calls + '\tModel ' + calls])
+    },
+  })
+
+  // A plain (warm-up) refresh is in flight when the click arrives.
+  const warm = discovery.discover(configured)
+  assert.equal(calls, 1)
+  const firstForce = discovery.discover(configured, { force: true })
+  const secondForce = discovery.discover(configured, { force: true })
+  assert.equal(calls, 1, 'a forced call must not spawn while the warm-up is running')
+  assert.equal(releases.length, 1)
+
+  releases.shift()()
+  await warm
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls, 2, 'the forced call must not settle for the warm-up result')
+  assert.equal(releases.length, 1, 'concurrent forced calls must share one forced spawn')
+
+  releases.shift()()
+  const [a, b] = await Promise.all([firstForce, secondForce])
+  assert.equal(a.source, 'merged')
+  assert.deepEqual(a.models.map(model => model.id), ['configured', 'm-2'])
+  assert.deepEqual(b.models, a.models)
+  assert.equal(calls, 2)
+})
