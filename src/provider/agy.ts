@@ -1866,18 +1866,17 @@ export class AgyAdapter extends LlmAdapter {
   }
 
     private async effectiveModels(): Promise<readonly ModelConfig[]> {
-    // hiddenModels in runtime-overrides.json is the only authority for hidden
-    // state; config.visibleModels is a derived value and must not gate new ids.
-    const hiddenModels = readAgyRuntimeOverrides()?.hiddenModels
+    // No manual hide list exists any more: the catalog is whatever the merge of
+    // configured + discovered yields, so a new discovered id is usable at once.
     if (this.discovery === undefined) {
-      const { visible } = resolveModelCatalog(this.models, [], hiddenModels)
+      const { visible } = resolveModelCatalog(this.models, [])
       this.currentModels = visible
       this.modelDiscoveryResult = undefined
       return this.currentModels
     }
     const result = await this.discovery.discover(this.models)
     // result.models already normalized to base via mergeModelCatalog
-    const { visible } = resolveModelCatalog(this.models, result.models, hiddenModels)
+    const { visible } = resolveModelCatalog(this.models, result.models)
     this.currentModels = visible
     this.modelDiscoveryResult = { ...result, models: visible }
     return this.currentModels

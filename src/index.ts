@@ -19,7 +19,6 @@ import {
 import type { ModelConfig, ToolPolicy } from './provider/config.js'
 import { MockAdapter } from './provider/mock.js'
 import { AgyModelDiscovery } from './agy/models.js'
-import { readAgyRuntimeOverrides } from './agy/overrides.js'
 import { appendAgyDiagnosticRecord, AGY_DIAGNOSTIC_LOG_PATH } from './agy/log.js'
 import { configuredModels, readConfigFlag, resolveModelCatalog } from './provider/config.js'
 import { SessionRegistry } from './session/store.js'
@@ -230,7 +229,7 @@ export function apply(ctx: Context, config: ConfigType): void {
       if (request.provider !== undefined && request.provider !== 'agy') return []
       const configured = configuredModels(activeConfig)
       const discovered = modelDiscovery === undefined ? [] : (await modelDiscovery.discover(configured)).models
-      const { visible } = resolveModelCatalog(configured, discovered, readAgyRuntimeOverrides()?.hiddenModels)
+      const { visible } = resolveModelCatalog(configured, discovered)
       return visible.map(m => ({
         id: m.id,
         ...(m.name === undefined ? {} : { name: m.name }),
@@ -248,6 +247,16 @@ export function apply(ctx: Context, config: ConfigType): void {
     noteRegistration('webRoutes', 'ok')
   } catch (error) {
     noteRegistration('webRoutes', error instanceof Error ? error.message : String(error))
+  }
+
+  // Warm the discovery cache once at startup. The panel routes above are mounted
+  // before the enabled check, so a disabled profile can open the same panel and
+  // must find the same warm cache — hence the warm-up sits before the check. It
+  // is deliberately not awaited: apply() must not wait on a child process, and a
+  // failure is silent because every read path already degrades (peek miss →
+  // bounded discover → 'unavailable' → static catalog).
+  if (modelDiscovery !== undefined) {
+    void modelDiscovery.discover(configuredModels(activeConfig)).catch(() => {})
   }
 
   // Settings are resolved before the enabled check, so disabled profiles can

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EventEmitter } from 'node:events'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setupWebRoutes } from '../lib/web/router.js'
@@ -119,7 +119,8 @@ test('web router: GET /plugins/agy-cli/status returns valid payload for GUI', as
   assert.equal(resp.json.enabled, true)
   assert.equal(resp.json.permissionMode, 'dsh-owned')
   assert.ok(Array.isArray(resp.json.catalogModels))
-  assert.ok(Array.isArray(resp.json.hiddenModels))
+  // Negative guard: the payload carries no hide list any more.
+  assert.equal('hiddenModels' in resp.json, false)
   assert.ok(resp.json.pool?.accounts?.length > 0)
   assert.equal(resp.json.pool.accounts[0].id, 'primary')
 
@@ -265,7 +266,18 @@ test('web router: status reports static for off and unavailable with lastError o
   dispose()
 
   const ws2 = fakeWebServer()
-  const broken = { discover: async () => { throw new Error('discovery exploded') } }
+  let discoverCalls = 0
+  // A complete modelDiscovery stub: peekCatalog must exist (the status path
+  // probes the cache first) and a cold peek has to reach a real discover().
+  // Without peekCatalog the TypeError was swallowed by the same catch and this
+  // test only proved "an incomplete stub does not crash the router".
+  const broken = {
+    peekCatalog: () => undefined,
+    discover: async () => {
+      discoverCalls += 1
+      throw new Error('discovery exploded')
+    },
+  }
   const dispose2 = setupWebRoutes(fakeContext(ws2), { enabled: true, model: 'gemini-3.8-flash' }, broken)
   const route2 = ws2.routes.get('/plugins/agy-cli/status')
   const brokenResp = fakeResponse()
@@ -273,7 +285,13 @@ test('web router: status reports static for off and unavailable with lastError o
     brokenResp.res.on('finish', resolve)
     route2.handler(fakeRequest('GET', '/plugins/agy-cli/status'), brokenResp.res)
   })
+  assert.equal(discoverCalls, 1, 'a cold peek must fall through to discover()')
   assert.equal(brokenResp.json.catalog.source, 'unavailable')
+  // The status path awaits discover() through withDeadline, which folds a
+  // rejection into `undefined`, so the panel reports the bounded-wait wording
+  // rather than the original message. The rejection's own text stays visible on
+  // the refresh-quota path (bare await), asserted in the test above.
+  assert.equal(brokenResp.json.catalog.lastError, 'model discovery timed out')
   assert.ok(brokenResp.json.catalog.lastError, 'a broken discovery must not masquerade as success')
   assert.notEqual(brokenResp.json.catalog.source, 'agy models')
   dispose2()
@@ -334,11 +352,11 @@ test('web router: refresh-quota discovery failure degrades to static catalog wit
   assert.match(resp.json.catalog.lastError, /discovery exploded/)
   assert.ok(Array.isArray(resp.json.catalogModels))
   assert.ok(resp.json.catalogModels.length > 0, 'configured models must survive a failed discovery')
-  assert.ok(Array.isArray(resp.json.hiddenModels))
+  assert.equal('hiddenModels' in resp.json, false)
   dispose()
 })
 
-test('web router: POST hiddenModels drives one catalog across panel, dropdown and generation', async () => {
+test('web router: the hide list is gone, so one full catalog reaches panel, dropdown and generation', async () => {
   const ws = fakeWebServer()
   const captured = {}
   const ctx = fakeContext(ws, {
@@ -387,7 +405,8 @@ test('web router: POST hiddenModels drives one catalog across panel, dropdown an
       }), postResp.res)
     })
     assert.equal(postResp.status, 200)
-    assert.equal(postResp.json.ok, true)
+    // Negative guard: the key is not a setting any more, so nothing is persisted.
+    assert.equal(existsSync(tmpPath), false, 'POST hiddenModels must not write the overrides file')
 
     const statusRoute = ws.routes.get('/plugins/agy-cli/status')
     assert.ok(statusRoute)
@@ -399,22 +418,18 @@ test('web router: POST hiddenModels drives one catalog across panel, dropdown an
     assert.equal(statusResp.status, 200)
 
     const catalogIds = statusResp.json.catalogModels.map(m => m.id)
-    const hidden = statusResp.json.hiddenModels
-    const statusVisible = catalogIds.filter(id => !hidden.includes(id.toLowerCase()))
     const dropdownIds = (await captured.cb({ provider: 'agy' })).map(m => m.id)
     const generatedIds = (await adapter.listModels('agy')).map(m => m.id)
     const sorted = ids => [...new Set(ids)].sort()
 
-    assert.deepEqual(sorted(hidden), ['claude-opus-4-6-thinking', 'gemini-3.1-pro'])
-    assert.deepEqual(sorted(dropdownIds), sorted(statusVisible))
-    assert.deepEqual(sorted(generatedIds), sorted(statusVisible))
-    assert.ok(dropdownIds.includes('claude-sonnet-4-6'), 'whitelist must not gate new ids')
-    assert.ok(generatedIds.includes('claude-sonnet-4-6'), 'whitelist must not gate new ids')
-    // The panel still reports the full catalog, but hidden models are not offered.
-    assert.ok(catalogIds.includes('gemini-3.1-pro'))
-    assert.ok(!statusVisible.includes('gemini-3.1-pro'))
-    assert.ok(!dropdownIds.includes('gemini-3.1-pro'))
-    assert.ok(!generatedIds.includes('gemini-3.1-pro'))
+    // No payload carries a hide list, and every surface offers the same ids —
+    // including the one the POST named and the one the whitelist omitted.
+    assert.equal('hiddenModels' in statusResp.json, false)
+    assert.deepEqual(sorted(dropdownIds), sorted(catalogIds))
+    assert.deepEqual(sorted(generatedIds), sorted(catalogIds))
+    assert.deepEqual(sorted(catalogIds), ['claude-sonnet-4-6', 'gemini-3.1-pro', 'gemini-3.8-flash'])
+    assert.ok(catalogIds.includes('gemini-3.1-pro'), 'a named id must not be hidden by a POST')
+    assert.ok(catalogIds.includes('claude-sonnet-4-6'), 'whitelist must not gate new ids')
     assert.notEqual(statusResp.json.catalog.source, 'agy models')
   } finally {
     __setAgyOverridesPathForTest(undefined)
@@ -474,3 +489,111 @@ test('web router: refresh-quota forces discovery past a /status warmed TTL cache
   assert.equal(resp.json.catalog.count, resp.json.catalogModels.length)
   dispose()
 })
+
+test('web router: a second /status answers from the warm cache without another spawn', async () => {
+  const ws = fakeWebServer()
+  let spawns = 0
+  const discovery = new AgyModelDiscovery({
+    runCommand: async () => {
+      spawns += 1
+      return {
+        exitCode: 0,
+        signal: null,
+        termination: 'completed',
+        stdoutLines: ['claude-sonnet-4-6\tClaude Sonnet 4.6'],
+        stderr: '',
+        durationMs: 1,
+      }
+    },
+  })
+  const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' }, discovery)
+  const route = ws.routes.get('/plugins/agy-cli/status')
+  assert.ok(route)
+
+  const ask = async () => {
+    const resp = fakeResponse()
+    await new Promise((resolve) => {
+      resp.res.on('finish', resolve)
+      route.handler(fakeRequest('GET', '/plugins/agy-cli/status'), resp.res)
+    })
+    return resp
+  }
+
+  const cold = await ask()
+  assert.equal(spawns, 1, 'a cold cache pays for exactly one discovery')
+  assert.equal(cold.json.catalog.source, 'merged')
+  const coldIds = cold.json.catalogModels.map(m => m.id)
+
+  const warm = await ask()
+  assert.equal(spawns, 1, 'a warm cache must answer the poll without spawning again')
+  assert.equal(warm.json.catalog.source, 'cache')
+  assert.deepEqual(warm.json.catalogModels.map(m => m.id), coldIds, 'the warm answer must carry the same catalog')
+  dispose()
+})
+
+test('web router: refresh-quota is not cut by the /status discovery deadline', async () => {
+  const ws = fakeWebServer()
+  // The 250ms answer is longer than the configured 100ms deadline, so a status
+  // poll times out while a refresh click still gets the real result. Keeping it
+  // at 250ms instead of a literal 4.5s wait is what makes this test sub-second;
+  // the absence of the old hardcoded 4s panel constant itself is covered by the
+  // 'built artifact no longer carries the old 4s discovery deadline' test.
+  const slow = {
+    peekCatalog: () => undefined,
+    discover: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      return {
+        models: [{ id: 'm-slow-but-real', name: 'Slow But Real' }],
+        source: 'merged',
+        stale: false,
+      }
+    },
+  }
+  const dispose = setupWebRoutes(
+    fakeContext(ws),
+    { enabled: true, model: 'gemini-3.8-flash', modelDiscoveryTimeoutMs: 100 },
+    slow,
+  )
+
+  // A poll is bounded by the one configured deadline.
+  const statusRoute = ws.routes.get('/plugins/agy-cli/status')
+  assert.ok(statusRoute)
+  const poll = fakeResponse()
+  await new Promise((resolve) => {
+    poll.res.on('finish', resolve)
+    statusRoute.handler(fakeRequest('GET', '/plugins/agy-cli/status'), poll.res)
+  })
+  assert.equal(poll.json.catalog.source, 'unavailable', 'the poll must give up at modelDiscoveryTimeoutMs')
+
+  // The click is not: it awaits the discovery bare, so the 250ms answer lands.
+  const route = ws.routes.get('/plugins/agy-cli/pool/refresh-quota')
+  assert.ok(route)
+  const clickStarted = Date.now()
+  const click = fakeResponse()
+  await new Promise((resolve) => {
+    click.res.on('finish', resolve)
+    route.handler(fakeRequest('POST', '/plugins/agy-cli/pool/refresh-quota'), click.res)
+  })
+  const waited = Date.now() - clickStarted
+  assert.ok(waited >= 200, `refresh-quota must wait for the slow discovery (waited ${waited}ms)`)
+  assert.equal(click.json.catalog.source, 'merged')
+  assert.ok(click.json.catalogModels.map(m => m.id).includes('m-slow-but-real'))
+  dispose()
+})
+
+test('web router: built artifact no longer carries the old 4s discovery deadline', () => {
+  // Negative guard on the compiled panel router: the hardcoded 4s discovery
+  // deadline (DISCOVERY_AWAIT_MS) must be gone, otherwise the module-scope
+  // constant could creep back in without any behavioural test noticing that a
+  // second, shorter deadline is bounding discovery again.
+  const built = readFileSync(new URL('../lib/web/router.js', import.meta.url), 'utf8')
+  assert.equal(built.includes('DISCOVERY_AWAIT_MS'), false, 'the 4s discovery deadline constant must not survive the build')
+})
+
+// Startup warm-up coverage: `apply()` does `void modelDiscovery.discover(...)`
+// before the enabled check (src/index.ts). It is deliberately not exercised
+// here because apply() builds its own AgyModelDiscovery from config with no
+// injection seam; testing it would either spawn a real `agy models` child or
+// require a production-only test hook, neither acceptable in this card. The
+// warm-up is recorded as a documented manual/real-machine check in
+// review-cycle-report.md.

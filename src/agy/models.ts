@@ -209,6 +209,17 @@ export class AgyModelDiscovery {
     this.now = options.now ?? Date.now
   }
 
+  /**
+   * Read-only cache probe for serving paths that must not wait: returns the
+   * cached result while the TTL is still open, otherwise undefined. Never
+   * spawns, never writes the cache, never touches the failure state or the
+   * in-flight promises.
+   */
+  peekCatalog(): AgyModelDiscoveryResult | undefined {
+    if (this.cache === undefined || this.cache.expiresAt <= this.now()) return undefined
+    return { models: this.cache.models, source: 'cache', stale: false }
+  }
+
   async discover(configured: readonly ModelConfig[], options?: AgyModelDiscoveryCallOptions): Promise<AgyModelDiscoveryResult> {
     const force = options !== undefined && options.force === true
     const currentTime = this.now()

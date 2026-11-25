@@ -11,7 +11,7 @@ import type { Config as ConfigType } from '../provider/config.js'
 import { configuredModels, normalizeModelId, readConfigFlag, resolveModelCatalog } from '../provider/config.js'
 import type { AgyModelDiscovery } from '../agy/models.js'
 import { isLoopback, type DshWebServerLike } from '../mcp/endpoint.js'
-import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides, type AgyRuntimeOverrides } from '../agy/overrides.js'
+import { readAgyRuntimeOverrides, saveAgyRuntimeOverrides } from '../agy/overrides.js'
 import { lastKeepaliveOutcome, readKeyringBlob, refreshAgyTokenIfDue } from '../agy/keepalive.js'
 import { resolveAgyExecutable } from '../agy/process.js'
 
@@ -104,11 +104,7 @@ const AGY_IDENTITY_HEADERS: Record<string, string> = {
 /** POST body ceiling for the panel routes; these carry only small JSON settings. */
 const PANEL_MAX_BODY_BYTES = 1024 * 1024
 
-function readOverrides(): AgyRuntimeOverrides {
-  return readAgyRuntimeOverrides() ?? { hiddenModels: [] }
-}
-
-function saveOverrides(updates: { hiddenModels?: string[]; defaultEffort?: string; defaultModel?: string }): void {
+function saveOverrides(updates: { defaultEffort?: string; defaultModel?: string }): void {
   saveAgyRuntimeOverrides(updates)
 }
 
@@ -401,9 +397,6 @@ const QUOTA_SERVE_DEADLINE_MS = 12_000
 // pay for it: the token is still valid inside the keep-alive lead window, so
 // answering with it is correct, and the next open sees the rotated one.
 const RENEWAL_AWAIT_MS = 8_000
-// Model discovery is a sidebar concern, not a quota one. It gets a short leash
-// and falls back to the built-in catalog.
-const DISCOVERY_AWAIT_MS = 4_000
 
 /**
  * Resolve with `work`'s value, or with `undefined` if it has not settled within
@@ -717,11 +710,11 @@ async function fetchQuotas(force: boolean): Promise<Partial<Record<'google' | 'a
 }
 
 /**
- * The panel's catalog is resolved at request time from the configured catalog,
- * the discovered models and the hiddenModels blacklist (see
- * resolveModelCatalog in src/provider/config.ts). No model ids are hardcoded
- * here, so a newly discovered base id reaches the panel without a code or YAML
- * edit. Quota families below are a display concern only.
+ * The panel's catalog is resolved at request time from the configured catalog
+ * plus the discovered models (see resolveModelCatalog in
+ * src/provider/config.ts). No model ids are hardcoded here, so a newly
+ * discovered base id reaches the panel without a code or YAML edit. Quota
+ * families below are a display concern only.
  */
 
 /** Quota families the panel renders. */
@@ -886,7 +879,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
 
     // 1. GET /plugins/agy-cli/status
     reg('/plugins/agy-cli/status', async (_req, res) => {
-      const overrides = readAgyRuntimeOverrides() ?? { hiddenModels: [], defaultEffort: undefined, defaultModel: undefined }
+      const overrides = readAgyRuntimeOverrides() ?? {}
       // Never let the panel wait on the quota chain indefinitely: a timeout
       // answers with the last good snapshot and says so in `quotaError`.
       const quotaAnswer = await withDeadline(refreshQuotas(false), QUOTA_SERVE_DEADLINE_MS)
@@ -894,7 +887,6 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       const quotas = quotaAnswer ?? cachedQuotas
 
       const configured = configuredModels(activeConfig)
-      const hiddenModels = overrides.hiddenModels
       let discoveredModels: ReturnType<typeof configuredModels> = []
       let catalogSource: string = 'static'
       let catalogStale = false
@@ -903,8 +895,16 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       if (modelDiscovery === undefined) {
         catalogSource = 'static'
       } else {
+        // Peek first: a warm cache answers the poll with zero cost and no
+        // spawn. Only a cold cache pays for discovery, and its wait is bounded
+        // by the one configured deadline (the same value that bounds the
+        // `agy models` child), never by a second hardcoded one.
         try {
-          const disc = await withDeadline(modelDiscovery.discover(configured), DISCOVERY_AWAIT_MS)
+          const peeked = modelDiscovery.peekCatalog()
+          const disc = peeked ?? await withDeadline(
+            modelDiscovery.discover(configured),
+            activeConfig.modelDiscoveryTimeoutMs ?? 10_000,
+          )
           if (disc === undefined) {
             catalogSource = 'unavailable'
             catalogError = 'model discovery timed out'
@@ -920,7 +920,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
           catalogError = error instanceof Error ? error.message : String(error)
         }
       }
-      const { catalog, hidden } = resolveModelCatalog(configured, discoveredModels, hiddenModels)
+      const { visible } = resolveModelCatalog(configured, discoveredModels)
 
       const defaultModel = overrides.defaultModel ?? (activeConfig.model ? normalizeModelId(activeConfig.model) : 'gemini-3.8-flash')
       const defaultEffort = overrides.defaultEffort ?? 'high'
@@ -986,13 +986,12 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         },
         catalog: {
           source: catalogSource,
-          count: catalog.length,
+          count: visible.length,
           ...(catalogStale ? { stale: true } : {}),
           ...(catalogWarningCode === undefined ? {} : { warningCode: catalogWarningCode }),
           lastError: catalogError,
         },
-        catalogModels: catalog,
-        hiddenModels: hidden,
+        catalogModels: visible,
         bindings: 1,
         lastRun: null,
       })
@@ -1008,32 +1007,6 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       const body = await readBody(req)
       const key = typeof body.key === 'string' ? body.key : ''
       const value = body.value
-
-      if (key === 'hiddenModels' && Array.isArray(value)) {
-        saveOverrides({ hiddenModels: value })
-        // visibleModels in cordis.patch.yml is a derived compatibility value,
-        // computed from the real catalog minus the hidden blacklist — never from
-        // a hardcoded two-item list. hiddenModels in runtime-overrides.json is
-        // the only authority consumed by panel, dropdown and generation.
-        const configured = configuredModels(activeConfig)
-        let discoveredModels: ReturnType<typeof configuredModels> = []
-        if (modelDiscovery !== undefined) {
-          try {
-            const disc = await withDeadline(modelDiscovery.discover(configured), DISCOVERY_AWAIT_MS)
-            if (disc !== undefined) discoveredModels = disc.models
-          } catch {
-            // A failed discovery must not block the authoritative write above.
-          }
-        }
-        const { visible } = resolveModelCatalog(configured, discoveredModels, value)
-        const patchError = updateCordisPatch(visible.map(m => m.id))
-        if (patchError !== undefined) {
-          sendJson(res, 500, { ok: false, key, error: patchError })
-          return
-        }
-        sendJson(res, 200, { ok: true, key, value })
-        return
-      }
 
       if (key === 'defaultEffort' && typeof value === 'string') {
         saveOverrides({ defaultEffort: value })
@@ -1063,9 +1036,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       const quotaAnswer = await withDeadline(refreshQuotas(true), QUOTA_SERVE_DEADLINE_MS)
       if (quotaAnswer === undefined) lastQuotaError = 'timeout'
       const quotas = quotaAnswer ?? cachedQuotas
-      const overrides = readAgyRuntimeOverrides() ?? { hiddenModels: [], defaultEffort: undefined, defaultModel: undefined }
       const configured = configuredModels(activeConfig)
-      const hiddenModels = overrides.hiddenModels
       let discoveredModels: ReturnType<typeof configuredModels> = []
       let catalogSource: string = 'static'
       let catalogStale = false
@@ -1074,24 +1045,23 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       if (modelDiscovery === undefined) {
         catalogSource = 'static'
       } else {
+        // A click is the one caller allowed to wait for a fresh answer: await
+        // the forced discovery bare, so the only bound is the child's own
+        // timeout (`modelDiscoveryTimeoutMs`). No second deadline may cut it
+        // short and hand back the static two-item catalog.
         try {
-          const disc = await withDeadline(modelDiscovery.discover(configured, { force: true }), DISCOVERY_AWAIT_MS)
-          if (disc === undefined) {
-            catalogSource = 'unavailable'
-            catalogError = 'model discovery timed out'
-          } else {
-            catalogSource = disc.source
-            catalogStale = disc.stale
-            catalogWarningCode = disc.warningCode
-            catalogError = disc.warning ?? null
-            discoveredModels = disc.models
-          }
+          const disc = await modelDiscovery.discover(configured, { force: true })
+          catalogSource = disc.source
+          catalogStale = disc.stale
+          catalogWarningCode = disc.warningCode
+          catalogError = disc.warning ?? null
+          discoveredModels = disc.models
         } catch (error) {
           catalogSource = 'unavailable'
           catalogError = error instanceof Error ? error.message : String(error)
         }
       }
-      const { catalog, hidden } = resolveModelCatalog(configured, discoveredModels, hiddenModels)
+      const { visible } = resolveModelCatalog(configured, discoveredModels)
       const identity = await readIdentityFromKeyring()
       const accountAlias = identity.email
         ? `${identity.name ? `${identity.name} ` : ''}(${identity.email})`
@@ -1123,13 +1093,12 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
         },
         catalog: {
           source: catalogSource,
-          count: catalog.length,
+          count: visible.length,
           ...(catalogStale ? { stale: true } : {}),
           ...(catalogWarningCode === undefined ? {} : { warningCode: catalogWarningCode }),
           lastError: catalogError,
         },
-        catalogModels: catalog,
-        hiddenModels: hidden,
+        catalogModels: visible,
       })
     })
 

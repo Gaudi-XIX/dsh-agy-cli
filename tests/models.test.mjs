@@ -395,3 +395,70 @@ test('AgyModelDiscovery forced calls share one spawn and never reuse a warm-up i
   assert.deepEqual(b.models, a.models)
   assert.equal(calls, 2)
 })
+
+test('AgyModelDiscovery peekCatalog serves a warm cache without spawning', async () => {
+  let now = 0
+  let calls = 0
+  const configured = [{ id: 'configured' }]
+  const discovery = new AgyModelDiscovery({
+    ttlMs: 1_000,
+    now: () => now,
+    runCommand: async () => {
+      calls += 1
+      return result(['gemini-live\tGemini Live'])
+    },
+  })
+
+  // Cold: nothing has been discovered, so the probe must answer undefined and
+  // must not start a spawn of its own.
+  assert.equal(discovery.peekCatalog(), undefined)
+  assert.equal(calls, 0)
+
+  const discovered = await discovery.discover(configured)
+  assert.equal(calls, 1)
+  now = 999
+  const peeked = discovery.peekCatalog()
+  assert.ok(peeked)
+  assert.equal(peeked.source, 'cache')
+  assert.equal(peeked.stale, false)
+  assert.deepEqual(peeked.models, discovered.models)
+  assert.deepEqual(peeked.models.map(model => model.id), ['configured', 'gemini-live'])
+  assert.equal(calls, 1, 'a warm probe must not re-spawn `agy models`')
+
+  // Expiry is the same clock the TTL uses: one tick past it the probe is cold
+  // again, while the cached snapshot stays available to the degrading path.
+  now = 1_000
+  assert.equal(discovery.peekCatalog(), undefined)
+  assert.equal(calls, 1)
+  assert.deepEqual((await discovery.discover(configured)).models.map(model => model.id), [
+    'configured',
+    'gemini-live',
+  ])
+})
+
+test('AgyModelDiscovery peekCatalog never reads or clears the failure state', async () => {
+  let now = 0
+  let calls = 0
+  const configured = [{ id: 'configured' }]
+  const discovery = new AgyModelDiscovery({
+    cooldownBaseMs: 30_000,
+    cooldownMaxMs: 300_000,
+    now: () => now,
+    runCommand: async () => {
+      calls += 1
+      return result([], 1)
+    },
+  })
+
+  const failed = await discovery.discover(configured)
+  assert.equal(failed.warningCode, 'MODEL_DISCOVERY_FAILED')
+  assert.equal(calls, 1)
+
+  // Inside the cooldown there is no warm cache: the probe reports undefined and
+  // leaves the backoff untouched, so the next plain discover still honors it.
+  assert.equal(discovery.peekCatalog(), undefined)
+  assert.equal(calls, 1)
+  now = 1_000
+  assert.equal((await discovery.discover(configured)).warningCode, 'MODEL_DISCOVERY_FAILED')
+  assert.equal(calls, 1, 'the probe must not have disturbed the cooldown window')
+})

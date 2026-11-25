@@ -89,7 +89,6 @@ interface StatusPayload {
 	};
 	catalog?: { source: string; count: number; lastError: string | null; stale?: boolean; warningCode?: string };
 	catalogModels?: ReadonlyArray<{ id: string; name: string }>;
-	hiddenModels?: readonly string[];
 	bindings?: number;
 	lastRun?: { ok: boolean; code: string; durationMs: number; model: string } | null;
 }
@@ -659,12 +658,7 @@ body.dark,
 	gap: 5px;
 	font-size: 11.5px;
 	color: var(--agy-text-primary);
-	cursor: pointer;
 	white-space: nowrap;
-}
-.agy-check-item input {
-	cursor: pointer;
-	margin: 0;
 }
 `;
 
@@ -967,22 +961,6 @@ export function apply(ctx: ClientContext): void {
 			setLoadingAction(null);
 		};
 
-		const hiddenPendingRef = useRef<Set<string> | null>(null);
-		const toggleModelHidden = async (id: string, hide: boolean): Promise<void> => {
-			// Merge against the PENDING set, not the last-rendered snapshot:
-			// two rapid clicks used to read the same stale status and the
-			// second silently overwrote the first (lost update).
-			const next = new Set(hiddenPendingRef.current ?? status?.hiddenModels ?? []);
-			if (hide) next.add(id); else next.delete(id);
-			hiddenPendingRef.current = next;
-
-			try {
-				await setCfg('hiddenModels', Array.from(next));
-			} finally {
-				if (hiddenPendingRef.current === next) hiddenPendingRef.current = null;
-			}
-		};
-
 		const refreshQuota = async (): Promise<void> => {
 			setLoadingAction('refresh:all');
 			// Only a click that came after this call started is worth fetching.
@@ -1004,7 +982,6 @@ export function apply(ctx: ClientContext): void {
 			const pool = (res as any)?.pool as StatusPayload['pool'] | undefined;
 			const resCatalog = (res as any)?.catalog as StatusPayload['catalog'] | undefined;
 			const resCatalogModels = (res as any)?.catalogModels as StatusPayload['catalogModels'] | undefined;
-			const resHiddenModels = (res as any)?.hiddenModels as StatusPayload['hiddenModels'] | undefined;
 			const canAdoptCatalog = Array.isArray(resCatalogModels) && statusCache !== null;
 			if (canAdoptCatalog) {
 				statusCache = {
@@ -1012,7 +989,6 @@ export function apply(ctx: ClientContext): void {
 					...(pool !== undefined && pool !== null ? { pool } : {}),
 					...(resCatalog !== undefined ? { catalog: resCatalog } : {}),
 					catalogModels: resCatalogModels,
-					...(Array.isArray(resHiddenModels) ? { hiddenModels: resHiddenModels } : {}),
 				};
 				if (seq === statusFetchSeq) notifyStatus(statusCache);
 			} else if (pool !== undefined && pool !== null && statusCache !== null) {
@@ -1029,7 +1005,6 @@ export function apply(ctx: ClientContext): void {
 		const authPhase = status?.auth?.phase ?? 'unknown';
 		const pool = status?.pool;
 		const catalogModels = status?.catalogModels ?? [];
-		const hiddenModelSet = new Set(status?.hiddenModels ?? []);
 		const accounts = pool?.accounts ?? [];
 		// `accounts.length > 0` only proves the keyring entry exists, not that the
 		// OAuth token behind it still works — the quota RPCs know that, so an
@@ -1344,13 +1319,7 @@ export function apply(ctx: ClientContext): void {
 		const visibilityList = catalogModels.length === 0
 			? h('span', { style: S.muted }, t('models.empty'))
 			: h('div', { className: 'agy-checklist' },
-				catalogModels.map((m) => h('label', { key: m.id, className: 'agy-check-item', title: m.id },
-					h('input', {
-						type: 'checkbox',
-						checked: !hiddenModelSet.has(m.id),
-						disabled: loadingAction === 'config:hiddenModels',
-						onChange: () => void toggleModelHidden(m.id, !hiddenModelSet.has(m.id)),
-					}),
+				catalogModels.map((m) => h('span', { key: m.id, className: 'agy-check-item', title: m.id },
 					h('span', null, m.name),
 				)),
 			);

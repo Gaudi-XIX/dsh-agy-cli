@@ -45,8 +45,8 @@ export const zh = {
   'effort.label': '思考强度：', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high',
   'pool.label': '号池调度：', 'pool.sequential': '顺次耗尽', 'pool.roundRobin': '轮询均衡',
   'models.default': '默认模型：', 'panel.expand': '展开详情', 'panel.collapse': '收起详情',
-  'models.label': '模型显示：', 'models.empty': '模型目录还没有可用模型，发一次对话或点“刷新额度”后再来管理',
-  'models.hint': '点击切换显示/隐藏；关闭的模型不在模型选择器中列出，进行中的会话不受影响。',
+  'models.label': '可用模型：', 'models.empty': '模型目录还没有可用模型，发一次对话或点“刷新额度”后再来查看',
+  'models.hint': '由 AGY 自动发现，全部可用模型都会列出，此处只作查看。',
   'header.refreshQuota': '刷新额度', 'header.refreshing': '刷新中',
 } as const
 
@@ -96,8 +96,8 @@ export const en: AgyDictionary = {
   'effort.label': 'Thinking effort:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high',
   'pool.label': 'Account-pool scheduling:', 'pool.sequential': 'Use sequentially', 'pool.roundRobin': 'Round-robin',
   'models.default': 'Default model:', 'panel.expand': 'Expand details', 'panel.collapse': 'Collapse details',
-  'models.label': 'Model visibility:', 'models.empty': 'No models in the catalog yet — send a message or click "Refresh quota", then come back to manage them',
-  'models.hint': 'Click to show/hide. Hidden models are not listed in the model picker; ongoing sessions are unaffected.',
+  'models.label': 'Available models:', 'models.empty': 'No models in the catalog yet — send a message or click "Refresh quota", then come back to view them',
+  'models.hint': 'Discovered by AGY. Every available model is listed here for reference only.',
   'header.refreshQuota': 'Refresh quota', 'header.refreshing': 'Refreshing...',
 }
 
@@ -144,8 +144,8 @@ export const ptBR: AgyDictionary = {
   'effort.label': 'Intensidade de raciocínio:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high',
   'pool.label': 'Agendamento do pool de contas:', 'pool.sequential': 'Usar em sequência', 'pool.roundRobin': 'Rodízio',
   'models.default': 'Modelo padrão:', 'panel.expand': 'Expandir detalhes', 'panel.collapse': 'Recolher detalhes',
-  'models.label': 'Visibilidade dos modelos:', 'models.empty': 'Ainda não há modelos no catálogo — envie uma mensagem ou clique em "Atualizar cota" e volte para gerenciá-los',
-  'models.hint': 'Clique para mostrar/ocultar. Modelos ocultos não aparecem no seletor de modelos; as sessões em andamento não são afetadas.',
+  'models.label': 'Modelos disponíveis:', 'models.empty': 'Ainda não há modelos no catálogo — envie uma mensagem ou clique em "Atualizar cota" e volte para vê-los',
+  'models.hint': 'Descobertos pelo AGY. Todos os modelos disponíveis são listados aqui apenas para consulta.',
   'header.refreshQuota': 'Atualizar cota', 'header.refreshing': 'Atualizando...',
 }
 
@@ -192,7 +192,7 @@ export const es: AgyDictionary = {
   'effort.label': 'Intensidad de razonamiento:', 'effort.auto': 'auto', 'effort.low': 'low', 'effort.medium': 'medium', 'effort.high': 'high',
   'pool.label': 'Programación del pool de cuentas:', 'pool.sequential': 'Usar en secuencia', 'pool.roundRobin': 'Turno rotativo',
   'models.default': 'Modelo predeterminado:', 'panel.expand': 'Expandir detalles', 'panel.collapse': 'Contraer detalles',
-  'models.label': 'Visibilidad de modelos:', 'models.empty': 'Aún no hay modelos en el catálogo: envía un mensaje o haz clic en "Actualizar cuota" y vuelve para gestionarlos',
-  'models.hint': 'Haz clic para mostrar/ocultar. Los modelos ocultos no aparecen en el selector de modelos; las sesiones en curso no se ven afectadas.',
+  'models.label': 'Modelos disponibles:', 'models.empty': 'Aún no hay modelos en el catálogo: envía un mensaje o haz clic en "Actualizar cuota" y vuelve para verlos',
+  'models.hint': 'Detectados por AGY. Todos los modelos disponibles se listan aquí solo para consulta.',
   'header.refreshQuota': 'Actualizar cuota', 'header.refreshing': 'Actualizando...',
 }

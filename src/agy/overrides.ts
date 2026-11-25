@@ -4,7 +4,6 @@ import { dshHome } from '../dsh-home.js'
 import { isAgyReasoningEffort, type AgyReasoningEffort } from './process.js'
 
 export interface AgyRuntimeOverrides {
-  hiddenModels: string[]
   defaultEffort?: AgyReasoningEffort
   defaultModel?: string
 }
@@ -17,11 +16,8 @@ let _overridesPathOverride: string | undefined
 // The panel and the generation path are two processes that must agree on the
 // default effort, so both read this one file (the panel writes it, see
 // src/web/router.ts). If the file is absent or unreadable the caller falls back
-// to its built-in default.
-// hiddenModels is likewise the single authority for hidden state: it is a
-// blacklist, and every consumer derives its visible catalog as catalog minus
-// hidden (see resolveModelCatalog in src/provider/config.ts). cordis.patch.yml
-// visibleModels is a derived compatibility value, never the authority.
+// to its built-in default. Only the two default-selection keys live here: the
+// model catalog is whatever AGY reports, with no manual hide list.
 export function readAgyRuntimeOverrides(): AgyRuntimeOverrides | undefined {
   const p = _overridesPathOverride ?? RUNTIME_OVERRIDES_PATH
   if (!existsSync(p)) return undefined
@@ -33,10 +29,7 @@ export function readAgyRuntimeOverrides(): AgyRuntimeOverrides | undefined {
   }
   const record = data as Record<string, unknown> | null
   if (record === null || typeof record !== 'object') return undefined
-  const hiddenModels = Array.isArray(record.hiddenModels)
-    ? record.hiddenModels.filter((value): value is string => typeof value === 'string')
-    : []
-  const parsed: AgyRuntimeOverrides = { hiddenModels }
+  const parsed: AgyRuntimeOverrides = {}
   if (isAgyReasoningEffort(record.defaultEffort)) parsed.defaultEffort = record.defaultEffort
   if (typeof record.defaultModel === 'string' && record.defaultModel !== '') parsed.defaultModel = record.defaultModel
   return parsed
@@ -48,12 +41,11 @@ export function readAgyRuntimeOverrides(): AgyRuntimeOverrides | undefined {
 // sees a half-written document. Effort is re-validated on write because the
 // panel posts a raw string; an unknown value must not persist.
 export function saveAgyRuntimeOverrides(
-  updates: { hiddenModels?: string[]; defaultEffort?: string; defaultModel?: string },
+  updates: { defaultEffort?: string; defaultModel?: string },
 ): void {
   const p = _overridesPathOverride ?? RUNTIME_OVERRIDES_PATH
-  const current = readAgyRuntimeOverrides() ?? { hiddenModels: [] }
+  const current = readAgyRuntimeOverrides() ?? {}
   const merged: AgyRuntimeOverrides = { ...current }
-  if (updates.hiddenModels !== undefined) merged.hiddenModels = updates.hiddenModels.filter((value): value is string => typeof value === 'string')
   if (updates.defaultEffort !== undefined) {
     if (isAgyReasoningEffort(updates.defaultEffort)) merged.defaultEffort = updates.defaultEffort
   }
