@@ -185,3 +185,18 @@ test('prepareAgyPrompts falls back to text placeholders when bridge is disabled'
   assert.equal(prepared.fullPrompt.includes('[IMAGE_ATTACHMENT'), true)
   assert.equal(store.calls.length, 0, 'no attachment is read from disk in text mode')
 })
+
+test('a history-only image turn does not require the view agent', async () => {
+  const store = countingStore()
+  const prepared = await prepareAgyPrompts(
+    { messages: messagesWith([imageRef(60)], []), system: 'history only, no view agent' },
+    { enabled: true, agentCanViewFile: false, attachmentStore: store },
+  )
+  touched.push(...prepared.imagePaths)
+  await prepared.cleanup()
+
+  assert.equal(prepared.bridgeActive, true)
+  assert.equal(prepared.turnHasImages, false)
+  assert.equal(prepared.imageCacheDirectory, IMAGE_HISTORY_CACHE_DIR)
+  assert.equal(prepared.imageDirectory, undefined, 'nothing new to stage without a view agent')
+})

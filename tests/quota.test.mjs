@@ -32,6 +32,11 @@ test('readLogPorts reads real fixture files, newest first, and dedupes', () => {
     fs.writeFileSync(path.join(dir, 'cli-20261124_000000.log'), CLI_LOG_SAMPLE)
     fs.writeFileSync(path.join(dir, 'cli-20261125_000000.log'), 'Language server listening on random port at 60000 for HTTP\n')
     fs.writeFileSync(path.join(dir, 'unrelated.txt'), 'Language server listening on random port at 12345 for HTTP\n')
+    // Pin both fixtures to the exact same millisecond: the flake under repair
+    // only fired when mtimes were equal and readdir order decided the winner.
+    const sameMs = new Date(1_700_000_000_000)
+    fs.utimesSync(path.join(dir, 'cli-20261124_000000.log'), sameMs, sameMs)
+    fs.utimesSync(path.join(dir, 'cli-20261125_000000.log'), sameMs, sameMs)
     const { ports } = readLogPorts(dir)
     assert.equal(ports[0], 60000)
     assert.ok(ports.includes(52236))

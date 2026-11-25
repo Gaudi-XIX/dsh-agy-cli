@@ -374,13 +374,12 @@ test('web router: the hide list is gone, so one full catalog reaches panel, drop
   assert.equal(existsSync(hostPatch), false, 'refuse to run when a real host cordis.patch.yml exists')
   __setAgyOverridesPathForTest(tmpPath)
   try {
-    // A deliberately narrow visibleModels shows the old whitelist is no longer
-    // authoritative: claude-sonnet-4-6 is absent from it yet must stay visible.
+    // The old hide list is gone: claude-sonnet-4-6 was absent from it yet must
+    // stay visible.
     const config = {
       enabled: false,
       model: 'gemini-3.8-flash',
       modelDiscovery: 'off',
-      visibleModels: ['gemini-3.8-flash'],
       models: [
         { id: 'gemini-3.8-flash' },
         { id: 'gemini-3.1-pro' },

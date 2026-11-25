@@ -84,23 +84,12 @@ test('Config accepts only bounded transient retry policy overrides', () => {
 
 // Suffix normalization moved to the consumption side (agy.ts/mock.ts/router.ts):
 // the schema keeps the raw id, adapters call normalizeModelId(). See
-// tests 'Config filters visible models and maps effort suffix'.
+// tests 'consumers normalize model ids by stripping -high/-medium/-low suffix'.
 test('consumers normalize model ids by stripping -high/-medium/-low suffix', async () => {
   const { normalizeModelId } = await import('../lib/provider/config.js')
   assert.equal(normalizeModelId('gemini-3.7-flash-high'), 'gemini-3.7-flash')
   assert.equal(normalizeModelId('gemini-3.7-flash-medium'), 'gemini-3.7-flash')
   assert.equal(normalizeModelId('GEMINI-3.7-FLASH-LOW'), 'GEMINI-3.7-FLASH')
-})
-
-test('Config filters visible models and maps effort suffix', async () => {
-  const { filterVisibleModels, normalizeModelId, extractModelEffort } = await import('../lib/provider/config.js')
-  assert.equal(normalizeModelId('gemini-3.7-flash-high'), 'gemini-3.7-flash')
-  assert.equal(extractModelEffort('gemini-3.7-flash-high'), 'high')
-  assert.equal(extractModelEffort('gemini-3.7-flash'), undefined)
-  const models = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
-  assert.deepEqual(filterVisibleModels(models, []), models)
-  assert.deepEqual(filterVisibleModels(models, ['a', 'c']).map(m=>m.id), ['a','c'])
-  assert.deepEqual(filterVisibleModels(models, ['a-high']).map(m=>m.id), ['a'])
 })
 
 test('Config provides zh-CN/en i18n descriptions for settings panel', () => {
@@ -109,9 +98,6 @@ test('Config provides zh-CN/en i18n descriptions for settings panel', () => {
   const zhDesc = schema.meta?.description ?? {}
   // At least ensure i18n call did not throw and schema is still valid
   assert.ok(schema !== undefined)
-  assert.equal(Config({}).visibleModels.length, 0)
-  assert.doesNotThrow(() => Config({ visibleModels: ['gemini-3.7-flash', 'gemini-3.1-pro'] }))
-  assert.throws(() => Config({ visibleModels: ['   '] }), err => err.name === 'ValidationError')
 })
 
 test('Config hides YAML-only fields and exposes the settings editor note', () => {
@@ -123,7 +109,6 @@ test('Config hides YAML-only fields and exposes the settings editor note', () =>
 
   assert.equal(schema.meta.comment, '其余字段在 cordis.patch.yml 中，请直接编辑对应段。 (dsh-agy-cli)')
   assert.equal(fieldMeta('model').hidden, undefined)
-  assert.equal(fieldMeta('visibleModels').hidden, undefined)
   assert.equal(fieldMeta('provider').hidden, true)
   assert.equal(fieldMeta('models').hidden, true)
   assert.equal(fieldMeta('agyPath').hidden, true)
@@ -172,13 +157,10 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
   assert.equal(readEnabled(config), false)
   const rest = { ...config, enabled: undefined }
   assert.deepEqual(rest, {
-    // visibleModels present since 0.9.0
-
     enabled: undefined, // Volatile reference, asserted via readEnabled above
     provider: 'agy',
     model: 'gemini-3.1-pro',
     models: [],
-    visibleModels: [],
     modelDiscovery: 'auto',
     modelDiscoveryTtlMs: 300_000,
     modelDiscoveryTimeoutMs: 10_000,

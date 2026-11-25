@@ -433,8 +433,61 @@ test('a history-only image turn keeps the normal agent', async () => {
     ],
   })) {}
 
-  assert.notEqual(captured[0]?.agent, 'dsh-agy-image-view')
-  assert.notEqual(captured[0]?.mode, 'plan')
+  assert.ok(captured.length > 0, 'one-shot request must be captured')
+  assert.equal(captured[0]?.agent, 'dsh-agy-mcp-executor')
+  assert.equal(captured[0]?.mode, undefined)
+})
+
+test('a history-only image turn routes through persistent transport', async () => {
+  const oneShotCaptured = []
+  const persistentCaptured = []
+  const transport = {
+    request: input => {
+      persistentCaptured.push(input)
+      input.onEvent?.({ event: 'result', result: { status: 'SUCCESS', response: 'ok' } })
+      return Promise.resolve({
+        requestId: 'req-history-persistent',
+        sessionId: input.sessionId,
+        events: [],
+        durationMs: 10,
+        firstEventMs: 2,
+      })
+    },
+  }
+  const attachment = {
+    attachmentId: 'attachment-history-persistent',
+    mediaType: 'image/png',
+    bytes: 4,
+    width: 1,
+    height: 1,
+  }
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    toolPolicy: 'dsh-owned',
+    imageInput: 'experimental',
+    transport: 'persistent',
+  }, {
+    persistentTransport: transport,
+    attachmentStore: {
+      readImage: async ref => ({ ref, data: new Uint8Array([137, 80, 78, 71]) }),
+    },
+    runAgyProcess: fakeRunner([
+      { event: 'result', result: { status: 'SUCCESS', response: 'text answer' } },
+    ], oneShotCaptured),
+  })
+
+  for await (const _chunk of adapter.stream({
+    ...request,
+    sessionId: 'session-history-persistent',
+    messages: [
+      { role: 'user', content: [{ type: 'image', attachment }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'noted' }] },
+      { role: 'user', content: [{ type: 'text', text: 'plain question' }] },
+    ],
+  })) {}
+
+  assert.equal(persistentCaptured.length, 1, 'a history-only image turn must stay on the persistent worker')
+  assert.equal(oneShotCaptured.length, 0, 'a history-only image turn must not fall back to one-shot')
 })
 
 test('experimental image bridge narrowly permits staged view_file events with DSH-owned tools', async () => {
@@ -2211,6 +2264,7 @@ test('AgyAdapter advances the history fingerprint after every successful resume 
   for await (const _chunk of adapter.stream({ ...request, sessionId, messages: secondMessages })) {}
   const afterSecond = adapter.getSession(sessionId)
   assert.equal(afterSecond?.messageCount, 3)
+  assert.match(afterSecond?.chainHash ?? '', /^[0-9a-f]{16}$/)
   assert.notEqual(afterSecond?.chainHash, afterFirst?.chainHash, 'the chain must advance with each turn')
 })
 

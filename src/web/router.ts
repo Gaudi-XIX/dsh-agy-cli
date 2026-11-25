@@ -123,15 +123,11 @@ function saveOverrides(updates: { defaultEffort?: string; defaultModel?: string 
  * this file at boot, and a torn write would break the next start, not just the
  * panel.
  */
-function updateCordisPatch(visibleModels?: string[], defaultModel?: string): string | undefined {
+function updateCordisPatch(defaultModel?: string): string | undefined {
   try {
     if (!existsSync(CORDIS_PATCH_PATH)) return undefined
     if (defaultModel !== undefined && !/^[A-Za-z0-9._-]+$/.test(defaultModel)) {
       return `refusing to write non-model-id defaultModel: ${defaultModel.slice(0, 64)}`
-    }
-    if (visibleModels !== undefined
-      && !visibleModels.every(id => /^[A-Za-z0-9._-]+$/.test(id))) {
-      return 'refusing to write non-model-id visibleModels entry'
     }
     let content = readFileSync(CORDIS_PATCH_PATH, 'utf8')
     // JS has no \Z anchor; the file-tail alternative is a plain `$`.
@@ -142,13 +138,6 @@ function updateCordisPatch(visibleModels?: string[], defaultModel?: string): str
     let block = match[1]!
     if (defaultModel !== undefined) {
       block = block.replace(/(model:\s*)[^\r\n]+/, (_whole, prefix: string) => `${prefix}${defaultModel}`)
-    }
-    if (visibleModels !== undefined) {
-      const lines = visibleModels.map((m) => `      - ${m}`).join('\n')
-      const visibleRegex = /visibleModels:(\s*\n(\s+-[^\r\n]+\n*)*)/
-      if (visibleRegex.test(block)) {
-        block = block.replace(visibleRegex, () => `visibleModels:\n${lines}\n`)
-      }
     }
     content = content.replace(providerRegex, () => block)
     const temporary = `${CORDIS_PATCH_PATH}.tmp-${process.pid}-${randomUUID()}`
@@ -1016,7 +1005,7 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
 
       if (key === 'defaultModel' && typeof value === 'string') {
         saveOverrides({ defaultModel: value })
-        const patchError = updateCordisPatch(undefined, value)
+        const patchError = updateCordisPatch(value)
         if (patchError !== undefined) {
           sendJson(res, 500, { ok: false, key, error: patchError })
           return

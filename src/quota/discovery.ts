@@ -37,7 +37,14 @@ export function readLogPorts(logDir: string, logFileCount = 3): { ports: number[
       // file vanished between readdir and stat; skip it
     }
   }
-  withMtime.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  // Newest first. mtime ties (same-millisecond batch writes are common on
+  // NTFS) break on the descending date-stamped basename: under the `cli-*.log`
+  // naming convention lexicographic order matches chronological order, so the
+  // total order stays deterministic without changing the newest-first meaning.
+  withMtime.sort((a, b) =>
+    b.mtimeMs - a.mtimeMs ||
+    (path.basename(a.file) < path.basename(b.file) ? 1 : path.basename(a.file) > path.basename(b.file) ? -1 : 0),
+  )
   const ports: number[] = []
   for (const { file } of withMtime.slice(0, logFileCount)) {
     let text: string

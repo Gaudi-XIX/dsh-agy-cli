@@ -15,8 +15,6 @@ export interface Config {
   model?: string
   /** Explicit model catalog; legacy `model` remains the default/fallback entry. */
   models?: ModelConfig[]
-  /** Visible models filter; empty means show all discovered models. */
-  visibleModels?: string[]
   /** Discover additional models with `agy models`; `off` keeps static-only behavior. */
   modelDiscovery?: 'auto' | 'off'
   /** In-memory model discovery cache lifetime. */
@@ -283,7 +281,6 @@ export function createConfigSchema(defaults: {
     model: z.string().default(DEFAULT_MODEL).description('Default model id (base, without -high/-medium/-low suffix)'),
     // Explicit catalogs are an advanced YAML escape hatch; the normal UI uses discovery.
     models: z.array(ModelConfig).default([]).description('Explicit model catalog; entries are base ids').hidden(),
-    visibleModels: z.array(z.string().pattern(/^\S(?:.*\S)?$/)).default([]).description('Visible models filter; empty shows all discovered models, non-empty only shows checked base ids'),
     modelDiscovery: z.union(['auto', 'off'] as const).default('auto').description('Discover models via agy models'),
     modelDiscoveryTtlMs: z.number().min(1_000).max(3_600_000).default(300_000).description('Discovery cache TTL ms').hidden(),
     modelDiscoveryTimeoutMs: z.number().min(100).max(30_000).default(10_000).description('Discovery timeout ms').hidden(),
@@ -338,7 +335,7 @@ export function createConfigSchema(defaults: {
   // when the schema is wrapped in z.transform — the wrapper puts the object at
   // a wildcard path (`$.*.enabled`) which the volatile placement rules treat as
   // non-fixed. The suffix normalization that used to live here moved to the
-  // consumers: agy.ts:1164-1167 already normalizes model/models/visibleModels
+  // consumers: agy.ts already normalizes model/models
   // via normalizeModelId(), which covers every value this transform touched.
   const schema = schemaBase
   const localized = (schema as any).i18n({
@@ -347,7 +344,6 @@ export function createConfigSchema(defaults: {
       provider: { $description: '提供方路由 ID（固定为 agy）' },
       model: { $description: '默认模型 ID（基础名称，不含 -high/-medium/-low 后缀，推理强度另选）' },
       models: { $description: '显式模型目录；条目为基础 ID，可覆盖名称与上下文窗口' },
-      visibleModels: { $description: '可见模型过滤；为空时显示全部发现模型，非空时仅显示勾选的基础 ID' },
       modelDiscovery: { $description: '是否通过 agy models 自动发现模型' },
       modelDiscoveryTtlMs: { $description: '模型发现缓存时间（毫秒）' },
       modelDiscoveryTimeoutMs: { $description: '模型发现超时（毫秒）' },
@@ -388,7 +384,6 @@ export function createConfigSchema(defaults: {
       provider: { $description: 'Provider route id (always agy)' },
       model: { $description: 'Default base model id (without -high/-medium/-low suffix; effort selected separately)' },
       models: { $description: 'Explicit model catalog; entries are base ids' },
-      visibleModels: { $description: 'Visible models filter; empty shows all discovered base models, non-empty only shows checked ids' },
       modelDiscovery: { $description: 'Auto-discover models via agy models' },
       modelDiscoveryTtlMs: { $description: 'Discovery cache TTL (ms)' },
       modelDiscoveryTimeoutMs: { $description: 'Discovery timeout (ms)' },
@@ -497,13 +492,6 @@ export function extractModelEffort(id: string): 'low' | 'medium' | 'high' | unde
   const m = /-(low|medium|high)$/i.exec(id)
   if (!m || !m[1]) return undefined
   return m[1].toLowerCase() as 'low' | 'medium' | 'high'
-}
-
-/** Filter catalog by visibleModels (empty = all). */
-export function filterVisibleModels(models: readonly ModelConfig[], visibleModels: readonly string[] | undefined): readonly ModelConfig[] {
-  if (visibleModels === undefined || visibleModels.length === 0) return models
-  const allow = new Set(visibleModels.map(normalizeModelId))
-  return models.filter(m => allow.has(normalizeModelId(m.id)))
 }
 
 /**

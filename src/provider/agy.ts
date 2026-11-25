@@ -2084,7 +2084,7 @@ export class AgyAdapter extends LlmAdapter {
         sessionKey,
         dshContextSnapshot,
         toolSchemaCount,
-        prepared.bridgeActive,
+        prepared.turnHasImages,
         useToolBridge,
       )) {
         let persistentRepairAttempts = 0

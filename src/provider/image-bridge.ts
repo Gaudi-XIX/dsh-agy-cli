@@ -339,13 +339,6 @@ export async function prepareAgyPrompts(
       cleanup: async () => undefined,
     }
   }
-  if (!bridgeOptions.agentCanViewFile) {
-    throw new AgyImageBridgeError(
-      'Experimental image input requires the bundled image-view Agent with view_file',
-      'IMAGE_AGENT_UNSUPPORTED',
-    )
-  }
-
   // Everything after the last assistant message is the turn being answered;
   // `serializeAgyTurnPrompt` slices at exactly the same boundary.
   const turnStart = lastAssistantIndex(options.messages) + 1
@@ -355,6 +348,15 @@ export async function prepareAgyPrompts(
     const bucket = index >= turnStart ? currentRefs : historyRefs
     for (const ref of imageRefsOf(message.content)) bucket.push(ref)
   })
+
+  // Only a turn that itself carries images needs the image-view Agent; a
+  // history-only turn keeps its cached placeholders and must not be rejected.
+  if (currentRefs.length > 0 && !bridgeOptions.agentCanViewFile) {
+    throw new AgyImageBridgeError(
+      'Experimental image input requires the bundled image-view Agent with view_file',
+      'IMAGE_AGENT_UNSUPPORTED',
+    )
+  }
 
   const staged = currentRefs.length === 0
     ? { directory: undefined as string | undefined, images: new Map<string, StagedImage>(), cleanup: async (): Promise<void> => undefined }
