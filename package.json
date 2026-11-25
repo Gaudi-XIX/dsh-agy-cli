@@ -1,11 +1,11 @@
 {
   "name": "dsh-agy-cli",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": false,
   "publishConfig": {
     "access": "public"
   },
-  "description": "Run the locally authenticated AGY CLI as a DSH model provider. Official-binary-only transport; lean prompts, adaptive tool projection, and DSH-governed security boundary.",
+  "description": "Run the locally authenticated AGY CLI as a DSH model provider. Official-binary-only transport; batch tools, 8.8KB folding, telemetry cutoff, 180s watchdog, and skills passthrough.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

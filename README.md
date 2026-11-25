@@ -3,140 +3,234 @@
 [![npm](https://img.shields.io/npm/v/dsh-agy-cli)](https://www.npmjs.com/package/dsh-agy-cli)
 [![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-cli)](LICENSE)
 
-把本机已登录的 **Google Antigravity CLI（gy）** 接入 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 作为一级模型提供方。
+把本机已登录的 **Google Antigravity CLI（`agy`）** 接入 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 作为一级模型提供方。
 
-> 拒绝反代与协议模拟的封号隐患，告别套壳黑盒失控。插件采用本地官方 CLI 原生直通路线：非反代、非伪造请求头，凭据永驻本机，不改动官方二进制、不替换官方签名；DSH 全权接管工具调度，执行步骤实时透明可见；深度优化长任务，内置复合批处理工具、工具动态投影、8.8KB 输出硬防溢出、全链路遥测切断与 180s 阶梯看门狗，从底层保障纯净上下文与长程稳定。
+> 拒绝反代与协议模拟的封号隐患，告别套壳黑盒失控。插件采用本地官方 CLI 原生直通路线：非反代、非伪造请求头，凭据永驻本机，不改动官方二进制、不替换官方签名；DSH 全权接管工具调度，执行步骤实时透明可见；内置批处理工具、动态工具投影、8.8KB 输出折叠、全链路遥测切断、180s 阶梯看门狗与技能全量透传，兼顾长程稳定与日常工程效率。
 
-**这个插件的三件事：**
+**这个插件的核心职责：**
 
-1. **生成流量由官方二进制自己签名** —— 每一轮模型请求都通过官方 gy.exe 发出，插件不代它签名、不接管它的生成链路，模型侧的风控面与官方客户端一致。
-2. **吃到 Antigravity 账号的官方额度** —— 消耗打在你自己的套餐上，与官方客户端同池同规则，不需要 API Key。
-3. **AGY 只当模型，DSH 接管 harness** —— 工具执行、审批、沙箱、上下文预算 100% 在 DSH；AGY 自带的 agent 循环被剥离。
+1. **生成流量由官方二进制自己签名** —— 每一轮模型请求都通过官方 `agy.exe` 发出，插件不代签名、不替换生成链路，模型侧风控面与官方客户端一致。
+2. **消耗 Antigravity 账号官方额度** —— 请求走本机已登录账号套餐，与官方客户端同池同规则，无需额外配置 API Key。
+3. **AGY 只做模型推理，DSH 接管 Harness** —— 工具执行、权限审批、工作区沙箱与上下文预算由 DSH 负责，通过公开预设参数剥离 AGY 自带 agent 循环。
 
-> **平台限制**：**仅 Windows**。配额面板与凭据保活依赖 Windows Credential Manager；其余功能无跨平台实现，未在 macOS/Linux 验证。
-
-## 产品定位：四维框架
-
-只留四层：为什么做、主动放弃了什么、别人没有的、比别人更耐操的。及格线级别的通用能力统一收敛到文末「基线支持与兼容性」，不当卖点。
-
-### 维度一 · 立项痛点与触动
-
-三类现实问题促成这个插件：**账号封禁风险**（反代与协议模拟的通道形态和官方客户端不一致，风控面因此变化，代价却落在使用者的账号上）、**套壳黑盒失控**（模型生成链路与工具执行都不透明，出错只能靠猜）、**长任务上下文雪崩与短轮次高延迟**（历史输出与长日志持续累积，工具往返频繁导致单任务等待几十轮）。
-
-### 维度二 · 路线与战略放弃
-
-走**本机官方 CLI 原生通道**：每一轮生成都由官方 gy.exe 发出并签名，插件只做桥接（src/agy/persistent-transport.ts）。路线成立的前提是承认代价，所以主动放弃五样东西：
-
-- 放弃**云端一键免登与零门槛接入** → 换取凭据不出本机，通道形态与官方客户端一致。
-- 放弃**把网页版逆向成 API、用 Cookie 爬虫** → 换取不引入逆向链路带来的账号面。
-- 放弃**篡改模型生成机制、给二进制打补丁** → 换取官方数字签名完好，模型侧风控面与官方客户端一致。
-- 放弃**多账号池化与账号轮换** → 换取单账号原生合规，机制上不存在「同 IP 多账号并发」这一关联面。
-- 放弃**外挂黑盒全自动调度** → 换取 DSH 全权接管，执行步骤百分之百可追溯可审查。
-
-### 维度三 · 独有壁垒（人无我有）
-
-在这条路线下，八条合规边界都能打开源码逐条核对。每一条都是「主动选择不做什么」的正面证据，不是与谁比较的结论。
-
-| # | 合规边界 | 本仓实现 |
-|---|---|---|
-| 1 | 非网页逆向 | 通道是 AGY 1.1.15 stream-json 的 NDJSON（src/agy/persistent-transport.ts）：不把网页版逆向成 API、不用 Cookie 爬虫、不解析浏览器流量 |
-| 2 | 零二进制篡改 | 只 spawn 官方 gy.exe（src/agy/persistent-transport.ts）：不打内存补丁、不破机器码、不替换官方签名，生成流量由官方二进制自己签名 |
-| 3 | 单账号原生合规 | 只用本机已登录的那一个账号，不建账号池、不做轮换；每个 AGY 进程同一时刻只跑一个活跃 turn（src/agy/persistent-transport.ts） |
-| 4 | 官方公开参数合规接管 | 用官方 Agent 预设的公开参数 xcludeDefaultComponents: true 关停官方默认组件（src/agent-presets.ts、gents/dsh-agy-mcp-executor.md）：接管走官方公开接口，不私改协议 |
-| 5 | 凭据本地沙箱驻留 | 只从本机 Windows Credential Manager 读 target gemini:antigravity（src/agy/keepalive.ts）：读到即用、不落日志、不进错误消息；续期由官方 gy.exe 自办 |
-| 6 | Retry-After 智能退避 | 可重试错误按服务端 Retry-After（数值秒或 HTTP-date）等待，单次上限 24 小时（src/agy/errors.ts）；接线在 src/provider/agy.ts，用例在 	ests/error-classification.test.mjs |
-| 7 | 遥测切断与死循环退避 | 进程与双 transport（xperimental / persistent）拉起时统一注入 4 个遥测禁用环境变量（DO_NOT_TRACK、ANTIGRAVITY_DISABLE_TELEMETRY、GOOGLE_CLOUD_DISABLE_TELEMETRY、DISABLE_TELEMETRY）：阻断 Google Clearcut 遥测上传与网络波动时 5s 死循环重试风暴，杜绝出站带宽积压与延迟恶化；spawn 异常挂载 spawnStderrDetail |
-| 8 | 180s 阶梯看门狗与进程树强杀 | src/agy/process.ts 内置 180s 看门狗，超时先发 stdin EOF + SIGTERM 优雅退出，3s 宽限后升级为 Windows 	askkill /F /T（POSIX 进程组 SIGKILL）树状强杀，彻底杜绝孤儿进程与端口锁死 |
-
-### 维度四 · 深度加固（人有我优）
-
-通用能力谁都能写，写到不崩才算数：
-
-- **复合批处理工具（pply_edits / 
-ead_slices）**：首轮及后续交互原生支持批量编辑与切片读取（src/mcp/batch-tools.ts，接线在 src/mcp/bridge.ts:474）。pply_edits 具备 All-or-Nothing 事务机制，全量内存正则预检全部命中才统一写盘，任何一处失败 0 文件落盘全回滚，彻底杜绝半途报错留下的脏代码；
-ead_slices 支持按行段精准切片与顶层类/函数大纲提取。实测将交互轮次减少 35%~50%，Token 账单节省 31.5%。
-- **8.8KB 输出硬截断与 ANSI 清洗**：设定 8800 字节折叠阈值（保留首尾，src/mcp/output-filter.ts），安全避开上游 10KB 强行截断落盘到本地临时文件并逼模型加调 
-ead_file 的惩罚；清洗 ANSI 控制字符与 \r 动画进度条，杜绝日志乱码污染上下文。
-- **工具上下文投影**：默认只下发基础终端与文件能力，其余按需发现后挂载（dsh_discover_tools，src/mcp/tool-projection.ts），工具 Schema 体积随之下降。
-- **长输出自适应折叠**：超预算的历史命令输出与长日志保留首尾、紧凑折叠中间（oldToolResultText，src/provider/prompt-budget.ts）。
-- **敏感防御**：下发前软化上游易触发的词与指令对抗短语（cloakPrompt，src/provider/prompt-cloak.ts，接线在 src/provider/agy.ts）；日志与错误消息统一走脱敏（
-edactText，src/agy/redact.ts）。
-- **流式容错与断连保文本**：stdinMode: hold 防回滚（src/agy/process.ts，默认值见 src/provider/agy.ts），尾流逐段交付，连接断掉不丢已经交付的文本。
+> **平台限制**：**仅支持 Windows**。配额面板与凭据保活依赖 Windows Credential Manager；进程看门狗、配额命令行嗅探与无窗口启动器亦围绕 Windows 实现，未在 macOS/Linux 验证。
 
 ---
 
-## 凭据与网络行为（如实写清）
+## 产品定位：四维框架
 
-这一点容易被含糊带过，所以直接列出来：
+### 维度一 · 立项痛点与触动
 
-- **读取**：Windows Credential Manager 里 AGY 写入的 Google OAuth blob（target gemini:antigravity），由 src/agy/keepalive.ts 的 CredRead 完成。用途有两个：判断令牌是否临近过期并触发一次官方 CLI 续期；读取 ccess_token 用于下面的配额查询。读到的令牌只在进程内使用，不落日志、不进错误消息。
-- **配额查询（唯一的插件自带出站请求）**：把上面读到的 ccess_token 作为 Authorization: Bearer 发往 https://daily-cloudcode-pa.googleapis.com 与 https://cloudcode-pa.googleapis.com 的只读配额 RPC（
-etrieveUserQuotaSummary / etchAvailableModels），并附带 AGY 客户端的身份头（User-Agent / X-Goog-Api-Client）——服务端对不同客户端返回的配额分组不同，不带身份头会漏掉 Gemini 组。**请求只发往 Google 这两个端点，不外传第三方。**
-- **不做的**：不拦截、不重放、不伪造生成请求；不把令牌交给任何第三方；不读取除上述 target 以外的凭据。
-- **续期**：令牌轮换完全由官方 gy.exe 自己完成，插件只负责在到期前拉起它一次。
+三类实际工程痛点促成这个插件：
+- **账号风控暴露**：反代服务与协议模拟会改变请求指纹和通道形态，代价最终落在使用者账号上。
+- **黑盒套壳失控**：模型生成与内部工具调用不透明，卡死、空回或权限拒批时只能靠猜。
+- **长任务失稳与短轮次空耗**：历史日志和工具大返回迅速撑爆上下文；单次工具频繁往返加上断网遥测重试风暴、子进程假死挂起，大幅拉长端到端耗时。
 
-实测依据见 docs/prod-generation-feasibility-20261020.md（两个端点的配额语义、身份头对返回值的影响）。
+### 维度二 · 路线与战略放弃
 
-## 功能
+坚持**本机官方 CLI 原生直通**：每轮生成均由官方 `agy.exe` 发出并签名，插件只负责协议桥接与宿主托管（`src/agy/persistent-transport.ts`、`src/agy/process.ts`）。路线成立必须先承认代价，插件主动放弃以下五项：
 
-- **底层官方提示词物理剥离（Lean Prompt）**：通过 Agent 预设底层关停官方默认臃肿系统提示词与内置工具链（xcludeDefaultComponents: true），上下文零冗余负担，将全部提示词预算完整保留给 DSH 自身的工作区与规则。
-- **MCP 复合批处理工具（pply_edits / 
-ead_slices）**：在 MCP Bridge 真实接线，支持 All-or-Nothing 事务性多文件正则编辑（任一 edit 失败 0 文件落盘全回滚）与按行段切片读取/大纲提取，大幅压缩交互轮次与通信延迟。
-- **8.8KB 输出硬截断与 ANSI 清洗**：设定 8800 字节安全阈值折叠超长工具返回（保留首尾），避免触发官方客户端 10KB 截断落盘惩罚；清洗 ANSI 转义码与终端动画进度条。
-- **全链路遥测切断与 180s 阶梯看门狗**：在主进程与双 transport 全面注入 4 个遥测禁用变量，切断 Clearcut 上传与网络波动死循环重试；内置 180s 看门狗优雅退出与进程树强杀。
-- **自适应识别基础能力，支持工具按需动态挂载**：默认只下发基础终端与文件读写能力，辅以轻量发现工具（dsh_discover_tools），工具 Schema 体积随之收缩；其他能力在被调用时即时自动挂载，兼顾极小上下文与无缝调用。
-- **历史长输出智能折叠**：自动识别多轮交互中超过预算的历史命令输出与长日志，智能保留首尾关键状态并紧凑折叠中间冗余，防止上下文滚雪球。
-- **防拒答脱敏清洗**：下发前自动打散易触发上游生硬过滤的敏感词与指令对抗短语，大幅提升复杂指令与 Agent 请求的稳定率。
-- **双工具路线**：MCP 桥把 DSH 工具交给 AGY（真工具事件、过程流可视化，推荐），失败自动降级为 prompt 契约。
-- **DSH 主导 harness**：工作区、审批、沙箱、上下文预算全在 DSH；AGY 只出模型。
-- **流式 + 状态机**：stdinMode: hold 防回滚、工具步骤折叠显示（只列执行了哪些工具，不显示模型的内部思考内容）、尾流交付、断连保文本。
-- **会话管理 + 历史指纹链**：resume / full 双模式，每轮成功后记录 DSH 历史指纹；resume 前本地比对前缀，检出历史被编辑/压缩/截断即废弃旧会话并从完整历史重建，delta prompt 不会落在过期上下文上；死亡会话自动重放，会话映射落盘可迁移。
-- **本地免登录配额嗅探（
-pm run quota）**：直接嗅探本地 ~/.gemini/antigravity-cli/log/ 端口与进程 csrf_token，走 ConnectRPC 本地读取各模型剩余百分比与重置倒计时（解析层已测、端到端待真机验证；协议采用 ConnectRPC 且必须带 csrf_token）。
-- **图片输入**（experimental）：附件经图片桥落盘，由最小权限的 view_file Agent 查看。
-- **配额面板与凭据保活**：loopback-only；面板显示真实双窗口配额，令牌临近过期时自动拉起官方 CLI 续期。
-- **安全加固**：原型污染防线、MCP 桥面闸门、面板 loopback 门与原子写、凭据脱敏——全部有测试背书。
+- 放弃**云端免配与一键开箱** → 换取凭据永驻本机 Windows Credential Manager，通道特征与官方客户端对齐。
+- 放弃**逆向网页 API 或 Cookie 爬虫** → 换取不引入非官方协议逆向风险。
+- 放弃**篡改官方二进制或内存补丁** → 换取官方数字签名完整无损，不破坏客户端自身校验。
+- 放弃**多账号号池与轮换调度** → 换取单账号原生合规，不存在单机多号并发关联风险。
+- 放弃**外挂黑盒全自动循环** → 换取 DSH 宿主级透明调度，每一步工具调用可审计、可拦截。
 
-## 安装
+### 维度三 · 独有壁垒（人无我有）
 
-`console
-dsh plugin --profile <你的 profile> add dsh-agy-cli
-`
+在本地官方 CLI 直通路线下，以下八条机制边界均可对照源码逐条验证：
 
-前置要求：Windows；本机已安装并登录官方 Antigravity CLI（gy）；Node ≥ 20。
+| # | 机制边界 | 盘上实现依据 |
+|---|---|---|
+| 1 | 非网页逆向 | 通信基于 AGY 1.1.15 `stream-json` NDJSON 协议（`src/agy/persistent-transport.ts`），不解析网页流量。 |
+| 2 | 零二进制篡改 | 仅直接 `spawn` 官方 `agy.exe`（Windows 下经无黑框启动器 `bin/win32-x64/agy-launcher.exe` 透传句柄，不改写目标程序）。 |
+| 3 | 单账号原生合规 | 仅使用本机当前登录账号，不建号池、不做轮换，单一进程同一时刻只执行一个活跃 turn。 |
+| 4 | 公开参数合规接管 | 使用官方 Agent 模板公开字段 `excludeDefaultComponents: true` 停用默认内置工具（`agents/dsh-agy-mcp-executor.md`），不依赖私有逆向参数。 |
+| 5 | 凭据本地沙箱驻留 | 仅在检查/续期与面板查额时从 Windows Credential Manager 读取 `gemini:antigravity`（`src/agy/keepalive.ts`），不外传、不写入提示词或日志。 |
+| 6 | 全链路遥测切断 | 主进程与双 transport 启动子进程时统一注入 4 个禁用环境变量，阻断断网状态下的 Clearcut 每 5 秒无退避重试风暴（`src/agy/process.ts`、`src/agy/experimental-transport.ts`、`src/agy/persistent-transport.ts`）。 |
+| 7 | 180s 阶梯看门狗 | 超时后先发 stdin EOF 与取消信号并给予 3s 优雅退出宽限，未退出则执行 Windows `taskkill /t /f` 进程树强杀，避免孤儿进程占住端口或文件锁（`src/agy/process.ts`）。 |
+| 8 | 历史指纹防错乱 | `resume` 模式每轮记录 DSH 历史前缀指纹，若历史被编辑、截断或压缩，立即丢弃旧会话并用完整历史重建，防止增量消息错位（`src/provider/agy.ts`）。 |
 
-**装完必须再跑一步**（否则 AGY 会报 unknown agent——插件自带的 Agent 预设没有装进 AGY 的 agent 目录）：
+### 维度四 · 深度加固（人有我优）
 
-`console
-npx dsh-agy-cli agents install read-only --apply
-npx dsh-agy-cli agents install workspace-write --apply
-`
+- **首轮只下发最小必要工具（动态按需投影）**：默认仅向模型暴露基础终端、文件读写工具及轻量发现入口 `dsh_discover_tools`，将全量 Schema 的上万 Token 占用压缩至极小集合；当任务需要额外能力时，模型自行按关键词检索并挂载对应工具到当前会话（`src/mcp/tool-projection.ts`、`src/mcp/bridge.ts`）。
+- **复合批处理工具与事务写盘**：`apply_edits` 在内存中先做全量匹配预检（All-or-Nothing），全部命中才统一落盘，任意一处失败则 0 文件修改，彻底杜绝半成品脏工作区；`read_slices` 支持按行区间批量切片与顶层符号大纲提取，压降大文件读取轮次与上下文开销（`src/mcp/batch-tools.ts`）。
+- **8.8KB 输出安全折叠与 ANSI 清洗**：主动将单次工具返回折叠在 8800 字节内（保留首尾关键内容），避开上游 CLI 超过 10KB 强制落盘临时文件并迫使模型二次读取的额外开销；同步清洗 ANSI 颜色控制符与 `\r` 进度条刷新噪音（`src/mcp/output-filter.ts`）。
+- **历史长输出自适应折叠与脱敏清洗**：超过 `toolResultFoldThresholdBytes`（默认 2048 字节）的历史工具结果折成首尾摘要；`promptCloak` 对敏感模式做温和脱敏以提升长程稳定性（`src/provider/prompt-budget.ts`、`src/provider/prompt-cloak.ts`）。
+- **流式防回滚状态机**：默认 `stdinMode: 'hold'` 保持管道直到收到终止 `result` 帧，避免过早 EOF 触发官方 `store manager` 取消已输出的生成内容。
 
---apply 会写入 ~/.gemini/antigravity-cli/gemini-root-config/agents；--backup 可先备份，gents list 可查看当前状态。宿主重启后，设置页「模型」里会出现本插件的配置卡（模型可见性、推理强度、配额面板）。
+---
 
-**诊断**：
-px dsh-agy-cli doctor --profile <profile> —— 覆盖安装、bundle 声明、Agent 预设、配置解析、凭据状态，全程不消耗额度。
+## 0.17.0 能力清单
 
-## 开发与门禁
+1. **进程看门狗（180s 超时 + 树杀优雅终止）**：`src/agy/process.ts` 默认设置 `DEFAULT_WATCHDOG_MS = 180_000`（未显式配置更长 `timeoutMs` 时生效），到期先关闭 stdin 并发送终止信号，等待 `WATCHDOG_GRACEFUL_MS = 3_000`（3 秒）后升级为进程树强杀（Windows `taskkill /pid <pid> /t /f`，POSIX 进程组 `SIGKILL`），根治 `agy` 假死与孤儿进程残留。
+2. **本地免登录配额统计（`npm run quota`）**：`src/quota/`（`discovery.ts`、`summary.ts`）配合 `scripts/check-quota.mjs` 实现无浏览器查额，自动扫描日志端口与进程 `csrf_token` 并通过本地 ConnectRPC 读取各模型剩余配额与重置倒计时。
+3. **批处理工具真接线（`apply_edits` / `read_slices`）**：批处理工具从原先仅在 Schema 投影层可见，已在 `src/mcp/bridge.ts` 接入真实调度执行路径，大模型可直接在单轮完成多文件原子替换或切片读取。
+4. **全链路 transport 遥测禁用**：不仅主路径 `runProcess`，`experimental-transport.ts` 与 `persistent-transport.ts` 在 spawn 子进程时均强制注入 `DO_NOT_TRACK=1`、`ANTIGRAVITY_DISABLE_TELEMETRY=1`、`GOOGLE_CLOUD_DISABLE_TELEMETRY=1`、`DISABLE_TELEMETRY=1`，彻底根除断网时 Clearcut 每 5 秒重试风暴，并在启动失败时附着 `spawnStderrDetail`。
+5. **`dsh_discover_tools` 搜索可发现性增强**：`DISCOVER_TOOLS_DESCRIPTOR` 描述更新为引导模型在能力受阻时自行以关键词检索宿主完整工具注册表并按名挂载，不点名具体工具名、不硬编码白名单。
+6. **`EMPTY_RESPONSE` 会话级一次性兜底**：发生无文本且无工具调用的 `EMPTY_RESPONSE` 时标记当前会话（5 分钟 TTL，上限 64 个会话），同会话下一次请求自动在提示词末尾追加一次性文本回复引导，不改动稳定前缀以保住缓存命中，避免重复空转。
+7. **技能全量透传与原生发现**：`src/agy/skills-config.ts` 在插件启用时幂等更新 `~/.gemini/config/skills.json`，注入 `~/.agents/skills` 全量全局技能目录且完整保留用户原有 `entries` / `inherits`；项目级技能依靠工作区 `cwd` 原生发现 `.agents/skills`，不写技能白名单；无预设的主回合不传 `--disable-slash-commands`。
+8. **刷新额度联动模型目录与 `--mode` 冲突抑制**：面板刷新额度（`refresh-quota`）对模型发现传 `{ force: true }` 跳过 5 分钟 TTL 缓存与失败冷却，前端直接消费返回的新 `catalog` / `catalogModels` 字段；`--disable-slash-commands` 与 `--mode` 的参数冲突在 `one-shot` 与 `persistent` 两条 spawn 路径实现对称抑制。
+9. **模型发现期限、隐藏名单移除与图片预设按需门控**：移除旧 `DISCOVERY_AWAIT_MS` 4 秒硬期限，等待上限统一由配置项 `modelDiscoveryTimeoutMs`（默认 `10000` ms，范围 `100`~`30000` ms）控制；`/status` 改为 `peekCatalog()` peek-first 优先读缓存不阻塞，插件启动时触发后台预热；彻底移除 `hiddenModels` 手动隐藏名单，发现即显示；`dsh-agy-image-view` 预设改为仅本轮消息真实带图（`turnHasImages`）才换入，历史图不再把整轮锁进图片检查模式。
 
-`ash
+---
+
+## 安装与宿主挂载
+
+### 前置要求
+
+- **操作系统**：Windows（实测 Windows 11）。
+- **Node.js**：`>= 20`。
+- **官方客户端**：本机已安装并登录 Google Antigravity CLI（`agy --version >= 1.1.15`）。
+
+### 方式一：标准 DSH Profile 安装（推荐普通用户）
+
+必须安装到 DSH Profile 依赖目录，不要只在普通目录执行 `npm install`：
+
+```powershell
+npx @deepseek-ai/dsh plugin --profile desktop add dsh-agy-cli
+```
+
+（若使用 Web profile，将 `desktop` 替换为 `web`。）
+
+### 方式二：Junction / 本地源码链接部署（本地开发调试推荐）
+
+本地源码开发仓可通过本地路径链接（DSH / pnpm 会在目标 profile 的 `node_modules\dsh-agy-cli` 创建指向源码目录的 Windows **Junction**），改动代码并构建后重启宿主即可生效，无需反复打包安装：
+
+```powershell
+# 1. 在源码仓构建产物（生成 lib/ 与 dist/）
+npm run build
+
+# 2. 挂载本地源码仓到 DSH profile（自动写入 link: 依赖并建立 Junction）
+npx @deepseek-ai/dsh plugin --profile desktop add link:F:/AgentData/dsh-agy-cli
+```
+
+或者手动确认 / 建立目录 Junction（以 `desktop` profile 为例）：
+
+```powershell
+# 查看是否已建立 Junction 指向本地开发仓
+Get-Item "$env:USERPROFILE\.dsh\profiles\desktop
+ode_modules\dsh-agy-cli" | Select-Object LinkType, Target
+# 实际数据目录若位于 F:\AgentData\dsh\data\profiles\desktop
+ode_modules\dsh-agy-cli，
+# 也可使用 cmd /c mklink /J <profile>
+ode_modules\dsh-agy-cli F:\AgentData\dsh-agy-cli
+```
+
+### 安装 Bundled Agent 预设（必做）
+
+仅安装插件不会自动把内置 Agent 模板写入 AGY 目录；需执行一次模板安装，否则 AGY 会报未知 Agent：
+
+```powershell
+npx dsh-agy-cli agents list
+npx dsh-agy-cli agents install mcp-executor --apply
+npx dsh-agy-cli agents install image-view --apply
+```
+
+默认写入 `~/.gemini/antigravity-cli/gemini-root-config/agents`（可通过 `--dir` 指定目录，加 `--backup` 可先备份同名旧模板）。
+
+### 诊断自检（零额度消耗）
+
+```powershell
+npx dsh-agy-cli doctor --profile desktop
+```
+
+检查安装状态、Bundle 声明、Agent 预设、配置解析与凭据有效期，全程不发送模型请求。
+
+---
+
+## `npm run quota` 用法
+
+在本地终端直接探测运行中的 AGY Language Server 端口与模型配额，无需打开浏览器网页登录：
+
+```powershell
+cd F:\AgentData\dsh-agy-cli
+npm run quota
+```
+
+**工作原理**：
+1. 扫描 `~/.gemini/antigravity-cli/log/` 下最新的 `cli-*.log`（最多 3 份），提取 `Language server listening on random port at <port> for HTTP` 监听端口（可通过环境变量 `AGY_QUOTA_LOG_DIR` 覆盖日志目录）。
+2. 在 Windows 上通过 `Win32_Process` 查询 `language_server` 进程命令行中的 `csrf_token`。
+3. 以 ConnectRPC 协议携带 `X-Codeium-Csrf-Token` 请求本地 `127.0.0.1:<port>` 的 `GetUserStatus` 与 `RetrieveUserQuotaSummary`，格式化打印各模型剩余配额百分比与重置倒计时。
+
+> **验证边界说明**：`src/quota/` 解析层（日志端口提取、token 提取、ConnectRPC 分段响应解析与报表渲染）已由单元测试 fixture 完整覆盖；真实端口连通场景需本机存在活跃的 `agy` / `language_server` 进程，未在无活跃进程的 CI 环境下端到端跑通。若探测报错找不到端口或 `csrf_token`，请先确认本机 `agy` 处于启动并已登录状态。
+
+---
+
+## 核心配置项表
+
+以下配置字段与默认值对应 `src/provider/config.ts` 与 `cordis.patch.yml`（Bundle 默认启用 `enabled: true`、`toolPolicy: 'dsh-owned'`）：
+
+| 配置项 | 类型 / 可选值 | 默认值（Bundle） | 说明 |
+|---|---|---|---|
+| `enabled` | `boolean` | `true`（库默认 `false`） | 是否启用 AGY Provider。 |
+| `model` | `string` | `'gemini-3.1-pro'` | 默认基础模型 ID（不带 `-low`/`-medium`/`-high` 后缀）。 |
+| `modelDiscovery` | `'auto' \| 'off'` | `'auto'` | 是否通过 `agy models` 自动发现可用模型；`off` 仅用静态配置。 |
+| `modelDiscoveryTtlMs` | `number`（1000 ~ 3600000） | `300000`（5 分钟） | 模型发现结果内存缓存有效期（毫秒）。 |
+| `modelDiscoveryTimeoutMs` | `number`（100 ~ 30000） | `10000`（10 秒） | 单次 `agy models` 发现超时上限；刷新额度时以 `{ force: true }` 直接受此项约束。 |
+| `toolPolicy` | `'reject' \| 'agy-owned' \| 'dsh-owned'` | `'dsh-owned'` | 工具归属策略。`dsh-owned` 由 DSH 执行工具并切换 `dsh-agy-mcp-executor` 预设。 |
+| `mcpBridge` | `boolean` | `true` | 是否经由本地 MCP Server 向 AGY 暴露 DSH 工具（推荐开启）。 |
+| `mcpAdaptiveBaseOnly` | `boolean` | `true` | 是否开启首轮仅下发基础工具 + `dsh_discover_tools` 按需挂载。 |
+| `toolResultFoldThresholdBytes` | `number`（256 ~ 1048576） | `2048` | 历史工具输出超过此字节数时触发首尾折叠摘要。 |
+| `promptCloak` | `boolean` | `true` | 下发前对易命中上游误拦截的短语与标识进行温和脱敏。 |
+| `imageInput` | `'off' \| 'experimental'` | `'experimental'` | 图片输入模式。`experimental` 仅在当前回合真带图时切入 `dsh-agy-image-view` 预设。 |
+| `sessionMode` | `'resume' \| 'full'` | `'full'` | 会话模式：`full` 每轮发送完整上下文；`resume` 复用 AGY 会话并校验历史指纹。 |
+| `stdinMode` | `'hold' \| 'close'` | `'hold'` | `hold` 保持 stdin 直到收到 `result` 结束帧（防中断回滚）；`close` 写完即关。 |
+| `transport` | `'one-shot' \| 'persistent'` | `'one-shot'` | 进程传输模式：`one-shot` 按轮拉起；`persistent` 实验性长驻复用 worker。 |
+| `timeoutMs` | `number`（1 ~ 3600000） | `900000`（`runProcess` 默认看门狗 180000） | 单次请求墙钟总上限（毫秒）；仅持续不停吐流的任务会触达，一般由下方静默超时判定。 |
+| `idleTimeoutMs` | `number`（1 ~ 3600000） | `300000`（5 分钟） | 无输出静默超时（毫秒），每收到一行输出自动续期；必须小于 `timeoutMs`。 |
+| `tokenKeepaliveMs` | `number`（0 ~ 3600000） | `60000`（1 分钟） | 检查 Credential Manager 凭据寿命的周期；`0` 为禁用。 |
+
+---
+
+## 故障排查
+
+### 1. 模型发现超时怎么办？
+
+- **机制说明**：插件已删除旧版 4 秒硬截断，`/status` 接口改为 `peekCatalog()` 优先读取内存缓存（0 等待），并在插件启动时后台异步预热；若冷启动时 `agy models` 拉起较慢，唯一等待上限取决于 `modelDiscoveryTimeoutMs`（默认 10,000 ms，上限 30,000 ms）。
+- **排查做法**：
+  1. 在终端手动执行 `agy models` 确认官方向导是否能正常秒回，若报错请先检查本机代理或登录状态；
+  2. 若本机磁盘/进程冷启动固定偏慢，在配置中将 `modelDiscoveryTimeoutMs` 调大（如 `20000` 或 `30000`）；
+  3. 在设置面板点击「刷新 / 同步」，该操作会传 `force: true` 跳过 5 分钟缓存和失败冷却重新发现；
+  4. 若长期无需动态列表，可将 `modelDiscovery` 设为 `'off'` 并通过 `model` / `models` 固定目录。
+
+### 2. `EMPTY_RESPONSE` 是什么意思？
+
+- **成因**：AGY 的无头 print 模式没有按单个工具预放行的命令行开关，当模型试图调用某个需要交互确认的 AGY 内部工具时，CLI 会打印 `Print mode: soft-denying tool confirmation ...`，随后模型空等退出，本轮既没有生成正文也没有通过有效工具推进，插件将其捕获并抛出 `EMPTY_RESPONSE`。
+- **现行兜底**：从 `0.17.0` 起，触发 `EMPTY_RESPONSE` 时插件会记录该会话（5 分钟 TTL）；宿主重试或同会话下一次请求时，插件会在提示词末尾附着一次性引导语，提醒模型直接文本回复或仅使用无需确认的工具，同时不破坏前缀缓存，避免连续空转。若高频出现，请确认 `toolPolicy` 为 `'dsh-owned'` 且已正确安装 `dsh-agy-mcp-executor` 预设（彻底剥离 AGY 内置工具）。
+
+### 3. 为什么 `agy` 看不到 DSH 的技能目录？
+
+请按两条技能发现路径逐项核对：
+1. **全局技能目录（`~/.agents/skills`）**：插件启用时会自动调用 `ensureAgyGlobalSkills()` 向 `~/.gemini/config/skills.json` 幂等写入 `{"path": "~/.agents/skills"}`（不覆盖原有条目）。若该文件此前被手动改坏（不是合法 JSON 对象或缺少 `entries` 数组），插件不会强行覆盖，而是在 DSH 日志打印 `could not ensure AGY global skills config` 警告；修复或删去损坏文件后重启宿主即可自动重建。
+2. **项目级技能目录（`<workspace>/.agents/skills`）**：AGY 原生要求以当前工作区为 `cwd`，且**不能传 `--disable-slash-commands`**。请注意：当配置使用 `dsh-owned`（自动挂载 `mcp-executor` 预设）或显式指定了 `agentPreset` 时，插件会主动传递 `--disable-slash-commands` 以锁定预设权限边界，此时 AGY 侧的斜杠技能发现会被关闭（技能统一由 DSH 宿主端挂载提示词与工具接管）。仅在不使用预设的主回合才会透传并保留工作区原生发现。
+
+### 4. `history` 图占位符是什么？
+
+- **机制说明**：在 `imageInput: 'experimental'` 下，只有**当前这一轮新发的消息**带有的图片才会被临时落盘并切入 `dsh-agy-image-view` 预设读取。早先历史回合发过的图片不会每轮重复拷贝，也不会再把纯文本续聊轮次锁死在图片检查模式里。
+- **占位符格式**：历史图片会被物料化进稳定缓存目录 `<DSH_HOME>/agy-cli/image-cache`（默认保留 14 天），并在历史消息上下文中替换为纯文本占位符：
+  - 缓存可用时：`[IMAGE_ATTACHMENT file=<绝对路径> media_type=<类型> width=<宽> height=<高> earlier_turn=cached]` —— 当后续模型确实需要回看早先某张图时，仍可按需读取该路径；
+  - 当某张早期附件已失效、被删或格式不受支持时：`[IMAGE_ATTACHMENT media_type=<类型> width=<宽> height=<高> earlier_turn=unavailable]` —— 仅标记该图不可用，不会拖垮后续整段对话的正常推进。
+
+---
+
+## 开发与自测
+
+```powershell
 npm ci --ignore-scripts
 npm run typecheck
-npm test    # tsc 全量 → 429 项测试全通过
-`
+npm test        # 完整 tsc 构建后执行全量测试
+npm run verify  # 依次执行 typecheck + test + npm pack --dry-run
+```
 
-## 基线支持与兼容性（Baseline Parity）
+---
 
-及格线能力集中放这里，不进卖点：
+## 附录：基线支持与兼容性矩阵
 
-| 项目 | 现状 |
+| 项目 | 现行状态 |
 |---|---|
-| 模型清单 | 运行时从 gy models 发现（src/agy/models.ts），不写死白名单 |
-| 推理强度 | gemini-* 走 --effort 档位，claude-* 不需要（src/provider/agy.ts） |
-| 平台 | 仅 Windows：配额面板与凭据保活依赖 Windows Credential Manager |
-| 凭据 | 用本机已登录的官方 AGY 账号额度，不额外配置 API Key |
-| 许可 | MIT |
-
-## 许可
-
-MIT。原作者版权与完整提交历史保留于 LICENSE 与本仓 git 历史。
+| 模型发现 | 运行时由 `agy models` 动态发现（`src/agy/models.ts`），无隐藏屏蔽名单，发现即显示 |
+| 推理强度 | `gemini-*` 模型支持透传 `--effort`（low / medium / high）；`claude-*` 自动跳过该参数（`src/provider/agy.ts`） |
+| 运行平台 | 仅 Windows：依赖 Windows Credential Manager、`taskkill /T` 及无窗口启动器 |
+| 账号凭据 | 复用本机已登录官方 AGY CLI 账号配额，无需额外 API Key |
+| 开源协议 | MIT（保留原作者版权声明与完整 Git 提交历史） |

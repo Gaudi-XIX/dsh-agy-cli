@@ -1,12 +1,32 @@
 # Changelog
 
-## [0.16.0] - 2026-11-25
+## [0.17.0] - 2026-11-25
+
+> 本版本合并了未单独发版的本地 `0.16.0`（批处理工具真接线、遥测切断、8.8KB 输出折叠、180s 看门狗、本地 `npm run quota`）及后续全部增强与修复。
+
+### Added
+
+- **技能全量透传与工作区发现**（`src/agy/skills-config.ts`、`src/index.ts`）：插件启用时幂等写入 `~/.gemini/config/skills.json`，注入 `~/.agents/skills` 并保留用户已有 `entries` / `inherits`；项目技能通过工作区 `cwd` 原生发现 `.agents/skills`，不写技能白名单；无预设的主回合不传 `--disable-slash-commands`。对应 `e018cc1`。
+- **`EMPTY_RESPONSE` 会话级一次性兜底**（`src/provider/agy.ts`）：发生空响应时标记该会话（5 分钟 TTL，上限 64 条），同会话下一次请求在提示词末尾追加一次性引导，不动稳定前缀以保住前缀缓存命中，避免重复空转。对应 `ae4c34e`。
+- **`dsh_discover_tools` 搜索可发现性增强**（`src/mcp/tool-projection.ts`）：描述改为引导模型在缺少能力时通过关键词检索宿主全量注册表并按需挂载，不点名具体工具、不硬编码白名单。对应 `ae4c34e`。
+
+### Changed
+
+- **刷新额度联动模型目录与 `--mode` 冲突抑制**（`src/web/router.ts`、`src/agy/models.ts`、`src/agy/process.ts`、`src/provider/agy.ts`、`client/index.ts`）：面板点击刷新额度（`refresh-quota`）对模型发现传 `{ force: true }` 跳过 5 分钟 TTL 缓存与失败冷却，前端直接采用返回的 `catalog` / `catalogModels`；在 `one-shot` 与 `persistent` 两条 spawn 路径对称抑制 `--disable-slash-commands` 与 `--mode` 的参数冲突。对应 `fdeb4c3`、`bc9b270`。
+- **模型发现期限重构、移除隐藏名单与图片预设按需门控**（`src/web/router.ts`、`src/provider/config.ts`、`src/agy/models.ts`、`src/provider/image-bridge.ts`、`src/provider/agy.ts`）：
+  - 删除 `DISCOVERY_AWAIT_MS` 4 秒硬期限，发现等待期限完全由配置 `modelDiscoveryTimeoutMs`（默认 `10000` ms，范围 `100`~`30000` ms）控制；
+  - `/status` 接口改为 `peekCatalog()` peek-first 优先读缓存不阻塞，并在插件启动时后台异步预热；
+  - 整体移除 `hiddenModels` 手动隐藏机制，发现即显示；
+  - `image-view` 预设改为仅当本轮消息真实带图（`turnHasImages`）才换入，历史图片不再把整轮锁进图片检查模式。对应 `f952ed3`、`261cf00`。
+- **文档与版本门面同步**：重写中英双语 `README.md` / `README.en.md`（覆盖四维定位、安装与 junction 挂载、配置项表、9 项能力清单、`npm run quota` 用法与故障排查），同步更新 `ABOUT.txt`（133 字）与 `package.json` 版本号至 `0.17.0`。
+
+[0.16.0] - 2026-11-25
 
 ### Added
 
 - **MCP 批处理工具原生接线（`apply_edits` / `read_slices`）**：`src/mcp/batch-tools.ts` 实现 All-or-Nothing 事务性多文件正则编辑（任一 edit 失败 0 文件落盘全回滚）与按行切片读取/大纲提取；并在 `src/mcp/bridge.ts:474` 完成底层接线，模型可直接原生调用，大幅减少短轮次交互与通信延迟。对应 `16aa39d` 与 `ab1a738`。
 - **全链路遥测禁用与启动异常增强**：`src/agy/process.ts`、`src/agy/experimental-transport.ts`、`src/agy/persistent-transport.ts` 在拉起 `agy.exe` 时统一注入 4 个环境变量（`DO_NOT_TRACK`、`ANTIGRAVITY_DISABLE_TELEMETRY`、`GOOGLE_CLOUD_DISABLE_TELEMETRY`、`DISABLE_TELEMETRY`），阻断 Google Clearcut 客户端后台上传与网络波动时的死循环重试风暴；并在 spawn 失败时在错误对象挂载 `spawnStderrDetail`。对应 `cf8c020` 与 `a6c9a01`。
-- **MCP 输出 8.8KB 硬截断与 ANSI 清洗**：`src/mcp/output-filter.ts` 设定 8800 字节折叠阈值（保留首尾），避开上游 10KB 强制落盘惩罚；清洗 ANSI 转义码与 `` 终端动画，保持上下文纯净。对应 `4522c1f`。
+- **MCP 输出 8.8KB 硬截断与 ANSI 清洗**：`src/mcp/output-filter.ts` 设定 8800 字节折叠阈值（保留首尾），避开上游 10KB 强制落盘惩罚；清洗 ANSI 转义码与 `\r` 终端动画，保持上下文纯净。对应 `4522c1f`。
 - **180s 阶梯超时看门狗与进程树清理**：`src/agy/process.ts` 内置 180s 超时监控，超时先触发 stdin EOF + SIGTERM 优雅退出，3s 宽限后升级为 Windows `taskkill /F /T` 树状强杀，彻底杜绝孤儿进程悬挂。对应 `6c30c23`。
 - **本地免登录配额嗅探命令**：新增 `npm run quota`（`src/quota/` 与 `scripts/check-quota.mjs`），嗅探 `~/.gemini/antigravity-cli/log/` 活跃端口与 `csrf_token`，走 ConnectRPC 拉取 `RetrieveUserQuotaSummary`，单行直看各模型配额与重置倒计时（解析层 fixture 覆盖，端到端路径待真机验证；协议采用 ConnectRPC 且必须带 csrf_token）。对应 `949cfe5`。
 

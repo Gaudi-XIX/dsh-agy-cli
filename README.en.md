@@ -5,130 +5,171 @@
 
 Runs the locally authenticated **Google Antigravity CLI (`agy`)** as a first-class model provider for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
-> Reject the account-ban risk of reverse proxies and protocol spoofing, and leave opaque wrapper shells behind. The plugin takes a native pass-through route through the local official CLI: no reverse proxy, no forged request headers, credentials stay on your machine, and the official binary and its signature are left untouched; DSH takes full control of tool dispatch, with execution steps visible in real time; long tasks are deeply optimized with built-in tool compression, long-log folding and anti-false-positive redaction, keeping context clean and stable over long runs from the ground up.
+> Reject the account-ban risk of reverse proxies and protocol spoofing, and leave opaque wrapper shells behind. The plugin takes a native pass-through route through the local official CLI: no reverse proxy, no forged request headers, credentials stay on your machine, and the official binary and its signature are left untouched; DSH takes full control of tool dispatch with real-time visibility; built-in batch tools, dynamic tool projection, 8.8KB output folding, telemetry cutoff, a 180s tree-kill watchdog, and full skills passthrough keep long runs fast and stable.
 
 **What this plugin does, in three points:**
 
 1. **Generation is signed by the official binary.** Every model request goes out through the official `agy.exe`; the plugin does not sign it, proxy it, or replace its generation path, so the model-side risk surface matches the official client.
 2. **Spends your Antigravity quota.** Requests draw on your own subscription under the same pool and rules as the official client. No API key.
-3. **AGY is only the model; DSH owns the harness.** Tool execution, approvals, sandbox and context budgeting stay 100% inside DSH; AGY's own agent loop is stripped.
+3. **AGY is only the model; DSH owns the harness.** Tool execution, approvals, sandbox, and context budgeting stay 100% inside DSH; AGY's own agent loop is stripped via public preset parameters.
 
-> **Platform: Windows only.** The quota panel and credential keep-alive depend on Windows Credential Manager. The other features have no cross-platform implementation and are untested on macOS/Linux.
-
-## Product positioning: the four dimensions
-
-Four layers only: why this exists, what it deliberately gives up, what nobody else has, and where it is hardened. Table-stakes basics are collected in the "Baseline parity" table at the end.
-
-### Dimension 1 · Why this exists
-
-Three real problems drove this plugin: **account-ban exposure** (a reverse-proxy or protocol-spoofing channel does not look like the official client, so the risk surface changes while the cost lands on your account), **opaque wrapper shells** (model generation and tool execution both hidden, leaving you to guess when something breaks), and **long-task context collapse** (history and long logs keep piling up until the budget runs out before the task does).
-
-### Dimension 2 · Route and deliberate trade-offs
-
-A **native local-CLI channel**: every turn is issued and signed by the official `agy.exe`; the plugin only bridges (`src/agy/persistent-transport.ts`). The route only means something if its price is stated, so five things are given up on purpose:
-
-- Giving up **cloud one-click sign-in and zero-friction setup** → traded for credentials that never leave this machine and a channel shaped like the official client.
-- Giving up **turning the web UI into an API, or driving it with cookie crawlers** → traded for never taking on the account exposure of a reverse-engineering path.
-- Giving up **patching the generation mechanism or the binary** → traded for an intact official signature and a model-side risk surface identical to the official client.
-- Giving up **account pools and account rotation** → traded for single-account compliance, with "many accounts behind one IP" structurally absent.
-- Giving up **opaque out-of-process automation** → traded for DSH owning the harness, with execution steps fully auditable.
-
-### Dimension 3 · Unique advantage (the moat)
-
-Under this route the plugin holds six compliance boundaries, each checkable against source. Every row is positive evidence of something deliberately *not* done, not a comparison with anyone.
-
-| # | Boundary | Implementation |
-|---|---|---|
-| 1 | No web-to-API reverse engineering | The channel is AGY 1.1.15 stream-json NDJSON (`src/agy/persistent-transport.ts`): the web UI is not turned into an API, no cookie crawler, no browser traffic is parsed |
-| 2 | Zero binary tampering | The official `agy.exe` is only `spawn`ed (`src/agy/persistent-transport.ts`): no memory patching, no machine-code cracking, no signature replacement; generation is signed by the official binary itself |
-| 3 | Single-account compliance | Exactly the one locally signed-in account is used — no account pool, no rotation; each AGY process runs one active turn at a time (`src/agy/persistent-transport.ts`) |
-| 4 | Compliant takeover via public parameters | The official agent preset's public parameter `excludeDefaultComponents: true` disables the official default components (`src/agent-presets.ts`, `agents/dsh-agy-mcp-executor.md`): takeover uses public interfaces only, no private protocol changes |
-| 5 | Credentials stay in the local sandbox | Only the `gemini:antigravity` target is read from Windows Credential Manager (`src/agy/keepalive.ts`): used in memory, never logged, never placed in an error message; renewal is the official `agy.exe`'s own job |
-| 6 | Retry-After-aware backoff | Retryable errors wait for the server's `Retry-After` (seconds or HTTP-date), capped at 24 hours (`src/agy/errors.ts`); wired in `src/provider/agy.ts`, covered by `tests/error-classification.test.mjs` |
-| 7 | Full-stack telemetry blocking & retry dampening | Dual transports (`experimental` / `persistent`) and process spawns inject 4 telemetry-disabling environment variables (`DO_NOT_TRACK`, `ANTIGRAVITY_DISABLE_TELEMETRY`, `GOOGLE_CLOUD_DISABLE_TELEMETRY`, `DISABLE_TELEMETRY`): completely cuts off Clearcut telemetry uploads and the 5-second infinite retry loop storm during network hiccups; captures launch `spawnStderrDetail` |
-| 8 | 180s graceful watchdog with tree-kill escalation | Built-in 180s watchdog in `src/agy/process.ts`: timeouts first attempt stdin EOF + SIGTERM graceful shutdown, escalating after 3s grace to Windows `taskkill /F /T` (POSIX process group SIGKILL) to prevent zombie processes and port leaks |
-
-### Dimension 4 · Hardened strengths
-
-Anyone can write the generic parts; not collapsing is the difference:
-
-- **Composite batch tools (`apply_edits` / `read_slices`)**: Natively supports atomic multi-file edits and sliced reading (`src/mcp/batch-tools.ts`, wired in `src/mcp/bridge.ts:474`). `apply_edits` uses an All-or-Nothing transaction model: full in-memory regex preflight validation writes zero files if any edit fails, preventing dirty working copies; `read_slices` provides line-range slicing and top-level outline extraction. Cuts round-trips by 35%~50% and token costs by 31.5%.
-- **8.8KB output folding and ANSI sanitization**: Clamps tool outputs to an 8800-byte safe threshold (`src/mcp/output-filter.ts`, preserving head and tail) to avoid upstream 10KB temporary file dump penalties; strips terminal ANSI color codes and carriage-return animation junk to maintain context cleanliness.
-
-- **Tool context projection**: only base terminal and file capabilities are exposed; everything else is discovered and mounted on demand (`dsh_discover_tools` in `src/mcp/tool-projection.ts`), so the tool schema stays small.
-- **Adaptive long-output folding**: over-budget historical command output and long logs keep head and tail and fold the middle compactly (`foldToolResultText` in `src/provider/prompt-budget.ts`).
-- **Sensitive-input defence**: upstream trigger words and override phrases are softened before dispatch (`cloakPrompt` in `src/provider/prompt-cloak.ts`, wired in `src/provider/agy.ts`); logs and error messages all go through redaction (`redactText` in `src/agy/redact.ts`).
-- **Streaming resilience**: `stdinMode: hold` prevents rollback (`src/agy/process.ts`, default set in `src/provider/agy.ts`), the tail streams as it arrives, and a dropped connection keeps the text already delivered.
+> **Platform: Windows only.** The quota panel, credential keep-alive, tree-kill watchdog, local quota CLI sniffer, and console-free launcher are built around Windows; untested on macOS/Linux.
 
 ---
 
-## Credentials and network behaviour (stated plainly)
+## Product positioning: the four dimensions
 
-- **Reads**: the Google OAuth blob that AGY stores in Windows Credential Manager (target `gemini:antigravity`), via `CredRead` in `src/agy/keepalive.ts`. Used for two things: deciding whether the token is close to expiry and should trigger one official-CLI renewal, and reading `access_token` for the quota queries below. The token stays in process memory; it is never logged or placed in an error message.
-- **Quota queries — the only outbound request the plugin makes itself**: the token above is sent as `Authorization: Bearer` to the read-only quota RPCs of `https://daily-cloudcode-pa.googleapis.com` and `https://cloudcode-pa.googleapis.com`, together with AGY client identity headers (`User-Agent` / `X-Goog-Api-Client`) — the server returns different quota groups per client, and omitting them drops the Gemini group. **Those requests go to those two Google endpoints only; nothing is sent to third parties.**
-- **Not done**: no interception, replay or forgery of generation requests; no token handed to third parties; no credentials read beyond the target above.
-- **Renewal**: token rotation is performed entirely by the official `agy.exe`; the plugin only launches it once before expiry.
+### Dimension 1 · Why this exists
 
-Evidence for the endpoint semantics and identity-header behaviour: `docs/prod-generation-feasibility-20261020.md`.
+Three practical problems drove this plugin:
+- **Account-ban exposure**: reverse proxies and protocol spoofing alter request fingerprints and channel shape, leaving the account risk on the user.
+- **Opaque wrapper shells**: hidden model generation and tool loops leave you guessing when turns stall or fail silently.
+- **Long-task bloat and short-turn latency**: unpruned logs exhaust context quickly, while one-tool-per-turn round trips, offline Clearcut telemetry retry storms, and hung child processes inflate end-to-end latency.
 
-## Features
+### Dimension 2 · Route and deliberate trade-offs
 
-- **MCP composite batch tools (`apply_edits` / `read_slices`)**: Natively wired into the MCP bridge, supporting transactional multi-file edits (All-or-Nothing rollback) and sliced line-range reading / code outlines, cutting communication round-trips and latency.
-- **8.8KB output folding & ANSI filter**: Clamps tool output at an 8800-byte safe threshold (head-tail folding) to avoid official 10KB file dump penalties; strips terminal ANSI escape sequences and carriage return progress animations.
-- **Full-stack telemetry blocking & 180s watchdog**: Injects 4 telemetry-disabling variables across process spawns and dual transports to block Clearcut upload retry storms; includes a 180s watchdog with tree-kill escalation.
-- **Local no-login quota sniffing (`npm run quota`)**: Sniffs local `~/.gemini/antigravity-cli/log/` ports and process `csrf_token` to query ConnectRPC `RetrieveUserQuotaSummary` (covered by parser fixtures; end-to-end path awaiting hardware verification; ConnectRPC protocol requires csrf_token).
+A **native local-CLI channel**: every turn is issued and signed by the official `agy.exe`; the plugin only bridges (`src/agy/persistent-transport.ts`, `src/agy/process.ts`). To make the trade-offs explicit, five things are given up on purpose:
 
-- **Lean Prompt (official system prompt stripped)**: Custom Agent preset physically disables Google's verbose built-in prompt and default tools (`excludeDefaultComponents: true`), reserving full prompt budget for DSH workspace rules.
-- **Adaptive base tools & on-demand mounting**: Exposes only base terminal and file operations along with dynamic discovery (`dsh_discover_tools`), keeping the tool schema small; additional capabilities mount automatically on call.
-- **Intelligent tool output folding**: Long historical command outputs and logs exceeding threshold are folded into compact summaries, keeping context compact across turns.
-- **Antigravity Cloak / prompt desensitization**: Softens upstream trigger patterns and agent signatures before sending, maximizing stability.
-- **Dual tool paths**: MCP bridge surfaces DSH tools to AGY (real tool events, visualized transcript, recommended); falls back to prompt contract automatically on bridge failure.
-- **DSH owns harness**: Workspaces, approvals, sandboxing, and context limits 100% inside DSH.
-- **Streaming + state machine**: `stdinMode: hold` means text already delivered is never rolled back; tool steps collapse into a step list (only which tools ran, never the model's internal reasoning); the tail streams as it arrives; a dropped connection keeps the text already delivered.
-- **Session management + history fingerprint chain**: `resume` and `full` modes; after each successful turn the plugin records a DSH history fingerprint and compares the prefix locally before `resume`. If history was edited, compressed or truncated, the stale session is discarded and rebuilt from full history, so a delta prompt never lands on outdated context. Dead sessions replay automatically; the session map is on disk and can be moved.
-- **Image input (experimental)**: attachments land on disk through the image bridge and are viewed by a minimal-permission `view_file` agent.
-- **Quota panel & credential keep-alive**: loopback-only; the panel shows the real two-window quota, and a token close to expiry triggers one renewal through the official CLI.
-- **Security hardening**: prototype-pollution guard, MCP bridge gate, loopback-only panel with atomic writes, credential redaction — all backed by tests.
+- Giving up **cloud one-click sign-in and zero-friction setup** → traded for credentials that stay inside Windows Credential Manager and a channel matching the official client.
+- Giving up **turning the web UI into an API or driving it with cookie crawlers** → traded for zero reverse-engineering risk.
+- Giving up **patching the generation mechanism or official binary** → traded for an intact official signature.
+- Giving up **account pools and account rotation** → traded for single-account compliance with no multi-account correlation surface.
+- Giving up **opaque out-of-process automation** → traded for DSH owning the harness with fully auditable tool execution.
 
-## Install
+### Dimension 3 · Unique advantage (the moat)
 
-```console
-dsh plugin --profile <your profile> add dsh-agy-cli
+Under this route, eight mechanism boundaries are verifiable directly in source:
+
+| # | Boundary | Source implementation |
+|---|---|---|
+| 1 | No web-to-API reverse engineering | Uses AGY 1.1.15 `stream-json` NDJSON (`src/agy/persistent-transport.ts`); no browser traffic or cookie scraping. |
+| 2 | Zero binary tampering | Only spawns the official `agy.exe` (launched via `bin/win32-x64/agy-launcher.exe` on Windows to suppress console flashes without altering the target binary). |
+| 3 | Single-account compliance | Uses only the locally signed-in account; no pooling or rotation, one active turn per AGY process. |
+| 4 | Compliant takeover via public parameters | Disables built-in components using `excludeDefaultComponents: true` in `agents/dsh-agy-mcp-executor.md`. |
+| 5 | Local credential isolation | Reads `gemini:antigravity` from Windows Credential Manager only for keep-alive and quota checks (`src/agy/keepalive.ts`); never injected into prompts or logs. |
+| 6 | Full telemetry cutoff | Injects all 4 telemetry-disable env vars across `runProcess`, `experimental-transport.ts`, and `persistent-transport.ts`, blocking Clearcut's 5s offline retry storm. |
+| 7 | 180s tiered watchdog | Sends stdin EOF + terminate signal on timeout, waits 3s (`WATCHDOG_GRACEFUL_MS`), then escalates to `taskkill /pid <pid> /t /f` (or POSIX process group `SIGKILL`) to prevent orphan locks (`src/agy/process.ts`). |
+| 8 | History fingerprint chain | In `resume` mode, verifies a DSH history prefix fingerprint before reusing a conversation; edits or compactions rebuild cleanly from full history (`src/provider/agy.ts`). |
+
+### Dimension 4 · Hardened strengths
+
+- **Minimal initial toolset (adaptive on-demand projection)**: Exposes only essential terminal/file tools plus `dsh_discover_tools` by default, keeping schemas compact and letting the model discover and mount additional host tools by keyword when needed (`src/mcp/tool-projection.ts`, `src/mcp/bridge.ts`).
+- **Transactional batch tools (`apply_edits` / `read_slices`)**: `apply_edits` validates all edits in memory (All-or-Nothing) before touching disk so failed matches leave zero dirty files; `read_slices` extracts file outlines and specific line ranges in one call (`src/mcp/batch-tools.ts`).
+- **8.8KB output folding & ANSI sanitization**: Folds tool outputs at 8800 bytes (preserving head and tail) to avoid upstream 10KB temp-file spills, while stripping ANSI escape sequences and `\r` progress noise (`src/mcp/output-filter.ts`).
+- **Historical output folding & prompt cloak**: Folds historical tool results exceeding `toolResultFoldThresholdBytes` (default 2048 bytes) and softens blunt trigger patterns via `promptCloak` (`src/provider/prompt-budget.ts`, `src/provider/prompt-cloak.ts`).
+- **Non-rollback streaming state machine**: `stdinMode: 'hold'` keeps stdin open until the closing `result` line arrives so AGY never cancels delivered text mid-turn.
+
+---
+
+## Capabilities added through 0.17.0
+
+1. **180s process watchdog with tree-kill escalation** (`src/agy/process.ts`): Defaults to `DEFAULT_WATCHDOG_MS = 180_000` with a 3s graceful window (`WATCHDOG_GRACEFUL_MS = 3_000`) before process-tree termination.
+2. **Local no-login quota sniffer (`npm run quota`)** (`src/quota/`, `scripts/check-quota.mjs`): Reads ports from local CLI logs and `csrf_token` from the running `language_server` process to query local ConnectRPC quota endpoints.
+3. **Live MCP batch-tool wiring**: `apply_edits` and `read_slices` are wired into `src/mcp/bridge.ts` for real execution, not schema projection alone.
+4. **Telemetry cutoff across all transports**: Both `experimental-transport.ts` and `persistent-transport.ts` inject `DO_NOT_TRACK=1`, `ANTIGRAVITY_DISABLE_TELEMETRY=1`, `GOOGLE_CLOUD_DISABLE_TELEMETRY=1`, and `DISABLE_TELEMETRY=1` alongside `spawnStderrDetail` diagnostics.
+5. **Machine-agnostic tool discoverability**: `DISCOVER_TOOLS_DESCRIPTOR` guides the model to search the host registry by keyword when blocked by missing capabilities, with no hardcoded tool names or allowlists.
+6. **One-shot `EMPTY_RESPONSE` recovery hint**: Records sessions that end with `EMPTY_RESPONSE` (5-minute TTL, max 64 entries) and appends a one-shot tail hint on the next request in the same session without invalidating the prompt prefix cache.
+7. **Full skills passthrough**: `ensureAgyGlobalSkills()` (`src/agy/skills-config.ts`) idempotently adds `~/.agents/skills` to `~/.gemini/config/skills.json` while preserving user entries; workspace `.agents/skills` rely on native `cwd` discovery with no allowlist, and non-preset main turns omit `--disable-slash-commands`.
+8. **Quota-refresh catalog sync & flag conflict suppression**: `refresh-quota` invokes `discover(..., { force: true })` to bypass the 5-minute cache and cooldown and adopts the returned catalog in the UI; `--disable-slash-commands` and `--mode` conflicts are symmetrically suppressed across `one-shot` and `persistent` spawn paths.
+9. **Discovery deadline, hide-list removal & turn-scoped image preset**: Removes the hardcoded 4s `DISCOVERY_AWAIT_MS` deadline in favor of `modelDiscoveryTimeoutMs` (default 10s, min 100 / max 30000), uses peek-first `/status` + startup warm-up, removes `hiddenModels` completely (discovered models are always visible), and swaps to the `image-view` preset only when the current turn carries images (`turnHasImages`).
+
+---
+
+## Installation & Host Mounting
+
+### Standard DSH profile install
+
+```powershell
+npx @deepseek-ai/dsh plugin --profile desktop add dsh-agy-cli
 ```
 
-Requires Windows, the official Antigravity CLI installed and signed in locally, and Node ≥ 20.
+Requires Windows, Node ≥ 20, and a locally signed-in official `agy` CLI (`>= 1.1.15`).
 
-**One more step, or AGY will report an unknown agent** (the bundled agent presets are not copied into AGY's agent directory by the install alone):
+### Local development via Junction / `link:`
 
-```console
-npx dsh-agy-cli agents install read-only --apply
-npx dsh-agy-cli agents install workspace-write --apply
+For local checkout development, link the repository into the DSH profile (`node_modules\dsh-agy-cli` becomes a Windows Junction pointing to your repo), then rebuild and restart DSH:
+
+```powershell
+npm run build
+npx @deepseek-ai/dsh plugin --profile desktop add link:F:/AgentData/dsh-agy-cli
 ```
 
-`--apply` writes into `~/.gemini/antigravity-cli/gemini-root-config/agents`; add `--backup` first if you want a copy, and `agents list` shows the current state. After a host restart the plugin's card appears under Settings → Models (model visibility, reasoning effort, quota panel).
+### Install bundled Agent templates (required)
 
-**Diagnostics**: `npx dsh-agy-cli doctor --profile <profile>` — install, bundle declaration, agent presets, config parsing and credential state, without spending quota.
+```powershell
+npx dsh-agy-cli agents install mcp-executor --apply
+npx dsh-agy-cli agents install image-view --apply
+```
+
+Templates write into `~/.gemini/antigravity-cli/gemini-root-config/agents` (use `--backup` to keep existing files). Run `npx dsh-agy-cli doctor --profile desktop` to verify setup without spending quota.
+
+---
+
+## `npm run quota` usage
+
+```powershell
+cd F:\AgentData\dsh-agy-cli
+npm run quota
+```
+
+Scans the latest `cli-*.log` files under `~/.gemini/antigravity-cli/log/` (override via `AGY_QUOTA_LOG_DIR`) for HTTP ports, extracts `csrf_token` from the running `language_server` process on Windows, and queries local ConnectRPC `GetUserStatus` / `RetrieveUserQuotaSummary`.
+
+> **Verification boundary**: Log/token/ConnectRPC parsing is covered by unit test fixtures; end-to-end execution against a live port requires an active signed-in `agy` process and has not been verified in headless CI.
+
+---
+
+## Configuration reference
+
+Defaults below reflect `src/provider/config.ts` and `cordis.patch.yml` (Bundle enables `enabled: true`, `toolPolicy: 'dsh-owned'`):
+
+| Key | Type / Values | Default (Bundle) | Notes |
+|---|---|---|---|
+| `enabled` | `boolean` | `true` (`false` in library) | Enable AGY provider. |
+| `model` | `string` | `'gemini-3.1-pro'` | Default base model ID. |
+| `modelDiscovery` | `'auto' \| 'off'` | `'auto'` | Discover models via `agy models`; `off` uses static config only. |
+| `modelDiscoveryTtlMs` | `number` (1000–3600000) | `300000` | In-memory discovery cache TTL in ms. |
+| `modelDiscoveryTimeoutMs` | `number` (100–30000) | `10000` | Timeout for `agy models` discovery (and forced refresh). |
+| `toolPolicy` | `'reject' \| 'agy-owned' \| 'dsh-owned'` | `'dsh-owned'` | `dsh-owned` delegates tools to DSH via `dsh-agy-mcp-executor`. |
+| `mcpBridge` | `boolean` | `true` | Expose DSH tools to AGY over local MCP. |
+| `mcpAdaptiveBaseOnly` | `boolean` | `true` | Project base tools + `dsh_discover_tools` initially. |
+| `toolResultFoldThresholdBytes` | `number` (256–1048576) | `2048` | Fold historical tool outputs larger than this threshold. |
+| `promptCloak` | `boolean` | `true` | Soften blunt trigger patterns before sending. |
+| `imageInput` | `'off' \| 'experimental'` | `'experimental'` | Swaps to `image-view` only when the current turn has images. |
+| `sessionMode` | `'resume' \| 'full'` | `'full'` | `full` sends history; `resume` reuses AGY conversation with fingerprint check. |
+| `stdinMode` | `'hold' \| 'close'` | `'hold'` | Keep stdin open until `result` arrives to avoid premature turn cancellation. |
+| `transport` | `'one-shot' \| 'persistent'` | `'one-shot'` | Spawn per turn (`one-shot`) or reuse worker (`persistent`). |
+| `timeoutMs` | `number` (1–3600000) | `900000` (`180000` watchdog fallback) | Backstop wall-clock ceiling per request in ms. |
+| `idleTimeoutMs` | `number` (1–3600000) | `300000` | Inactivity budget re-armed per output line; must stay below `timeoutMs`. |
+| `tokenKeepaliveMs` | `number` (0–3600000) | `60000` | Credential Manager expiry check interval; `0` disables keep-alive. |
+
+---
+
+## Troubleshooting
+
+- **Discovery timeouts**: `/status` uses `peekCatalog()` (non-blocking) and warms up at startup. If cold `agy models` takes longer than 10s, increase `modelDiscoveryTimeoutMs` (up to `30000`), click Refresh in the quota panel (`force: true`), or set `modelDiscovery: 'off'`.
+- **What is `EMPTY_RESPONSE`?**: In print mode, AGY soft-denies unapproved built-in tool confirmations and exits without text or tool calls. From `0.17.0`, the plugin records the session (5m TTL) and appends a one-shot hint at the tail of the next request in that session so the model replies directly or uses confirmation-free tools without breaking prefix cache.
+- **Why can't `agy` see DSH's skills directory?**: Global skills rely on `~/.gemini/config/skills.json` containing `~/.agents/skills` (auto-bootstrapped unless the file is malformed JSON — check DSH logs for `could not ensure AGY global skills config`). Project `.agents/skills` rely on workspace `cwd` and are only scanned by AGY when `--disable-slash-commands` is omitted; preset-backed modes (`dsh-owned` / `agentPreset`) pass `--disable-slash-commands` intentionally so DSH owns skills and tools.
+- **What are `history` image placeholders?**: Only images in the current turn are staged and trigger `image-view`. Earlier turns' images are cached under `<DSH_HOME>/agy-cli/image-cache` (14-day retention) and rendered as `[IMAGE_ATTACHMENT file=... media_type=... width=... height=... earlier_turn=cached]` (or `earlier_turn=unavailable` if unreadable/unsupported), keeping follow-up turns in text mode without failing on an old missing attachment.
+
+---
 
 ## Development
 
 ```bash
 npm ci --ignore-scripts
 npm run typecheck
-npm test    # full tsc build → 39 test files under tests/
+npm test        # full tsc build + test suite
+npm run verify  # typecheck + test + npm pack --dry-run
 ```
+
+---
 
 ## Baseline parity
 
-Table-stakes capabilities live here, not in the pitch:
-
 | Item | Status |
 |---|---|
-| Models | Discovered at runtime from `agy models` (`src/agy/models.ts`); no hardcoded allow-list |
-| Reasoning effort | `gemini-*` models take an `--effort` level; `claude-*` do not need one (`src/provider/agy.ts`) |
-| Platform | Windows only: the quota panel and credential keep-alive depend on Windows Credential Manager |
-| Credentials | Uses the quota of the locally signed-in official AGY account; no extra API key to configure |
-| License | MIT |
-
-## License
-
-MIT. Original copyright and full commit history are preserved in `LICENSE` and in this repository's git history.
+| Models | Discovered at runtime from `agy models` (`src/agy/models.ts`); all discovered models visible |
+| Reasoning effort | `gemini-*` models accept `--effort`; `claude-*` omit it (`src/provider/agy.ts`) |
+| Platform | Windows only (Windows Credential Manager, `taskkill /T`, console-free launcher) |
+| Credentials | Uses locally signed-in official AGY CLI quota; no API key required |
+| License | MIT (original copyright and git history preserved in `LICENSE`) |
