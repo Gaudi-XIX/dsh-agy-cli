@@ -15,12 +15,16 @@ export interface SessionRecord {
    */
   readonly chainHash?: string
   readonly messageCount?: number
+  /** Digests of the last min(TAIL_ANCHOR_MESSAGES, messages.length) messages. */
+  readonly tailHashes?: readonly string[]
 }
 
 /** Optional fingerprint metadata carried alongside a conversation binding. */
 export interface SessionFingerprint {
   readonly chainHash: string
   readonly messageCount: number
+  /** Digests of the last min(TAIL_ANCHOR_MESSAGES, messages.length) messages. */
+  readonly tailHashes?: readonly string[]
 }
 
 export interface SessionStore {
@@ -44,7 +48,7 @@ export class InMemorySessionStore implements SessionStore {
       sessionId,
       conversationId,
       updatedAt: Date.now(),
-      ...(fingerprint === undefined ? {} : { chainHash: fingerprint.chainHash, messageCount: fingerprint.messageCount }),
+      ...(fingerprint === undefined ? {} : { chainHash: fingerprint.chainHash, messageCount: fingerprint.messageCount, ...(fingerprint.tailHashes === undefined ? {} : { tailHashes: fingerprint.tailHashes }) }),
     }
     this.records.set(sessionId, record)
     return { ...record }

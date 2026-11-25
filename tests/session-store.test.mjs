@@ -54,6 +54,69 @@ test('FileSessionStore keeps the conversation binding across instances', () => {
   }
 })
 
+// A resumed turn needs the tail anchor the provider stored alongside the chain
+// hash; if the record drops it on the way out the next compaction bootstraps a
+// conversation that was already intact. Exercise the file round-trip directly.
+test('FileSessionStore persists and restores the tail anchor of a fingerprint', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-session-store-'))
+  try {
+    const path = join(dir, 'sessions.json')
+    const fingerprint = {
+      chainHash: 'a'.repeat(16),
+      messageCount: 5,
+      tailHashes: ['b'.repeat(16), 'c'.repeat(16), 'd'.repeat(16)],
+    }
+    new FileSessionStore({ path }).set('session-tail', 'conversation-tail', fingerprint)
+
+    const reopened = new FileSessionStore({ path })
+    assert.deepEqual(reopened.get('session-tail')?.tailHashes, fingerprint.tailHashes)
+    assert.equal(reopened.get('session-tail')?.chainHash, fingerprint.chainHash)
+    assert.equal(reopened.get('session-tail')?.messageCount, fingerprint.messageCount)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// The read-back guard must reject a malformed tail: a non-array or a non-string
+// element is not a usable anchor, so the record falls back to the pre-anchor
+// shape instead of feeding the provider a poisoned comparison.
+test('FileSessionStore drops a malformed tail hash while keeping the chain fields', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-session-store-'))
+  try {
+    const path = join(dir, 'sessions.json')
+    writeFileSync(path, JSON.stringify({
+      sessions: [
+        {
+          sessionId: 'session-bad',
+          conversationId: 'conversation-bad',
+          updatedAt: Date.now(),
+          chainHash: 'a'.repeat(16),
+          messageCount: 5,
+          tailHashes: 'not-an-array',
+        },
+        {
+          sessionId: 'session-mixed',
+          conversationId: 'conversation-mixed',
+          updatedAt: Date.now(),
+          chainHash: 'e'.repeat(16),
+          messageCount: 2,
+          tailHashes: ['f'.repeat(16), 42],
+        },
+      ],
+    }), 'utf8')
+
+    const store = new FileSessionStore({ path })
+    assert.equal(store.get('session-bad')?.tailHashes, undefined)
+    assert.equal(store.get('session-bad')?.chainHash, 'a'.repeat(16))
+    assert.equal(store.get('session-bad')?.messageCount, 5)
+    assert.equal(store.get('session-mixed')?.tailHashes, undefined)
+    assert.equal(store.get('session-mixed')?.chainHash, 'e'.repeat(16))
+    assert.equal(store.get('session-mixed')?.messageCount, 2)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('FileSessionStore degrades to memory when the file is corrupt or unwritable', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agy-session-store-'))
   try {

@@ -196,6 +196,7 @@ test('Config accepts explicit Agent capability presets and workspace roots', () 
     persistentFallback: 'before-accept',
     maxEventLineLength: 1_048_576,
     inputFrameLimitBytes: 256 * 1024,
+    promptContentLimitBytes: 180 * 1024,
     maxSingleToolResultBytes: 32 * 1024,
     maxHistoricalToolResultBytes: 96 * 1024,
     toolProtocolRepairRetries: 1,

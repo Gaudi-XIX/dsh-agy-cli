@@ -30,6 +30,7 @@ interface PersistedRecord {
   readonly updatedAt: number
   readonly chainHash?: string
   readonly messageCount?: number
+  readonly tailHashes?: readonly string[]
 }
 
 function resolveDshHome(): string {
@@ -85,7 +86,13 @@ function parsePersisted(text: string): Map<string, SessionRecord> {
       conversationId: entry.conversationId,
       updatedAt: entry.updatedAt,
       ...(typeof entry.chainHash === 'string' && typeof entry.messageCount === 'number'
-        ? { chainHash: entry.chainHash, messageCount: entry.messageCount }
+        ? {
+            chainHash: entry.chainHash,
+            messageCount: entry.messageCount,
+            ...(Array.isArray(entry.tailHashes) && entry.tailHashes.every(x => typeof x === 'string')
+              ? { tailHashes: entry.tailHashes }
+              : {}),
+          }
         : {}),
     })
   }
@@ -175,7 +182,7 @@ export class FileSessionStore implements SessionStore {
       sessionId,
       conversationId,
       updatedAt: this.now(),
-      ...(fingerprint === undefined ? {} : { chainHash: fingerprint.chainHash, messageCount: fingerprint.messageCount }),
+      ...(fingerprint === undefined ? {} : { chainHash: fingerprint.chainHash, messageCount: fingerprint.messageCount, ...(fingerprint.tailHashes === undefined ? {} : { tailHashes: fingerprint.tailHashes }) }),
     }
     records.set(sessionId, record)
     if (records.size > this.maxRecords) {

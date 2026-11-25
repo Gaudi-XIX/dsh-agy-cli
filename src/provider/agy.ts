@@ -713,11 +713,54 @@ function historyFingerprintOf(messages: readonly RequestMessage[], system: strin
   return createHash('sha256').update(serialized, 'utf8').digest('hex').slice(0, 16)
 }
 
+const TAIL_ANCHOR_MESSAGES = 3
+
+/** Digest of one message alone; the tail anchor ignores any system-prompt drift. */
+function messageChainDigest(message: RequestMessage): string {
+  const serialized = serializeAgyPrompt({ messages: [message] })
+  return createHash('sha256').update(serialized, 'utf8').digest('hex').slice(0, 16)
+}
+
+/** Digests of the last min(TAIL_ANCHOR_MESSAGES, messages.length) messages. */
+function tailAnchorOf(messages: readonly RequestMessage[]): string[] {
+  const count = Math.min(TAIL_ANCHOR_MESSAGES, messages.length)
+  const tail = messages.slice(messages.length - count)
+  return tail.map(message => messageChainDigest(message))
+}
+
+/**
+ * True only when the stored tail sequence appears as a contiguous window of the
+ * new history exactly once. Zero or multiple matches are ambiguous and rejected,
+ * so a duplicated tail cannot let a delta land on the wrong context.
+ */
+function tailAnchorMatches(tailHashes: readonly string[], messages: readonly RequestMessage[]): boolean {
+  if (tailHashes.length === 0) return false
+  if (messages.length < tailHashes.length) return false
+  const digests = messages.map(message => messageChainDigest(message))
+  let matches = 0
+  const lastStart = digests.length - tailHashes.length
+  for (let start = 0; start <= lastStart; start += 1) {
+    let windowMatches = true
+    for (let offset = 0; offset < tailHashes.length; offset += 1) {
+      if (digests[start + offset] !== tailHashes[offset]) {
+        windowMatches = false
+        break
+      }
+    }
+    if (windowMatches) {
+      matches += 1
+      if (matches > 1) return false
+    }
+  }
+  return matches === 1
+}
+
 /** Fingerprint metadata to store after a turn was delivered successfully. */
 function fingerprintAfterTurn(options: GenerateOptions): SessionFingerprint {
   return {
     chainHash: historyFingerprintOf(options.messages, options.system),
     messageCount: options.messages.length,
+    tailHashes: tailAnchorOf(options.messages),
   }
 }
 
@@ -1207,6 +1250,7 @@ export class AgyAdapter extends LlmAdapter {
   private readonly maxOutputBytes: number
   private readonly maxEventLineLength: number
   private readonly inputFrameLimitBytes: number
+  private readonly promptContentLimitBytes: number
   private readonly maxSingleToolResultBytes: number
   private readonly maxHistoricalToolResultBytes: number
   private readonly toolResultFoldThresholdBytes: number
@@ -1274,6 +1318,13 @@ export class AgyAdapter extends LlmAdapter {
       config.inputFrameLimitBytes,
       DEFAULT_INPUT_FRAME_LIMIT_BYTES,
       128,
+      16 * 1024 * 1024,
+    )
+    this.promptContentLimitBytes = resolveBoundedInteger(
+      'promptContentLimitBytes',
+      config.promptContentLimitBytes,
+      DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES,
+      1024,
       16 * 1024 * 1024,
     )
     this.maxSingleToolResultBytes = resolveBoundedInteger(
@@ -1390,7 +1441,7 @@ export class AgyAdapter extends LlmAdapter {
     const bounded = boundAgyPrompt(prompt, {
       maxFrameBytes: this.inputFrameLimitBytes,
       maxPromptBytes: toolProtocol === undefined
-        ? DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES
+        ? this.promptContentLimitBytes
         : DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES,
       maxSingleToolResultBytes: this.maxSingleToolResultBytes,
       maxHistoricalToolResultBytes: this.maxHistoricalToolResultBytes,
@@ -1934,13 +1985,26 @@ export class AgyAdapter extends LlmAdapter {
         const expected = historyFingerprintOf(options.messages.slice(0, existingRecord.messageCount), options.system)
         fingerprintMismatch = expected !== existingRecord.chainHash
         if (fingerprintMismatch) {
-          // The AGY conversation was built on a history that no longer exists
-          // (edited, compacted, truncated). It is unusable in both shapes — a
-          // delta lands on stale context and a full replay would duplicate it —
-          // so the binding is dropped and the turn bootstraps a fresh one.
-          this.sessions.delete(sessionKey)
-          existingRecord = undefined
-          existingConversationId = undefined
+          // DSH context compaction drops the oldest messages, so the full-prefix
+          // hash necessarily changes even though AGY's tail is intact. When the
+          // history strictly shrank and the stored tail still appears exactly
+          // once, treat it as the same conversation and keep the binding.
+          const frontShrank = options.messages.length < existingRecord.messageCount
+          if (
+            frontShrank
+            && existingRecord.tailHashes !== undefined
+            && tailAnchorMatches(existingRecord.tailHashes, options.messages)
+          ) {
+            fingerprintMismatch = false
+          } else {
+            // The AGY conversation was built on a history that no longer exists
+            // (edited, compacted, truncated). It is unusable in both shapes — a
+            // delta lands on stale context and a full replay would duplicate it —
+            // so the binding is dropped and the turn bootstraps a fresh one.
+            this.sessions.delete(sessionKey)
+            existingRecord = undefined
+            existingConversationId = undefined
+          }
         }
       }
     }

@@ -1,6 +1,7 @@
 import z from '@deepseek-ai/schemastery'
 import { AGENT_PRESET_IDS, type AgentPresetId } from '../agent-presets.js'
 import {
+  DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES,
   DEFAULT_INPUT_FRAME_LIMIT_BYTES,
   DEFAULT_MAX_HISTORICAL_TOOL_RESULT_BYTES,
   DEFAULT_MAX_SINGLE_TOOL_RESULT_BYTES,
@@ -107,6 +108,8 @@ export interface Config {
   maxEventLineLength?: number
   /** Maximum UTF-8 bytes allowed for one encoded AGY stream-json input frame. */
   inputFrameLimitBytes?: number
+  /** Maximum UTF-8 bytes of the AGY text prompt; exceeding it raises AGY_INPUT_TOO_LARGE. */
+  promptContentLimitBytes?: number
   /** Maximum UTF-8 bytes retained for one serialized DSH tool result. */
   maxSingleToolResultBytes?: number
   /** Maximum UTF-8 bytes retained across serialized historical DSH tool results. */
@@ -310,6 +313,7 @@ export function createConfigSchema(defaults: {
     maxOutputBytes: z.natural().min(1_024).max(64 * 1024 * 1024).default(8 * 1024 * 1024).description('Max output bytes').hidden(),
     maxEventLineLength: z.natural().min(1_024).max(8 * 1024 * 1024).default(1_048_576).description('Max event line length').hidden(),
     inputFrameLimitBytes: z.natural().min(128).max(16 * 1024 * 1024).default(DEFAULT_INPUT_FRAME_LIMIT_BYTES).description('AGY input frame limit bytes').hidden(),
+    promptContentLimitBytes: z.natural().min(1024).max(16 * 1024 * 1024).default(DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES).description('AGY prompt content limit bytes').hidden(),
     maxSingleToolResultBytes: z.natural().min(1_024).max(512 * 1024).default(DEFAULT_MAX_SINGLE_TOOL_RESULT_BYTES).description('Maximum serialized tool result bytes').hidden(),
     maxHistoricalToolResultBytes: z.natural().min(1_024).max(2 * 1024 * 1024).default(DEFAULT_MAX_HISTORICAL_TOOL_RESULT_BYTES).description('Maximum historical tool result bytes').hidden(),
     toolProtocolRepairRetries: z.natural().max(1).default(1).description('Structured tool protocol repair retries').hidden(),
@@ -370,6 +374,7 @@ export function createConfigSchema(defaults: {
       maxOutputBytes: { $description: '单次 AGY 输出最大字节' },
       maxEventLineLength: { $description: '单行事件最大长度' },
       inputFrameLimitBytes: { $description: 'AGY 单次输入帧上限（字节）；超长工具结果会先裁剪' },
+      promptContentLimitBytes: { $description: 'AGY 单次文本 prompt 内容上限（字节）；超出即抛 AGY_INPUT_TOO_LARGE，不裁剪历史' },
       maxSingleToolResultBytes: { $description: '单个历史工具结果保留上限（字节）' },
       maxHistoricalToolResultBytes: { $description: '所有历史工具结果合计保留上限（字节）' },
       toolProtocolRepairRetries: { $description: 'DSH 工具协议返回非 JSON 时的修复重试次数' },
@@ -408,6 +413,7 @@ export function createConfigSchema(defaults: {
       maxOutputBytes: { $description: 'Max output bytes per AGY process' },
       maxEventLineLength: { $description: 'Max event line length' },
       inputFrameLimitBytes: { $description: 'AGY input frame limit in bytes; oversized tool results are compacted first' },
+      promptContentLimitBytes: { $description: 'AGY prompt content limit in bytes; exceeding it raises AGY_INPUT_TOO_LARGE instead of compacting history' },
       maxSingleToolResultBytes: { $description: 'Maximum retained bytes for one historical tool result' },
       maxHistoricalToolResultBytes: { $description: 'Maximum combined retained bytes for historical tool results' },
       toolProtocolRepairRetries: { $description: 'Repair retries when a DSH tool response is not JSON' },

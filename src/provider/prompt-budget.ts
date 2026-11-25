@@ -4,6 +4,13 @@ export const DEFAULT_INPUT_FRAME_LIMIT_BYTES = 256 * 1024
 // AGY's text input is practically truncated below the stream frame limit.
 // Keep a margin below the observed ~192 KiB cutoff so the current turn and
 // the DSH protocol cannot disappear from the tail of AGY's input.
+//
+// Measured on AGY 1.5.17 (gemini-3.8-flash, 2026-11-26) with a stream-json probe
+// that sent N KiB of ASCII text plus a unique tail anchor and checked whether the
+// anchor survived: the tail is dropped silently (exit 0, no error) at 187.75 KiB
+// (192256 bytes) and still echoes intact at 187.5 KiB (192000 bytes). So the
+// effective text cutoff is 192000 bytes, and 180 KiB keeps ~7680 bytes (4%) of
+// headroom below it. See the change card's design.md "A 段实测读数" for the table.
 export const DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES = 180 * 1024
 // AGY 1.1.18's DSH-owned structured envelope appeared to have an additional
 // effective ceiling from the injected Agent/system contract: prompts around

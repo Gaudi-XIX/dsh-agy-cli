@@ -2330,6 +2330,171 @@ test('AgyAdapter skips the fingerprint check for records written before the chai
   assert.equal(adapter.getSession('session-legacy')?.messageCount, 3)
 })
 
+// A: the plain-text prompt ceiling used to be the hard-wired 180 KiB constant,
+// so a provider config had no way to raise it for a long resumed session.
+test('AgyAdapter applies the configured prompt content limit to a text-only turn', async () => {
+  const logs = []
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    modelDiscovery: 'off',
+    promptContentLimitBytes: 204_800,
+  }, {
+    logger: record => logs.push(record),
+    runAgyProcess: fakeRunner([
+      { event: 'result', result: { status: 'SUCCESS', response: 'bounded answer' } },
+    ], []),
+  })
+
+  const chunks = []
+  for await (const chunk of adapter.stream({ ...request, sessionId: 'session-limit' })) chunks.push(chunk)
+
+  assert.equal(chunks.find(chunk => chunk.type === 'block-end')?.block?.text, 'bounded answer')
+  const completed = logs.find(record => record.event === 'agy.request.completed')
+  assert.equal(completed?.promptLimitBytes, 204_800)
+  assert.ok(!completed?.historyCompacted)
+})
+
+test('AgyAdapter defaults the prompt content limit to the built-in AGY text budget', async () => {
+  const logs = []
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    modelDiscovery: 'off',
+  }, {
+    logger: record => logs.push(record),
+    runAgyProcess: fakeRunner([
+      { event: 'result', result: { status: 'SUCCESS', response: 'default answer' } },
+    ], []),
+  })
+
+  const chunks = []
+  for await (const chunk of adapter.stream({ ...request, sessionId: 'session-default-limit' })) chunks.push(chunk)
+
+  assert.equal(chunks.find(chunk => chunk.type === 'block-end')?.block?.text, 'default answer')
+  const completed = logs.find(record => record.event === 'agy.request.completed')
+  assert.equal(completed?.promptLimitBytes, DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES)
+  assert.equal(DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES, 184_320, 'the built-in text budget is 180 KiB')
+  assert.ok(!completed?.historyCompacted)
+})
+
+// B: DSH context compaction drops the oldest messages, so the full-prefix hash
+// necessarily changes even though AGY's tail is intact. The stored tail anchor
+// decides between "same conversation, keep the binding" and "stale, bootstrap".
+function tailFixture() {
+  return {
+    m0: { role: 'user', content: [{ type: 'text', text: 'first question' }] },
+    m1: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+    m2: { role: 'user', content: [{ type: 'text', text: 'second question' }] },
+    m3: { role: 'assistant', content: [{ type: 'text', text: 'second answer' }] },
+    m4: { role: 'user', content: [{ type: 'text', text: 'third question' }] },
+  }
+}
+
+test('AgyAdapter keeps the AGY conversation when the history front shrank and the tail anchor matches', async () => {
+  const captured = []
+  const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+    runAgyProcess: async requestValue => {
+      captured.push({ conversation: requestValue.conversation, prompt: requestValue.prompt })
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: 'conversation-tail' }))
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'ok' } }))
+      return result()
+    },
+  })
+
+  const sessionId = 'session-tail-match'
+  const { m0, m1, m2, m3, m4 } = tailFixture()
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: [m0, m1, m2, m3, m4] })) {}
+
+  const record = adapter.getSession(sessionId)
+  assert.equal(record?.messageCount, 5)
+  assert.equal(record?.tailHashes?.length, 3)
+
+  // The front two messages were compacted away: length 4 < 5, and the stored
+  // last three messages still appear as exactly one window of the new history.
+  const compacted = [m2, m3, m4, { role: 'user', content: [{ type: 'text', text: 'after compaction' }] }]
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: compacted })) {}
+
+  assert.equal(captured[1].conversation, 'conversation-tail', 'the binding survives a front-only shrink')
+  assert.match(captured[1].prompt, /after compaction/)
+  assert.doesNotMatch(captured[1].prompt, /first question/)
+  assert.equal(adapter.getSession(sessionId)?.conversationId, 'conversation-tail')
+})
+
+test('AgyAdapter bootstraps when the history shrank but the tail anchor no longer matches', async () => {
+  const captured = []
+  let call = 0
+  const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+    runAgyProcess: async requestValue => {
+      captured.push({ conversation: requestValue.conversation, prompt: requestValue.prompt })
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: `conversation-${call}` }))
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: `answer-${call}` } }))
+      call += 1
+      return result()
+    },
+  })
+
+  const sessionId = 'session-tail-miss'
+  const { m0, m1, m2, m3 } = tailFixture()
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: [m0, m1, m2, m3, { role: 'user', content: [{ type: 'text', text: 'third question' }] }] })) {}
+
+  // Still shorter than the stored history, but the tail was rewritten, so the
+  // anchor matches zero windows and the stale conversation must be dropped.
+  const rewritten = [
+    m2,
+    m3,
+    { role: 'user', content: [{ type: 'text', text: 'EDITED third question' }] },
+    { role: 'user', content: [{ type: 'text', text: 'follow-up' }] },
+  ]
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: rewritten })) {}
+
+  assert.equal(captured[1].conversation, undefined, 'a rewritten tail must not resume the old conversation')
+  assert.match(captured[1].prompt, /EDITED third question/, 'the turn replays the full edited history')
+  assert.equal(adapter.getSession(sessionId)?.conversationId, 'conversation-1', 'a fresh binding is stored')
+})
+
+test('AgyAdapter bootstraps when the history did not shrink even though the tail is intact', async () => {
+  const first = [
+    { role: 'user', content: [{ type: 'text', text: 'original first question' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'original first answer' }] },
+    { role: 'user', content: [{ type: 'text', text: 'original last question' }] },
+  ]
+  const cases = [
+    // Same length: only the head was edited, the last two messages are intact.
+    [
+      { role: 'user', content: [{ type: 'text', text: 'EDITED first question' }] },
+      first[1],
+      first[2],
+    ],
+    // Grown: an edit plus one appended turn.
+    [
+      { role: 'user', content: [{ type: 'text', text: 'EDITED first question' }] },
+      first[1],
+      first[2],
+      { role: 'user', content: [{ type: 'text', text: 'appended turn' }] },
+    ],
+  ]
+
+  for (const [index, rewritten] of cases.entries()) {
+    const captured = []
+    let call = 0
+    const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+      runAgyProcess: async requestValue => {
+        captured.push({ conversation: requestValue.conversation, prompt: requestValue.prompt })
+        requestValue.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: `conversation-${call}` }))
+        requestValue.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: `answer-${call}` } }))
+        call += 1
+        return result()
+      },
+    })
+
+    const sessionId = `session-no-shrink-${index}`
+    for await (const _chunk of adapter.stream({ ...request, sessionId, messages: first })) {}
+    for await (const _chunk of adapter.stream({ ...request, sessionId, messages: rewritten })) {}
+
+    assert.equal(captured[1].conversation, undefined, `case ${index}: a non-shrinking history must bootstrap`)
+    assert.match(captured[1].prompt, /EDITED first question/)
+  }
+})
+
 // AGY keeps a conversation on disk even when its process was killed mid-answer,
 // and resuming it still works. Deleting the binding here threw away a usable
 // conversation, which is what kept a large session permanently in the
