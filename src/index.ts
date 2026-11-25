@@ -9,6 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { appendFileSync } from 'node:fs'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { AgyAdapter } from './provider/agy.js'
+import { ensureAgyGlobalSkills } from './agy/skills-config.js'
 import {
   BundleConfig,
   Config as ConfigSchema,
@@ -258,6 +259,10 @@ export function apply(ctx: Context, config: ConfigType): void {
     return
   }
   const logger = ctx.logger('dsh-agy-cli')
+  const skillsWarning = ensureAgyGlobalSkills()
+  if (skillsWarning !== undefined) {
+    logger.warn('could not ensure AGY global skills config: %s', skillsWarning)
+  }
 
   // AGY exits with `unknown agent "<name>" (available: ...)` *before* it reads
   // any input when the profile named on the command line has no template on

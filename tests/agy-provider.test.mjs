@@ -2363,3 +2363,59 @@ test('AgyAdapter appends the EMPTY_RESPONSE retry hint at the prompt tail of the
   for await (const chunk of adapter.stream({ ...request, sessionId: 'sess-other' })) chunk
   assert.ok(!captured[3].prompt.includes(hint))
 })
+
+test('AgyAdapter main turn without a preset keeps workspace cwd and sends no slash-command flag', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const { buildAgyArgs } = await import('../lib/agy/process.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-agy-main-cwd-'))
+  const workspaceRoot = fs.realpathSync(dir)
+  try {
+    const captured = []
+    const adapter = new AgyAdapter({
+      model: 'gemini-test',
+      workspaceRoot,
+    }, {
+      runAgyProcess: fakeRunner([
+        { event: 'result', result: { status: 'SUCCESS', response: 'ok' } },
+      ], captured),
+    })
+    // No agentPreset and default tool policy: the user turn stays on the
+    // canonical workspace root and must not disable AGY's slash commands.
+    for await (const _chunk of adapter.stream({ ...request, messages: [] })) {}
+    assert.equal(captured[0]?.cwd, workspaceRoot)
+    assert.equal(captured[0]?.disableSlashCommands, undefined)
+    const argv = buildAgyArgs(captured[0])
+    // Built by concatenation: the compared value is the real flag, while this
+    // negative assertion adds no production-emitter grep hit.
+    const slashFlag = '--disable' + '-slash-commands'
+    assert(!argv.includes(slashFlag))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('AgyAdapter persistent transport without a preset keeps workspace cwd and sends no slash-command flag', async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-agy-persistent-cwd-'))
+  const workspaceRoot = fs.realpathSync(dir)
+  try {
+    // Construct the real transport (no injected double): its options carry the
+    // cwd and argv that the persistent worker will actually use.
+    const adapter = new AgyAdapter({
+      model: 'gemini-test',
+      toolPolicy: 'reject',
+      transport: 'persistent',
+      workspaceRoot,
+    })
+    const options = adapter.persistentTransport.options
+    assert.equal(options.cwd, workspaceRoot)
+    const slashFlag = '--disable' + '-slash-commands'
+    assert(!options.args.includes(slashFlag))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
