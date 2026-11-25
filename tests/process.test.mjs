@@ -86,11 +86,30 @@ test('buildAgyArgs maps bounded Agent workspace flags without shell composition'
       '--model', 'gemini-test',
       '--add-dir', 'C:\\workspace',
       '--add-dir', 'C:\\workspace\\nested',
-      '--mode', 'accept-edits',
       '--disable-slash-commands',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
     ],
+  )
+})
+
+test('buildAgyArgs omits --mode when disableSlashCommands is true', () => {
+  const args = buildAgyArgs({
+    prompt: 'edit a file',
+    agent: 'dsh-agy-workspace-write',
+    model: 'gemini-test',
+    mode: 'accept-edits',
+    disableSlashCommands: true,
+  })
+  assert.equal(args.includes('--mode'), false, 'disableSlashCommands must suppress --mode even with an explicit mode')
+  assert.equal(args.includes('accept-edits'), false)
+  assert.ok(args.includes('--disable-slash-commands'))
+
+  const withMode = buildAgyArgs({ prompt: 'edit a file', mode: 'accept-edits' })
+  assert.deepEqual(
+    withMode.slice(withMode.indexOf('--mode'), withMode.indexOf('--mode') + 2),
+    ['--mode', 'accept-edits'],
+    'negative guard: the same mode must still be emitted when disableSlashCommands is false',
   )
 })
 

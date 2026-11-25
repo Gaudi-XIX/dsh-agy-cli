@@ -279,6 +279,65 @@ test('web router: status reports static for off and unavailable with lastError o
   dispose2()
 })
 
+test('web router: POST /plugins/agy-cli/pool/refresh-quota returns merged catalog from discovery', async () => {
+  const ws = fakeWebServer()
+  const discovery = new AgyModelDiscovery({
+    runCommand: async () => ({
+      exitCode: 0,
+      signal: null,
+      termination: 'completed',
+      stdoutLines: [
+        'claude-sonnet-4-6\tClaude Sonnet 4.6',
+        'claude-opus-4-6-thinking\tClaude Opus 4.6 Thinking',
+        'gpt-oss-120b\tGPT OSS 120B',
+      ],
+      stderr: '',
+      durationMs: 1,
+    }),
+  })
+  const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' }, discovery)
+  const route = ws.routes.get('/plugins/agy-cli/pool/refresh-quota')
+  assert.ok(route)
+  const resp = fakeResponse()
+  await new Promise((resolve) => {
+    resp.res.on('finish', resolve)
+    route.handler(fakeRequest('POST', '/plugins/agy-cli/pool/refresh-quota'), resp.res)
+  })
+  assert.equal(resp.status, 200)
+  assert.equal(resp.json.ok, true)
+  assert.ok(resp.json.pool)
+  assert.equal(resp.json.catalog.source, 'merged')
+  assert.equal(resp.json.catalog.count, resp.json.catalogModels.length)
+  assert.equal(resp.json.catalog.lastError, null)
+  const ids = resp.json.catalogModels.map(m => m.id)
+  for (const id of ['claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b']) {
+    assert.ok(ids.includes(id), id + ' must reach the refresh-quota catalog')
+  }
+  dispose()
+})
+
+test('web router: refresh-quota discovery failure degrades to static catalog without failing quota', async () => {
+  const ws = fakeWebServer()
+  const broken = { discover: () => { throw new Error('discovery exploded') } }
+  const dispose = setupWebRoutes(fakeContext(ws), { enabled: true, model: 'gemini-3.8-flash' }, broken)
+  const route = ws.routes.get('/plugins/agy-cli/pool/refresh-quota')
+  assert.ok(route)
+  const resp = fakeResponse()
+  await new Promise((resolve) => {
+    resp.res.on('finish', resolve)
+    route.handler(fakeRequest('POST', '/plugins/agy-cli/pool/refresh-quota'), resp.res)
+  })
+  assert.equal(resp.status, 200)
+  assert.equal(resp.json.ok, true)
+  assert.ok(resp.json.pool)
+  assert.equal(resp.json.catalog.source, 'unavailable')
+  assert.match(resp.json.catalog.lastError, /discovery exploded/)
+  assert.ok(Array.isArray(resp.json.catalogModels))
+  assert.ok(resp.json.catalogModels.length > 0, 'configured models must survive a failed discovery')
+  assert.ok(Array.isArray(resp.json.hiddenModels))
+  dispose()
+})
+
 test('web router: POST hiddenModels drives one catalog across panel, dropdown and generation', async () => {
   const ws = fakeWebServer()
   const captured = {}

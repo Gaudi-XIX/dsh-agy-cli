@@ -1163,10 +1163,17 @@ function purposeRouteFor(
 /**
  * Per-request argv tail for a persistent worker. `--disable-slash-commands` is
  * fixed in the transport args (it never varies), while `--mode` travels with
- * the route so a worker spawned for a preset keeps its bounded mode.
+ * the route so a worker spawned for a preset keeps its bounded mode. A read-only
+ * preset must not emit `--mode` at all: AGY treats it as a global, worker-wide
+ * setting and later requests in the same process lose their tool permissions.
  */
-function persistentExtraArgsOf(mode: AgyExecutionMode | undefined): readonly string[] {
-  return mode === undefined ? [] : ['--mode', mode]
+function persistentExtraArgsOf(
+  mode: AgyExecutionMode | undefined,
+  disableSlashCommands: boolean | undefined,
+): readonly string[] {
+  if (disableSlashCommands) return []
+  if (mode === undefined) return []
+  return ['--mode', mode]
 }
 
 function isSideChannelRequest(
@@ -1595,9 +1602,9 @@ export class AgyAdapter extends LlmAdapter {
       agent: route.agent,
       model: route.model,
       ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
-      ...(persistentExtraArgsOf(this.mode).length === 0
+      ...(persistentExtraArgsOf(this.mode, this.disableSlashCommands).length === 0
         ? {}
-        : { extraArgs: persistentExtraArgsOf(this.mode) }),
+        : { extraArgs: persistentExtraArgsOf(this.mode, this.disableSlashCommands) }),
       ...(this.timeoutMs === undefined ? {} : { timeoutMs: this.timeoutMs }),
       idleTimeoutMs: this.idleTimeoutMs,
       maxOutputBytes: this.maxOutputBytes,

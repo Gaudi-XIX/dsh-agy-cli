@@ -2419,3 +2419,52 @@ test('AgyAdapter persistent transport without a preset keeps workspace cwd and s
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('AgyAdapter persistent request omits --mode extraArgs for agentPreset read-only', async () => {
+  const captured = []
+  const transport = {
+    request: input => {
+      captured.push(input)
+      input.onEvent?.({ event: 'result', result: { status: 'SUCCESS', response: 'ok' } })
+      return Promise.resolve({
+        requestId: 'req-read-only-extraargs',
+        sessionId: input.sessionId,
+        events: [],
+        durationMs: 10,
+        firstEventMs: 2,
+      })
+    },
+  }
+  const adapter = new AgyAdapter({
+    model: 'gemini-test',
+    toolPolicy: 'reject',
+    agentPreset: 'read-only',
+    transport: 'persistent',
+  }, { persistentTransport: transport })
+  for await (const _chunk of adapter.stream({
+    ...request,
+    sessionId: 'session-read-only-extraargs',
+    messages: [],
+    system: 'read',
+  })) {}
+  assert.equal(captured.length, 1, 'read-only preset must still dispatch one persistent request')
+  assert.equal(captured[0].extraArgs, undefined, '--mode must never reach the persistent worker')
+  assert.ok(!JSON.stringify(captured[0]).includes('--mode'))
+
+  // Negative guard: this fixture really derives mode=plan plus the global
+  // slash-command suppression from the read-only preset, the exact combination
+  // that previously produced extraArgs=['--mode','plan'] on the persistent path.
+  const oneShotCaptured = []
+  const oneShot = new AgyAdapter({
+    model: 'gemini-test',
+    toolPolicy: 'reject',
+    agentPreset: 'read-only',
+  }, {
+    runAgyProcess: fakeRunner([
+      { event: 'result', result: { status: 'SUCCESS', response: 'ok' } },
+    ], oneShotCaptured),
+  })
+  for await (const _chunk of oneShot.stream({ ...request, messages: [], system: 'read' })) {}
+  assert.equal(oneShotCaptured[0].mode, 'plan')
+  assert.equal(oneShotCaptured[0].disableSlashCommands, true)
+})

@@ -1063,6 +1063,35 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
       const quotaAnswer = await withDeadline(refreshQuotas(true), QUOTA_SERVE_DEADLINE_MS)
       if (quotaAnswer === undefined) lastQuotaError = 'timeout'
       const quotas = quotaAnswer ?? cachedQuotas
+      const overrides = readAgyRuntimeOverrides() ?? { hiddenModels: [], defaultEffort: undefined, defaultModel: undefined }
+      const configured = configuredModels(activeConfig)
+      const hiddenModels = overrides.hiddenModels
+      let discoveredModels: ReturnType<typeof configuredModels> = []
+      let catalogSource: string = 'static'
+      let catalogStale = false
+      let catalogWarningCode: string | undefined
+      let catalogError: string | null = null
+      if (modelDiscovery === undefined) {
+        catalogSource = 'static'
+      } else {
+        try {
+          const disc = await withDeadline(modelDiscovery.discover(configured), DISCOVERY_AWAIT_MS)
+          if (disc === undefined) {
+            catalogSource = 'unavailable'
+            catalogError = 'model discovery timed out'
+          } else {
+            catalogSource = disc.source
+            catalogStale = disc.stale
+            catalogWarningCode = disc.warningCode
+            catalogError = disc.warning ?? null
+            discoveredModels = disc.models
+          }
+        } catch (error) {
+          catalogSource = 'unavailable'
+          catalogError = error instanceof Error ? error.message : String(error)
+        }
+      }
+      const { catalog, hidden } = resolveModelCatalog(configured, discoveredModels, hiddenModels)
       const identity = await readIdentityFromKeyring()
       const accountAlias = identity.email
         ? `${identity.name ? `${identity.name} ` : ''}(${identity.email})`
@@ -1092,6 +1121,15 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
             },
           ],
         },
+        catalog: {
+          source: catalogSource,
+          count: catalog.length,
+          ...(catalogStale ? { stale: true } : {}),
+          ...(catalogWarningCode === undefined ? {} : { warningCode: catalogWarningCode }),
+          lastError: catalogError,
+        },
+        catalogModels: catalog,
+        hiddenModels: hidden,
       })
     })
 

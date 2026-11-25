@@ -349,7 +349,7 @@ export function buildAgyArgs(
     ...(request.conversation === undefined ? [] : ['--conversation', request.conversation]),
     ...(request.reasoningEffort === undefined ? [] : ['--effort', request.reasoningEffort]),
     ...(request.addDirs?.flatMap(directory => ['--add-dir', directory]) ?? []),
-    ...(request.mode === undefined ? [] : ['--mode', request.mode]),
+    ...(request.mode === undefined || request.disableSlashCommands === true ? [] : ['--mode', request.mode]),
     ...(request.disableSlashCommands === true ? ['--disable-slash-commands'] : []),
     ...(request.jsonSchemaPath === undefined ? [] : ['--json-schema', request.jsonSchemaPath]),
     '--input-format', 'stream-json',
