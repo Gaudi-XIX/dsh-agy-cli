@@ -20,7 +20,14 @@
   - `image-view` 预设改为仅当本轮消息真实带图（`turnHasImages`）才换入，历史图片不再把整轮锁进图片检查模式。对应 `f952ed3`、`261cf00`。
 - **文档与版本门面同步**：重写中英双语 `README.md` / `README.en.md`（覆盖四维定位、安装与 junction 挂载、配置项表、9 项能力清单、`npm run quota` 用法与故障排查），同步更新 `ABOUT.txt`（133 字）与 `package.json` 版本号至 `0.17.0`。
 
-[0.16.0] - 2026-11-25
+### Fixed
+
+- **持久通道图片轮判定收窄**（`src/provider/agy.ts`）：`shouldUsePersistent` 改为消费 `turnHasImages`，历史带图轮不再强制回落 one-shot，persistent 会话保留。对应 `3d538b6`。
+- **`IMAGE_AGENT_UNSUPPORTED` 抛错门槛收窄**（`src/provider/image-bridge.ts`）：仅当本轮消息真实带图且缺少 `view_file` 预设时才抛出；仅历史图保留占位符的轮次不再被整轮拒绝。对应 `3d538b6`。
+- **移除 `visibleModels` 死分支（配置契约变化）**（`src/provider/config.ts`、`src/web/router.ts`）：删除不可达的 `visibleModels` 配置字段、`filterVisibleModels()` 与面板 `updateCordisPatch` 的对应写入分支；发现即显示。配置文件中遗留的 `visibleModels` 键将被忽略。对应 `3d538b6`。
+- **测试与配额嗅探内部加固**（`tests/`、`src/quota/discovery.ts`）：e2e 断言加固堵住空数组空洞通过；`readLogPorts` 对同毫秒 mtime 平局按文件名日期戳降序 tie-break，消除同毫秒批量写入导致的排序抖动 flake。对应 `3d538b6`。
+
+## [0.16.0] - 2026-11-25
 
 ### Added
 
