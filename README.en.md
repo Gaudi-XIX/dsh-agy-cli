@@ -3,9 +3,11 @@
 [![npm](https://img.shields.io/npm/v/dsh-agy-cli)](https://www.npmjs.com/package/dsh-agy-cli)
 [![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-cli)](LICENSE)
 
-Runs the locally authenticated **Google Antigravity CLI (`agy`)** as a first-class model provider for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
+Run your own **Gemini account** inside DSH — through the Google Antigravity CLI (`agy`) already signed in on this machine, on your existing subscription, with no separate API key. [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) is the host.
 
-> No reverse proxy and no protocol spoofing: requests still go out through the official agy.exe on your machine, signed by it, with the credentials kept locally and the quota coming from your own subscription. DSH handles tool execution and approvals so every step is visible. The plugin turns telemetry off, ends a stuck run after 180 seconds, folds long output, and gives the model only the tools it needs on the first turn.
+> **First, should you even install this?** Windows only, and the official `agy` must be installed and signed in first. If you have no Antigravity account, want multi-account rotation, or are not on Windows, this plugin is not for you.
+>
+> **Your account safety, which matters most:** every request is sent and signed by the official `agy.exe` itself — no reverse proxy, no protocol spoofing, no binary patching — so the account side is just like using the official client directly; credentials stay on this Windows machine. Tool execution, approvals, and the workspace sandbox remain with DSH, visible and interceptable at every step.
 
 **What this plugin does, in three points:**
 
@@ -13,7 +15,7 @@ Runs the locally authenticated **Google Antigravity CLI (`agy`)** as a first-cla
 2. **Spends your Antigravity quota.** Requests draw on your own subscription under the same pool and rules as the official client. No API key.
 3. **AGY is only the model; DSH owns the harness.** Tool execution, approvals, sandbox, and context budgeting stay 100% inside DSH; AGY's own agent loop is stripped via public preset parameters.
 
-> **Platform: Windows only.** The quota panel, credential keep-alive, tree-kill watchdog, local quota CLI sniffer, and console-free launcher are built around Windows; untested on macOS/Linux.
+> **Want the deeper mechanics?** The four-dimension framework below walks through the problems, trade-offs and source references one by one; installation steps, config tables and troubleshooting follow. The two blocks above are enough to decide whether to install.
 
 ---
 
