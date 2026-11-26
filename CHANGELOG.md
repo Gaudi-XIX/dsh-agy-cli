@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.17.1] - 2026-11-26
+
+纯文档修订，无源码变更：门面文案改成「一眼判断要不要装」的决策式简介，中英 README 开头与 GitHub About、npm description 同步；`ABOUT.txt` 收到 164 字。Windows 表述从「仅 Windows、不适合」改为「已在 Windows 11 实测」。此版为让 npm 页面 README 更新而升 patch 重发。
+
 ## [0.17.0] - 2026-11-25
 
 > 本版本合并了未单独发版的本地 `0.16.0`（批处理工具真接线、遥测切断、8.8KB 输出折叠、180s 看门狗、本地 `npm run quota`）及后续全部增强与修复。

@@ -1,11 +1,11 @@
 {
   "name": "dsh-agy-cli",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "private": false,
   "publishConfig": {
     "access": "public"
   },
-  "description": "Run the locally authenticated AGY CLI as a DSH model provider. Official-binary-only transport; batch tools, 8.8KB folding, telemetry cutoff, 180s watchdog, and skills passthrough.",
+  "description": "Run your own Gemini account in DSH via the official local Antigravity CLI: agy.exe sends and signs every request, credentials stay local, DSH owns the harness.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
