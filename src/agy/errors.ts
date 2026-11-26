@@ -74,7 +74,7 @@ const ACCOUNT_QUOTA_WORDS = /quota|credit|balance|billing|budget|usage\s+limit|l
 // failure. The distinction is load-bearing: a drained bucket is retryable (it
 // sits on a boundary value where ~1 in 5 attempts succeeds, and the window
 // resets on its own), while a billing failure never clears by waiting.
-//   "Individual quota reached. … Resets in 96h12m27s"   → bucket drained, resets on the window
+//   "Individual quota reached. … Resets in 96h12m27s"   → bucket drained; a long window makes it terminal (QUOTA_RESET_RETRY_CEILING_MS below)
 //   "Resource has been exhausted (e.g. check quota)."   → burst/rate limit, no reset hint
 // Peer references (same rule, independently derived):
 //   OmniRoute open-sse/services/antigravity429Engine.ts  QUOTA_EXHAUSTED_KEYWORDS
@@ -89,6 +89,38 @@ const ACCOUNT_QUOTA_WORDS = /quota|credit|balance|billing|budget|usage\s+limit|l
 const DRAINED_QUOTA_WORDS = /(?:quota|usage|weekly|5[-\s]?hour)[-\s]*(?:limit|limits)\s+(?:reached|exceeded)|limit\s+(?:reached|exceeded)\s+(?:for|on)\s+(?:quota|usage|weekly|5[-\s]?hour)|individual\s+quota|quota\s+(?:reached|exhausted)|out\s+of\s+quota|insufficient\s+quota/i
 const RESETS_IMMEDIATELY = /\breset\s+(?:after|in)\s+0s\b/i
 
+// Longest quota-reset window a bounded retry can plausibly cross. The drained
+// bucket recovers within a handful of attempts over minutes (probe_retry_efficacy.mjs:
+// 5/5 rounds recovered, 2-3 attempts each — see the classifyAgyFailure comment), so
+// a window measured in hours is unreachable and retrying inside it is pure token
+// burn. One hour sits an order of magnitude above that observed minute-scale
+// recovery and below every long window seen in the field (5h in the tests,
+// 92-96h in the header comment).
+export const QUOTA_RESET_RETRY_CEILING_MS = 60 * 60 * 1000
+
+// `Resets in 96h12m27s`, `resets after 5h`, `Resets in 30m` — h/m/s components
+// are each optional; an empty capture (no duration at all) means "unparseable"
+// and the caller keeps the pre-existing behavior.
+const RESETS_IN_DURATION_RE = /\bresets?\s+(?:in|after)\s+((?:\d+h)?(?:\d+m)?(?:\d+s)?)\b/i
+
+function parseQuotaResetMs(detail: string): number | null {
+  const raw = RESETS_IN_DURATION_RE.exec(detail)?.[1]
+  if (raw === undefined || raw.length === 0) return null
+  const hours = /(\d+)h/i.exec(raw)
+  const minutes = /(\d+)m/i.exec(raw)
+  const seconds = /(\d+)s/i.exec(raw)
+  return Number(hours?.[1] ?? 0) * 3_600_000 + Number(minutes?.[1] ?? 0) * 60_000 + Number(seconds?.[1] ?? 0) * 1_000
+}
+
+// agy's server-side capacity notice: head "⚠ Our servers are experiencing high
+// traffic right now, please try again in a minute." and tail " (UNAVAILABLE
+// (code 503): No capacity available for model X on the server)". The upstream
+// peer agent-notice.mjs (DylanLIiii/opencode-antigravity-bridge, def3d482) matches
+// both ends verbatim; here one regex covers either end because classifyAgyFailure
+// sees the whole stderr slice, not a line stream. Retryable by design: the notice
+// itself says to try again in a minute.
+const MODEL_CAPACITY_WORDS = /servers\s+are\s+experiencing\s+high\s+traffic|\bUNAVAILABLE\s+\(code\s+503\):\s*No\s+capacity\s+available\s+for\s+model|\bMODEL_CAPACITY_EXHAUSTED\b/i
+
 /**
  * Classify observed AGY status/stderr/error-event detail. This is deliberately
  * conservative: unknown text keeps the caller-supplied fallback code.
@@ -100,7 +132,10 @@ const RESETS_IMMEDIATELY = /\breset\s+(?:after|in)\s+0s\b/i
  * `dsh-llm-retry` can re-issue the turn — live probes showed the bucket sits on
  * a boundary value where 1 in 5 attempts succeeds (probe_retry_efficacy.mjs:
  * 5/5 rounds recovered, 2-3 attempts each), while a 92-96h reset means retrying
- * beyond a few attempts is pure token burn.
+ * beyond a few attempts is pure token burn (long windows are terminal — see
+ * QUOTA_RESET_RETRY_CEILING_MS). The server-busy/no-capacity 503 notice is
+ * classified right after the drained bucket, before the generic 429 check; the
+ * drained/429 order above is unchanged.
  */
 export function classifyAgyFailure(detail: string, fallback: string): string {
   const value = detail.trim().slice(0, 2_048)
@@ -111,8 +146,17 @@ export function classifyAgyFailure(detail: string, fallback: string): string {
   if (ACCOUNT_QUOTA_WORDS.test(value) && !DRAINED_QUOTA_WORDS.test(value)) {
     return QUOTA_EXCEEDED_CODE
   }
-  // A drained-bucket 429 that promises an immediate reset is really a burst limit.
-  if (DRAINED_QUOTA_WORDS.test(value) && !RESETS_IMMEDIATELY.test(value)) return 'RATE_LIMIT'
+  // A drained-bucket 429 whose reset window is hours away is terminal: no
+  // bounded retry can cross it (QUOTA_RESET_RETRY_CEILING_MS rationale above).
+  if (DRAINED_QUOTA_WORDS.test(value)) {
+    const resetMs = parseQuotaResetMs(value)
+    if (resetMs !== null && resetMs >= QUOTA_RESET_RETRY_CEILING_MS) return QUOTA_EXCEEDED_CODE
+    // A drained-bucket 429 that promises an immediate reset is really a burst limit.
+    if (!RESETS_IMMEDIATELY.test(value)) return 'RATE_LIMIT'
+  }
+  // Server-busy / no-capacity 503: transient by nature, so it rides the same
+  // bounded retry as a burst rate limit.
+  if (MODEL_CAPACITY_WORDS.test(value)) return 'RATE_LIMIT'
   if (/(?:rate\s*limit|too\s+many\s+requests|throttl|\b429\b)/i.test(value)) return 'RATE_LIMIT'
   // Transport-layer flakes: the local proxy or the upstream edge cuts the
   // connection mid-request. AGY itself labels these `"retryable": true` in its

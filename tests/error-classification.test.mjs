@@ -38,7 +38,7 @@ test('classifyAgyFailure maps authentication, quota, model, and context details'
     ['The stream was interrupted. Please continue the task you were working on.', 'TRANSPORT'],
     ['Individual quota reached. Resets in 0s.', 'RATE_LIMIT'],
     ['quota exceeded for this billing period', 'QUOTA'],
-    ['Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 96h12m27s. AGY_ERROR: {short_error: RESOURCE_EXHAUSTED (code 429), status: RESOURCE_EXHAUSTED, error_code: 429, code_kind: http, retryable: true}', 'RATE_LIMIT'],
+    ['Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 96h12m27s. AGY_ERROR: {short_error: RESOURCE_EXHAUSTED (code 429), status: RESOURCE_EXHAUSTED, error_code: 429, code_kind: http, retryable: true}', 'QUOTA'],
   ]
   for (const [detail, expected] of cases) assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), expected)
 })
@@ -67,9 +67,8 @@ test('classifyAgyFailure separates a drained bucket from a billing failure', () 
   // (probe_retry_efficacy.mjs: 5/5 rounds recovered, 2-3 attempts each), while a
   // billing failure never clears on its own and must fail closed.
   const drained = [
-    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 96h12m27s.',
     'quota reached for gemini-3.8-flash-high',
-    'RESOURCE_EXHAUSTED (code 429): quota exhausted, resets in 5h',
+    'Individual quota reached. Resets in 0s.',
   ]
   for (const detail of drained) {
     assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'RATE_LIMIT', detail)
@@ -81,6 +80,58 @@ test('classifyAgyFailure separates a drained bucket from a billing failure', () 
   ]
   for (const detail of billing) {
     assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'QUOTA', detail)
+  }
+})
+
+test('classifyAgyFailure maps server-busy 503 no-capacity notices to retryable RATE_LIMIT', () => {
+  // agy reports capacity pressure with the head "Our servers are experiencing
+  // high traffic…" and/or the tail "(UNAVAILABLE (code 503): No capacity
+  // available for model X on the server)" (peer reference: agent-notice.mjs
+  // CAPACITY_HEAD/CAPACITY_TAIL at DylanLIiii/opencode-antigravity-bridge def3d482).
+  // Capacity is transient, so it rides the bounded retry instead of the
+  // non-retryable fallback.
+  const capacity = [
+    '⚠ Our servers are experiencing high traffic right now, please try again in a minute. (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server)',
+    '⚠ Our servers are experiencing high traffic right now, please try again in a minute.',
+    'UNAVAILABLE (code 503): No capacity available for model gemini-3-pro on the server',
+    'MODEL_CAPACITY_EXHAUSTED',
+  ]
+  for (const detail of capacity) {
+    assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'RATE_LIMIT', detail)
+  }
+})
+
+test('classifyAgyFailure makes long quota reset windows terminal but keeps short windows retryable', () => {
+  // A window measured in hours cannot be crossed by the bounded retry (2-3
+  // attempts, minutes — probe_retry_efficacy.mjs), so anything at or above
+  // QUOTA_RESET_RETRY_CEILING_MS (1h) fails closed as QUOTA.
+  const longWindows = [
+    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 96h12m27s.',
+    'Individual quota reached. Resets in 92h.',
+    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 96h12m27s. AGY_ERROR: {short_error: RESOURCE_EXHAUSTED (code 429), status: RESOURCE_EXHAUSTED, error_code: 429, code_kind: http, retryable: true}',
+    'RESOURCE_EXHAUSTED (code 429): quota exhausted, resets in 5h',
+  ]
+  for (const detail of longWindows) {
+    assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'QUOTA', detail)
+  }
+  const shortWindows = [
+    'Individual quota reached. Resets in 30m.',
+    'Individual quota reached. Resets in 45s.',
+    'Individual quota reached. Resets in 59m59s.',
+    'Individual quota reached. Resets in 0s.',
+  ]
+  for (const detail of shortWindows) {
+    assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'RATE_LIMIT', detail)
+  }
+  // Missing or unparseable duration keeps the pre-existing behavior: the
+  // drained bucket stays bounded-retryable.
+  const missingDuration = [
+    'Individual quota reached. Please upgrade your subscription to increase your limits.',
+    'Individual quota reached. Resets in soon.',
+    'quota reached for gemini-3.8-flash-high',
+  ]
+  for (const detail of missingDuration) {
+    assert.equal(classifyAgyFailure(detail, 'AGY_EXIT'), 'RATE_LIMIT', detail)
   }
 })
 
