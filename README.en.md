@@ -3,11 +3,11 @@
 [![npm](https://img.shields.io/npm/v/dsh-agy-cli)](https://www.npmjs.com/package/dsh-agy-cli)
 [![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-cli)](LICENSE)
 
-Run your own **Gemini account** inside DSH — through the Google Antigravity CLI (`agy`) already signed in on this machine, on your existing subscription, with no separate API key. [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) is the host.
+Run your own Gemini account inside DSH — on your existing subscription, no separate API key — through the Google Antigravity CLI (`agy`) already signed in on this machine, hosted by [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
-> **First, should you even install this?** Windows only, and the official `agy` must be installed and signed in first. If you have no Antigravity account, want multi-account rotation, or are not on Windows, this plugin is not for you.
+> **First, does this fit you?** Install and sign in the official `agy` on this machine and you are set; tested on Windows 11. If you have no Antigravity account or want multi-account rotation, this plugin is not for you.
 >
-> **Your account safety, which matters most:** every request is sent and signed by the official `agy.exe` itself — no reverse proxy, no protocol spoofing, no binary patching — so the account side is just like using the official client directly; credentials stay on this Windows machine. Tool execution, approvals, and the workspace sandbox remain with DSH, visible and interceptable at every step.
+> **Your account safety, which matters most:** every request is sent and signed by the official `agy.exe` itself — no reverse proxy, no protocol spoofing, no binary patching — so the account side is just like using the official client directly; credentials stay on this machine. Tool execution, approvals, and the workspace sandbox remain with DSH, visible and interceptable at every step. A hung or disconnected run is cleaned up after 180 seconds by default, so it never stalls or leaves orphan processes.
 
 **What this plugin does, in three points:**
 

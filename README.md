@@ -3,11 +3,11 @@
 [![npm](https://img.shields.io/npm/v/dsh-agy-cli)](https://www.npmjs.com/package/dsh-agy-cli)
 [![license](https://img.shields.io/github/license/Gaudi-XIX/dsh-agy-cli)](LICENSE)
 
-在 DSH 里用你自己的 **Gemini 账号**跑模型——用的是本机已经登录的 Google Antigravity CLI（`agy`），接进 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 当模型用，走原来的套餐，不用另配 API Key。
+在 DSH 里通过本机已登录的 Google Antigravity CLI（`agy`）用你的 Gemini 账号跑模型，走原来的套餐，不用另配 API Key。[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 负责托管。
 
-> **先看你要不要装**：只在 Windows 上可用，而且本机要先装好、登录官方 `agy`。没有 Antigravity 账号、想要多账号轮换，或者不在 Windows，这插件都不适合你。
+> **先看你符不符合**：本机装好并登录官方 `agy` 就能用，已在 Windows 11 实测。没有 Antigravity 账号、想多账号轮换的，这插件不做。
 >
-> **你最该在意的账号安全**：每轮请求都由官方 `agy.exe` 自己发出、自己签名，不反代、不模拟协议、不改二进制，账号侧和你直接用官方客户端一样；凭据留在 Windows 本机不外传。工具执行、权限审批、工作区沙箱仍归 DSH 管，每一步可见可拦。
+> **你最该在意的账号安全**：每轮请求都由官方 `agy.exe` 自己发出、自己签名，不反代、不模拟协议、不改二进制，账号侧和你直接用官方客户端一样；凭据只留在本机。工具执行、权限审批、工作区沙箱仍归 DSH，每一步可见可拦。假死或断连默认 180 秒自动收尾，不卡死、不留孤儿进程。
 
 **这个插件的核心职责：**
 
