@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { existsSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { AgyAdapter } from '../lib/provider/agy.js'
 import { SessionRegistry } from '../lib/session/store.js'
+import { FileSessionStore } from '../lib/session/file-store.js'
 import { getAgyUserMessageByteLength } from '../lib/agy/stream-protocol.js'
 import { DEFAULT_AGY_PROMPT_CONTENT_LIMIT_BYTES, DEFAULT_DSH_TOOL_PROMPT_CONTENT_LIMIT_BYTES } from '../lib/provider/prompt-budget.js'
 
@@ -2493,6 +2495,216 @@ test('AgyAdapter bootstraps when the history did not shrink even though the tail
     assert.equal(captured[1].conversation, undefined, `case ${index}: a non-shrinking history must bootstrap`)
     assert.match(captured[1].prompt, /EDITED first question/)
   }
+})
+
+// A user-cancelled turn (ABORTED) must not destroy the binding: the record is
+// flagged cancelled instead, and the next turn resumes the same conversation
+// while dropping the orphaned tool result the cancelled turn left behind.
+test('AgyAdapter resumes the same conversation after a cancelled turn and drops orphaned tool results', async () => {
+  const captured = []
+  let call = 0
+  const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+    runAgyProcess: async requestValue => {
+      captured.push({ conversation: requestValue.conversation, prompt: requestValue.prompt })
+      call += 1
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: 'conversation-cancel' }))
+      if (call === 2) return { ...result(), termination: 'aborted' }
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: `answer-${call}` } }))
+      return result()
+    },
+  })
+
+  const sessionId = 'session-cancel-resume'
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: [{ role: 'user', content: [{ type: 'text', text: 'first' }] }] })) {}
+
+  // The cancelled turn: AGY's init already landed (the binding was written
+  // back mid-turn), then the user aborted.
+  const interrupted = [
+    { role: 'user', content: [{ type: 'text', text: 'first' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'answer-1' }] },
+    { role: 'user', content: [{ type: 'text', text: 'second' }] },
+  ]
+  await assert.rejects((async () => {
+    for await (const _chunk of adapter.stream({ ...request, sessionId, messages: interrupted })) {}
+  })(), error => error.code === 'ABORTED')
+
+  const flagged = adapter.getSession(sessionId)
+  assert.equal(flagged?.cancelled, true)
+  assert.equal(flagged?.conversationId, 'conversation-cancel', 'the binding survives the cancellation')
+  assert.match(flagged?.chainHash ?? '', /^[0-9a-f]{16}$/, 'the pre-turn fingerprint is written back with the flag')
+
+  // The next turn resumes the same conversation; the orphaned tool result of
+  // the cancelled turn is not re-sent.
+  const after = [
+    ...interrupted,
+    { role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: 'orphaned tool output' }] },
+    { role: 'user', content: [{ type: 'text', text: 'third' }] },
+  ]
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: after })) {}
+
+  assert.equal(captured[2].conversation, 'conversation-cancel', 'the turn is a delta against the same conversation')
+  assert.match(captured[2].prompt, /third/)
+  assert.doesNotMatch(captured[2].prompt, /orphaned tool output/)
+
+  const cleaned = adapter.getSession(sessionId)
+  assert.equal(cleaned?.cancelled, undefined, 'a successful turn clears the flag')
+  assert.match(cleaned?.chainHash ?? '', /^[0-9a-f]{16}$/)
+  assert.notEqual(cleaned?.chainHash, flagged?.chainHash, 'the fingerprint advances to the new history')
+  assert.equal(cleaned?.messageCount, 5)
+})
+
+test('AgyAdapter restores regular fingerprint validation one turn after the cancellation', async () => {
+  const captured = []
+  let call = 0
+  const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+    runAgyProcess: async requestValue => {
+      captured.push({ conversation: requestValue.conversation, prompt: requestValue.prompt })
+      call += 1
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: requestValue.conversation ?? `conversation-${call}` }))
+      if (call === 2) return { ...result(), termination: 'aborted' }
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: `answer-${call}` } }))
+      return result()
+    },
+  })
+
+  const sessionId = 'session-cancel-regular'
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: [{ role: 'user', content: [{ type: 'text', text: 'first' }] }] })) {}
+  const turnMessages = [
+    { role: 'user', content: [{ type: 'text', text: 'first' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'answer-1' }] },
+    { role: 'user', content: [{ type: 'text', text: 'second' }] },
+  ]
+  await assert.rejects((async () => {
+    for await (const _chunk of adapter.stream({ ...request, sessionId, messages: turnMessages })) {}
+  })(), error => error.code === 'ABORTED')
+  // The resume turn right after the cancellation succeeds and rewrites the
+  // fingerprint, clearing the flag.
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: turnMessages })) {}
+  assert.equal(captured[2].conversation, 'conversation-1')
+  assert.equal(adapter.getSession(sessionId)?.cancelled, undefined)
+
+  // From here the regular gate is back in charge: an edited prefix with the
+  // same length must bootstrap again, proving the skip only lasted one round.
+  const edited = [
+    { role: 'user', content: [{ type: 'text', text: 'EDITED first' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'answer-2' }] },
+    { role: 'user', content: [{ type: 'text', text: 'follow-up' }] },
+  ]
+  for await (const _chunk of adapter.stream({ ...request, sessionId, messages: edited })) {}
+  assert.equal(captured[3].conversation, undefined, 'the edited prefix bootstraps a fresh conversation')
+  assert.match(captured[3].prompt, /EDITED first/)
+})
+
+test('AgyAdapter keeps resuming after a restart when the cancelled record is persisted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-cancel-restart-'))
+  try {
+    const path = join(dir, 'sessions.json')
+    const captured = []
+    let call = 0
+    const runner = async requestValue => {
+      captured.push({ conversation: requestValue.conversation, prompt: requestValue.prompt })
+      call += 1
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: 'conversation-durable' }))
+      if (call === 2) return { ...result(), termination: 'aborted' }
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: `answer-${call}` } }))
+      return result()
+    }
+    const buildAdapter = () => new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+      sessionRegistry: new SessionRegistry(new FileSessionStore({ path })),
+      runAgyProcess: runner,
+    })
+
+    const sessionId = 'session-cancel-durable'
+    const interrupted = [
+      { role: 'user', content: [{ type: 'text', text: 'first' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'answer-1' }] },
+      { role: 'user', content: [{ type: 'text', text: 'second' }] },
+    ]
+    const first = buildAdapter()
+    for await (const _chunk of first.stream({ ...request, sessionId, messages: [{ role: 'user', content: [{ type: 'text', text: 'first' }] }] })) {}
+    await assert.rejects((async () => {
+      for await (const _chunk of first.stream({ ...request, sessionId, messages: interrupted })) {}
+    })(), error => error.code === 'ABORTED')
+
+    // Simulate a host restart: a brand-new adapter over a brand-new store
+    // instance reading the same file must still resume, not bootstrap.
+    const restarted = buildAdapter()
+    for await (const _chunk of restarted.stream({ ...request, sessionId, messages: interrupted })) {}
+    assert.equal(captured[2].conversation, 'conversation-durable')
+    assert.match(captured[2].prompt, /second/)
+    assert.equal(restarted.getSession(sessionId)?.cancelled, undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// The cancelled bypass sits upstream of the tail-anchor verdicts: the very
+// same "history edited in place, no shrink" shape that bootstraps an unmarked
+// record must keep the binding when the record is flagged cancelled.
+test('AgyAdapter lets a cancelled record bypass the tail-anchor verdicts', async () => {
+  const { m0, m1, m2, m3, m4 } = tailFixture()
+  const editedInPlace = [
+    { role: 'user', content: [{ type: 'text', text: 'EDITED first question' }] },
+    m1,
+    m2,
+    m3,
+    m4,
+  ]
+
+  const runFlow = async sessionId => {
+    const captured = []
+    let call = 0
+    const adapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+      runAgyProcess: async requestValue => {
+        captured.push({ conversation: requestValue.conversation, prompt: requestValue.prompt })
+        call += 1
+        requestValue.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: requestValue.conversation ?? `conversation-${call}` }))
+        if (sessionId === 'session-cancel-priority' && call === 2) return { ...result(), termination: 'aborted' }
+        requestValue.onStdoutLine?.(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: `answer-${call}` } }))
+        return result()
+      },
+    })
+    for await (const _chunk of adapter.stream({ ...request, sessionId, messages: [m0, m1, m2, m3, m4] })) {}
+    if (sessionId === 'session-cancel-priority') {
+      await assert.rejects((async () => {
+        for await (const _chunk of adapter.stream({ ...request, sessionId, messages: [m0, m1, m2, m3, m4] })) {}
+      })(), error => error.code === 'ABORTED')
+    }
+    for await (const _chunk of adapter.stream({ ...request, sessionId, messages: editedInPlace })) {}
+    return { captured, adapter, sessionId }
+  }
+
+  const cancelled = await runFlow('session-cancel-priority')
+  assert.equal(cancelled.captured[2].conversation, 'conversation-1', 'cancelled wins over the tail-anchor verdict')
+  assert.match(cancelled.captured[2].prompt, /third question/)
+
+  const control = await runFlow('session-cancel-control')
+  assert.equal(control.captured[1].conversation, undefined, 'the same shape without the flag bootstraps')
+})
+
+test('AgyAdapter does not resurrect a deliberately deleted binding and does not mark full-mode aborts', async () => {
+  // Under resume mode, a binding that is absent when the turn aborts must stay
+  // absent: the ABORTED error flags an existing record, it never creates one.
+  const carrierAdapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'resume' }, {
+    dshContext: trustedDshContext(),
+    runAgyProcess: async () => ({ ...result(), termination: 'aborted' }),
+  })
+  await assert.rejects((async () => {
+    for await (const _chunk of carrierAdapter.stream({ ...request, sessionId: 'session-1' })) {}
+  })(), error => error.code === 'ABORTED')
+  assert.equal(carrierAdapter.getSession('session-1'), undefined, 'the deliberate deletion is not resurrected')
+
+  // A cancelled turn in full mode writes no record at all.
+  const fullAdapter = new AgyAdapter({ model: 'gemini-test', sessionMode: 'full' }, {
+    runAgyProcess: async requestValue => {
+      requestValue.onStdoutLine?.(JSON.stringify({ event: 'init', conversation_id: 'conversation-full' }))
+      return { ...result(), termination: 'aborted' }
+    },
+  })
+  await assert.rejects((async () => {
+    for await (const _chunk of fullAdapter.stream({ ...request, sessionId: 'session-full-abort' })) {}
+  })(), error => error.code === 'ABORTED')
+  assert.equal(fullAdapter.getSession('session-full-abort')?.cancelled, undefined, 'full mode never flags a record')
 })
 
 // AGY keeps a conversation on disk even when its process was killed mid-answer,

@@ -17,6 +17,8 @@ export interface SessionRecord {
   readonly messageCount?: number
   /** Digests of the last min(TAIL_ANCHOR_MESSAGES, messages.length) messages. */
   readonly tailHashes?: readonly string[]
+  /** The previous turn was cancelled by the user; its output is incomplete. */
+  readonly cancelled?: boolean
 }
 
 /** Optional fingerprint metadata carried alongside a conversation binding. */
@@ -30,6 +32,13 @@ export interface SessionFingerprint {
 export interface SessionStore {
   get(sessionId: string): SessionRecord | undefined
   set(sessionId: string, conversationId: string, fingerprint?: SessionFingerprint): SessionRecord
+  /**
+   * Flag an existing record as cancelled (previous turn aborted). Updates
+   * only: a missing record is a no-op returning false, so a deliberately
+   * deleted binding is never resurrected. The fingerprint, when provided,
+   * is written back because any mid-turn `set` rebuilt the record.
+   */
+  markCancelled(sessionId: string, fingerprint?: SessionFingerprint): boolean
   delete(sessionId: string): boolean
   clear(): void
 }
@@ -52,6 +61,23 @@ export class InMemorySessionStore implements SessionStore {
     }
     this.records.set(sessionId, record)
     return { ...record }
+  }
+
+  markCancelled(sessionId: string, fingerprint?: SessionFingerprint): boolean {
+    const existing = this.records.get(sessionId)
+    if (existing === undefined) return false
+    const effective = fingerprint ?? (existing.chainHash !== undefined && existing.messageCount !== undefined
+      ? { chainHash: existing.chainHash, messageCount: existing.messageCount, ...(existing.tailHashes === undefined ? {} : { tailHashes: existing.tailHashes }) }
+      : undefined)
+    const record: SessionRecord = {
+      sessionId,
+      conversationId: existing.conversationId,
+      updatedAt: Date.now(),
+      ...(effective === undefined ? {} : { chainHash: effective.chainHash, messageCount: effective.messageCount, ...(effective.tailHashes === undefined ? {} : { tailHashes: effective.tailHashes }) }),
+      cancelled: true,
+    }
+    this.records.set(sessionId, record)
+    return true
   }
 
   delete(sessionId: string): boolean {
@@ -78,6 +104,10 @@ export class SessionRegistry implements SessionStore {
 
   set(sessionId: string, conversationId: string, fingerprint?: SessionFingerprint): SessionRecord {
     return this.store.set(sessionId, conversationId, fingerprint)
+  }
+
+  markCancelled(sessionId: string, fingerprint?: SessionFingerprint): boolean {
+    return this.store.markCancelled(sessionId, fingerprint)
   }
 
   delete(sessionId: string): boolean {

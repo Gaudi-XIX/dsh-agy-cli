@@ -163,6 +163,69 @@ test('FileSessionStore prunes aged records on load and evicts past the cap', () 
   }
 })
 
+// markCancelled is update-only: it must keep the binding and the fingerprint,
+// flag cancelled, and never resurrect a deliberately deleted record.
+test('markCancelled keeps the conversation and fingerprint and flags the record', () => {
+  const store = new InMemorySessionStore()
+  const fingerprint = {
+    chainHash: 'a'.repeat(16),
+    messageCount: 7,
+    tailHashes: ['b'.repeat(16), 'c'.repeat(16)],
+  }
+  store.set('session-a', 'conversation-a', fingerprint)
+
+  assert.equal(store.markCancelled('session-a'), true)
+  const record = store.get('session-a')
+  assert.equal(record?.conversationId, 'conversation-a')
+  assert.equal(record?.cancelled, true)
+  assert.equal(record?.chainHash, fingerprint.chainHash)
+  assert.equal(record?.messageCount, fingerprint.messageCount)
+  assert.deepEqual(record?.tailHashes, fingerprint.tailHashes)
+
+  // Update-only: an unknown id is a no-op, not a creation.
+  assert.equal(store.markCancelled('missing'), false)
+  assert.equal(store.get('missing'), undefined)
+
+  // A passed-in fingerprint is rewritten alongside the flag.
+  const next = { chainHash: 'e'.repeat(16), messageCount: 9 }
+  store.markCancelled('session-a', next)
+  const rewritten = store.get('session-a')
+  assert.equal(rewritten?.chainHash, next.chainHash)
+  assert.equal(rewritten?.messageCount, next.messageCount)
+  assert.equal(rewritten?.cancelled, true)
+})
+
+test('FileSessionStore.markCancelled persists so a new instance reads the flag back', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-session-store-'))
+  try {
+    const path = join(dir, 'sessions.json')
+    const fingerprint = {
+      chainHash: 'a'.repeat(16),
+      messageCount: 5,
+      tailHashes: ['b'.repeat(16), 'c'.repeat(16), 'd'.repeat(16)],
+    }
+    const store = new FileSessionStore({ path })
+    store.set('session-cancel', 'conversation-cancel', fingerprint)
+    assert.equal(store.markCancelled('session-cancel'), true)
+
+    const reopened = new FileSessionStore({ path })
+    const record = reopened.get('session-cancel')
+    assert.equal(record?.cancelled, true)
+    assert.equal(record?.conversationId, 'conversation-cancel')
+    assert.equal(record?.chainHash, fingerprint.chainHash)
+    assert.equal(record?.messageCount, fingerprint.messageCount)
+    assert.deepEqual(record?.tailHashes, fingerprint.tailHashes)
+
+    // parsePersisted only trusts an exact `true`; anything else stays absent.
+    const raw = JSON.parse(readFileSync(path, 'utf8'))
+    raw.sessions[0].cancelled = false
+    writeFileSync(path, JSON.stringify(raw), 'utf8')
+    assert.equal(new FileSessionStore({ path }).get('session-cancel')?.cancelled, undefined)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('resolveSessionStorePath accepts a file, a directory, or the DSH default', () => {
   const previous = process.env.DSH_HOME
   try {

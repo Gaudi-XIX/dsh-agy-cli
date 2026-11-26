@@ -158,11 +158,15 @@ export function serializeAgyPrompt(options: Pick<GenerateOptions, 'messages' | '
  */
 export function serializeAgyTurnPrompt(
   options: Pick<GenerateOptions, 'messages'>,
+  guards?: { skipToolResults?: boolean },
 ): string {
   let lastAssistant = -1
   options.messages.forEach((message, index) => {
     if (message.role === 'assistant') lastAssistant = index
   })
   const messages = options.messages.slice(lastAssistant + 1)
-  return serializeAgyPrompt({ messages })
+  const filtered = guards?.skipToolResults === true
+    ? messages.filter(message => message.role !== 'tool')
+    : messages
+  return serializeAgyPrompt({ messages: filtered })
 }

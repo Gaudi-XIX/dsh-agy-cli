@@ -31,6 +31,7 @@ interface PersistedRecord {
   readonly chainHash?: string
   readonly messageCount?: number
   readonly tailHashes?: readonly string[]
+  readonly cancelled?: boolean
 }
 
 function resolveDshHome(): string {
@@ -94,6 +95,7 @@ function parsePersisted(text: string): Map<string, SessionRecord> {
               : {}),
           }
         : {}),
+      ...(entry.cancelled === true ? { cancelled: true } : {}),
     })
   }
   return records
@@ -194,6 +196,25 @@ export class FileSessionStore implements SessionStore {
     this.dirty = true
     this.persist()
     return { ...record }
+  }
+
+  markCancelled(sessionId: string, fingerprint?: SessionFingerprint): boolean {
+    const records = this.load()
+    const existing = records.get(sessionId)
+    if (existing === undefined) return false
+    const effective = fingerprint ?? (existing.chainHash !== undefined && existing.messageCount !== undefined
+      ? { chainHash: existing.chainHash, messageCount: existing.messageCount, ...(existing.tailHashes === undefined ? {} : { tailHashes: existing.tailHashes }) }
+      : undefined)
+    records.set(sessionId, {
+      sessionId,
+      conversationId: existing.conversationId,
+      updatedAt: this.now(),
+      ...(effective === undefined ? {} : { chainHash: effective.chainHash, messageCount: effective.messageCount, ...(effective.tailHashes === undefined ? {} : { tailHashes: effective.tailHashes }) }),
+      cancelled: true,
+    })
+    this.dirty = true
+    this.persist()
+    return true
   }
 
   delete(sessionId: string): boolean {

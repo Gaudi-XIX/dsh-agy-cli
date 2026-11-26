@@ -82,6 +82,8 @@ export interface ImageBridgeOptions {
   signal?: AbortSignal
   maxBytes?: number
   maxCount?: number
+  /** Drop `role === 'tool'` messages from the incremental turn prompt. */
+  skipToolResults?: boolean
 }
 
 const EXTENSIONS: Record<AgyImageMediaType, string> = {
@@ -372,7 +374,7 @@ export async function prepareAgyPrompts(
         ...(options.system === undefined ? {} : { system: options.system }),
         messages,
       }),
-      turnPrompt: serializeAgyTurnPrompt({ messages }),
+      turnPrompt: serializeAgyTurnPrompt({ messages }, { skipToolResults: bridgeOptions.skipToolResults === true }),
       imageDirectory: staged.directory,
       imageCacheDirectory: historyRefs.length === 0 ? undefined : IMAGE_HISTORY_CACHE_DIR,
       imagePaths: [...images.values()].flatMap(image => (image.path === undefined ? [] : [image.path])),

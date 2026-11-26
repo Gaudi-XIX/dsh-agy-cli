@@ -1617,6 +1617,7 @@ export class AgyAdapter extends LlmAdapter {
     > | undefined,
     protocolRepairReason: ToolProtocolRepairReason | undefined,
     mcpToolsEnabled = false,
+    skipToolResults = false,
   ): AsyncGenerator<StreamChunk, AttemptOutcome, void> {
     if (toolProtocol !== undefined && (
       dshContextSnapshot?.state !== 'ready'
@@ -1629,7 +1630,7 @@ export class AgyAdapter extends LlmAdapter {
     const mappedConversationId = this.sessions.get(sessionKey)?.conversationId
     const hasConversation = mappedConversationId !== undefined
     const basePrompt = hasConversation
-      ? (prepared.turnPrompt ?? serializeAgyTurnPrompt(options))
+      ? (prepared.turnPrompt ?? serializeAgyTurnPrompt(options, { skipToolResults }))
       : prepared.fullPrompt
     const emptyResponseHint = this.takeEmptyResponseHint(sessionKey)
     const prompt = this.preparePrompt(emptyResponseHint === undefined ? basePrompt : `${basePrompt}\n\n${emptyResponseHint}`, toolProtocol, protocolRepair, protocolRepairHint, protocolRepairReason, telemetry)
@@ -1981,7 +1982,12 @@ export class AgyAdapter extends LlmAdapter {
     let fingerprintMismatch = false
     if (sessionKey !== undefined && this.sessionMode === 'resume') {
       existingRecord = this.sessions.get(sessionKey)
-      if (existingRecord?.chainHash !== undefined && existingRecord.messageCount !== undefined) {
+      if (existingRecord?.cancelled === true) {
+        // The previous turn was cancelled by the user, so the stored
+        // fingerprint describes an incomplete output. Skip the fingerprint
+        // check entirely and keep the binding: the next delta continues the
+        // same conversation (without re-sending the orphaned tool results).
+      } else if (existingRecord?.chainHash !== undefined && existingRecord.messageCount !== undefined) {
         const expected = historyFingerprintOf(options.messages.slice(0, existingRecord.messageCount), options.system)
         fingerprintMismatch = expected !== existingRecord.chainHash
         if (fingerprintMismatch) {
@@ -2013,6 +2019,9 @@ export class AgyAdapter extends LlmAdapter {
       : existingConversationId === undefined || fingerprintMismatch
         ? 'bootstrap' as const
         : 'delta' as const
+    // The cancelled bypass is turn-scoped: it drops orphaned tool results from
+    // this turn's delta prompt only; a successful turn rebuilds the record.
+    const cancelledBinding = existingRecord?.cancelled === true
 
     const telemetry: AgyTelemetry = {
       requestId: randomUUID(),
@@ -2135,6 +2144,7 @@ export class AgyAdapter extends LlmAdapter {
         agentCanViewFile: this.imageAgent?.agentCanViewFile === true,
         attachmentStore: this.resolveAttachmentStore(),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(cancelledBinding ? { skipToolResults: true } : {}),
       })
       preparedPrompts = prepared
       releaseSession = sessionKey === undefined ? undefined : await this.sessions.acquire(sessionKey)
@@ -2173,6 +2183,7 @@ export class AgyAdapter extends LlmAdapter {
               persistentProtocolRepairHint,
               persistentProtocolRepairReason,
               useToolBridge,
+              cancelledBinding,
             )
             persistentProtocolRepair = false
             persistentProtocolRepairHint = undefined
@@ -2261,6 +2272,7 @@ export class AgyAdapter extends LlmAdapter {
             protocolRepairHint,
             protocolRepairReason,
             useToolBridge,
+            cancelledBinding,
           )
           protocolRepair = false
           protocolRepairHint = undefined
@@ -2302,6 +2314,24 @@ export class AgyAdapter extends LlmAdapter {
     } catch (error) {
       telemetry.processDiagnostic = agyProcessDiagnosticOf(error)
       const mapped = asLlmError(error)
+      // A user-cancelled turn (ABORTED) leaves the AGY conversation with an
+      // incomplete output: flag the existing binding instead of dropping it,
+      // and write the pre-turn fingerprint back (a mid-turn `set` may have
+      // rebuilt the record). The pre-dispatch check (:1937) sits outside this
+      // try and is never marked; a retried attempt that succeeded already
+      // rewrote the fingerprint and returned.
+      if (mapped.code === 'ABORTED' && this.sessionMode === 'resume' && sessionKey !== undefined) {
+        this.sessions.markCancelled(
+          sessionKey,
+          existingRecord?.chainHash !== undefined && existingRecord?.messageCount !== undefined
+            ? {
+                chainHash: existingRecord.chainHash,
+                messageCount: existingRecord.messageCount,
+                ...(existingRecord.tailHashes === undefined ? {} : { tailHashes: existingRecord.tailHashes }),
+              }
+            : undefined,
+        )
+      }
       telemetry.bridgeOutcome = bridgeOutcomeForError(mapped.code, telemetry.bridgeOutcome)
       telemetry.durationMs = Date.now() - telemetry.startedAt
       emitAgyLog(this.logger, buildAgyLogRecord(telemetry, 'agy.request.failed', mapped.code))
@@ -2330,6 +2360,7 @@ export class AgyAdapter extends LlmAdapter {
     > | undefined,
     protocolRepairReason: ToolProtocolRepairReason | undefined,
     mcpToolsEnabled = false,
+    skipToolResults = false,
   ): AsyncGenerator<StreamChunk, AttemptOutcome, void> {
     if (toolProtocol !== undefined && (
       dshContextSnapshot?.state !== 'ready'
@@ -2341,7 +2372,7 @@ export class AgyAdapter extends LlmAdapter {
     telemetry.processAttemptCount += 1
     const basePrompt = requestedConversationId === undefined
       ? prepared.fullPrompt
-      : prepared.turnPrompt ?? serializeAgyTurnPrompt(options)
+      : prepared.turnPrompt ?? serializeAgyTurnPrompt(options, { skipToolResults })
     const emptyResponseHint = this.takeEmptyResponseHint(sessionKey)
     const prompt = this.preparePrompt(emptyResponseHint === undefined ? basePrompt : `${basePrompt}\n\n${emptyResponseHint}`, toolProtocol, protocolRepair, protocolRepairHint, protocolRepairReason, telemetry)
     const addDirs = [

@@ -78,6 +78,29 @@ test('serializeAgyTurnPrompt sends only messages after the previous assistant tu
   )
 })
 
+test('serializeAgyTurnPrompt drops tool results from the slice when skipToolResults is set', () => {
+  const messages = [
+    message('user', 'first'),
+    message('assistant', 'first answer'),
+    message('user', 'second'),
+    { role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: 'orphaned tool result' }] },
+    message('user', 'third'),
+  ]
+  assert.equal(
+    serializeAgyTurnPrompt({ messages }, { skipToolResults: true }),
+    '=== USER ===\nsecond\n\n=== USER ===\nthird',
+  )
+  // Default behaviour is unchanged: tool results stay in the slice.
+  assert.match(
+    serializeAgyTurnPrompt({ messages }),
+    /orphaned tool result/,
+  )
+  assert.match(
+    serializeAgyTurnPrompt({ messages }, { skipToolResults: false }),
+    /orphaned tool result/,
+  )
+})
+
 test('serializeAgyPrompt preserves DSH tool calls and tool results as text data', () => {
   const prompt = serializeAgyPrompt({
     messages: [
