@@ -5,7 +5,7 @@
 
 Runs the locally authenticated **Google Antigravity CLI (`agy`)** as a first-class model provider for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
 
-> Reject the account-ban risk of reverse proxies and protocol spoofing, and leave opaque wrapper shells behind. The plugin takes a native pass-through route through the local official CLI: no reverse proxy, no forged request headers, credentials stay on your machine, and the official binary and its signature are left untouched; DSH takes full control of tool dispatch with real-time visibility; built-in batch tools, dynamic tool projection, 8.8KB output folding, telemetry cutoff, a 180s tree-kill watchdog, and full skills passthrough keep long runs fast and stable.
+> No reverse proxy and no protocol spoofing: requests still go out through the official agy.exe on your machine, signed by it, with the credentials kept locally and the quota coming from your own subscription. DSH handles tool execution and approvals so every step is visible. The plugin turns telemetry off, ends a stuck run after 180 seconds, folds long output, and gives the model only the tools it needs on the first turn.
 
 **What this plugin does, in three points:**
 
