@@ -753,14 +753,41 @@ export function setupWebRoutes(ctx: Context, activeConfig: ConfigType, modelDisc
     }
 
     const reg = (path: string, handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>) => {
-      // The panel routes answer with account identity and drive quota fetches;
-      // they are loopback-only exactly like the MCP endpoint.
       const d = webServer.register({
         kind: 'exact',
         path,
         handler: async (req, res) => {
+          // The panel routes answer with account identity and drive quota
+          // fetches; the host admission service (browser cookie plus Host and
+          // Origin fences) decides before any handler runs.
           if (!isLoopback(req.socket?.remoteAddress)) {
             sendJson(res, 403, { ok: false, error: 'loopback only' })
+            return
+          }
+          // No connection service = fail closed. Falling back to loopback-only
+          // would keep the cross-site hole open in profiles without it.
+          let unavailable = false
+          let rejection: 401 | 403 | undefined
+          try {
+            const connection: unknown = ctx.get('connection')
+            if (!connection) {
+              unavailable = true
+            } else {
+              rejection = (connection as { requestRejection(request: { readonly headers: IncomingMessage['headers'] }): 401 | 403 | undefined }).requestRejection(req)
+            }
+          } catch {
+            unavailable = true
+          }
+          if (unavailable) {
+            sendJson(res, 403, { ok: false, error: 'host admission unavailable' })
+            return
+          }
+          if (rejection === 401) {
+            sendJson(res, 401, { ok: false, error: 'unauthorized' })
+            return
+          }
+          if (rejection === 403) {
+            sendJson(res, 403, { ok: false, error: 'forbidden' })
             return
           }
           await handler(req, res)

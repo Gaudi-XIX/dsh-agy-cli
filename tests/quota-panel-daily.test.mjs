@@ -135,19 +135,29 @@ function fakeWebServer() {
   }
 }
 
-function fakeContext(webServer) {
+// Default fake connection: admission passes (requestRejection -> undefined),
+// mirroring the host web profile where the service is mounted.
+function fakeContext(webServer, extra = {}) {
+  const services = {
+    connection: { requestRejection: () => undefined },
+    ...extra,
+  }
   return {
+    ...services,
+    get(name) {
+      return services[name]
+    },
     inject(deps, cb) {
       if (deps.includes('webServer')) cb({ webServer })
     },
   }
 }
 
-function fakeRequest(method, path) {
+function fakeRequest(method, path, headers = {}) {
   const req = new EventEmitter()
   req.method = method
   req.url = path
-  req.headers = {}
+  req.headers = headers
   req.socket = { remoteAddress: "127.0.0.1" }
   setImmediate(() => req.emit('end'))
   return req

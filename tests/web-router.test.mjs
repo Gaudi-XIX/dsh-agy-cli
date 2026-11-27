@@ -26,9 +26,20 @@ function fakeWebServer() {
 // The diagnose handler reads `ctx.llm` on the *outer* context (the one that
 // owns `inject`), not on the injected inner context, so the service has to be
 // placed there to reproduce either state.
+// Every context gets a default fake connection whose admission always passes
+// (requestRejection -> undefined), mirroring the host web profile where the
+// service is mounted. Tests that need a specific verdict override it via
+// `extra.connection`; tests for the fail-closed path remove it entirely.
 function fakeContext(webServer, extra = {}) {
-  return {
+  const services = {
+    connection: { requestRejection: () => undefined },
     ...extra,
+  }
+  return {
+    ...services,
+    get(name) {
+      return services[name]
+    },
     inject(deps, cb) {
       if (deps.includes('webServer')) {
         cb({ webServer })
@@ -47,11 +58,11 @@ function throwingLlmContext(webServer) {
   return ctx
 }
 
-function fakeRequest(method, path, body = null) {
+function fakeRequest(method, path, body = null, headers = {}) {
   const req = new EventEmitter()
   req.method = method
   req.url = path
-  req.headers = {}
+  req.headers = headers
   req.socket = { remoteAddress: "127.0.0.1" }
   setImmediate(() => {
     if (body) {
@@ -587,6 +598,124 @@ test('web router: built artifact no longer carries the old 4s discovery deadline
   // second, shorter deadline is bounding discovery again.
   const built = readFileSync(new URL('../lib/web/router.js', import.meta.url), 'utf8')
   assert.equal(built.includes('DISCOVERY_AWAIT_MS'), false, 'the 4s discovery deadline constant must not survive the build')
+})
+
+test('web router: cross-site request is rejected with 403 before the handler', async () => {
+  const ws = fakeWebServer()
+  const ctx = fakeContext(ws, {
+    connection: { requestRejection: () => 403 },
+  })
+  const dispose = setupWebRoutes(ctx, { enabled: true, model: 'gemini-3.8-flash' })
+  const route = ws.routes.get('/plugins/agy-cli/status')
+  assert.ok(route)
+
+  const req = fakeRequest('GET', '/plugins/agy-cli/status', null, { 'sec-fetch-site': 'cross-site' })
+  const resp = fakeResponse()
+  await new Promise((resolve) => {
+    resp.res.on('finish', resolve)
+    route.handler(req, resp.res)
+  })
+
+  assert.equal(resp.status, 403)
+  assert.equal(resp.json.ok, false)
+  assert.equal(resp.json.error, 'forbidden')
+  assert.equal('plugin' in resp.json, false, 'the business handler payload must not leak past the guard')
+  dispose()
+})
+
+test('web router: request with a malicious Origin is rejected with 403', async () => {
+  const ws = fakeWebServer()
+  const ctx = fakeContext(ws, {
+    connection: { requestRejection: () => 403 },
+  })
+  const dispose = setupWebRoutes(ctx, { enabled: true, model: 'gemini-3.8-flash' })
+  const route = ws.routes.get('/plugins/agy-cli/config')
+  assert.ok(route)
+
+  const req = fakeRequest('POST', '/plugins/agy-cli/config', { key: 'defaultEffort', value: 'high' }, { origin: 'http://evil.example' })
+  const resp = fakeResponse()
+  await new Promise((resolve) => {
+    resp.res.on('finish', resolve)
+    route.handler(req, resp.res)
+  })
+
+  assert.equal(resp.status, 403)
+  assert.equal(resp.json.ok, false)
+  assert.equal(resp.json.error, 'forbidden')
+  assert.equal(resp.json.key, undefined, 'the config write must not run for a hostile Origin')
+  dispose()
+})
+
+test('web router: unauthenticated request is rejected with 401', async () => {
+  const ws = fakeWebServer()
+  const ctx = fakeContext(ws, {
+    connection: { requestRejection: () => 401 },
+  })
+  const dispose = setupWebRoutes(ctx, { enabled: true, model: 'gemini-3.8-flash' })
+  const route = ws.routes.get('/plugins/agy-cli/status')
+  assert.ok(route)
+
+  const req = fakeRequest('GET', '/plugins/agy-cli/status', null, {})
+  const resp = fakeResponse()
+  await new Promise((resolve) => {
+    resp.res.on('finish', resolve)
+    route.handler(req, resp.res)
+  })
+
+  assert.equal(resp.status, 401)
+  assert.equal(resp.json.ok, false)
+  assert.equal(resp.json.error, 'unauthorized')
+  assert.equal('plugin' in resp.json, false, 'the business handler payload must not leak past the guard')
+  dispose()
+})
+
+test('web router: missing connection service fails closed with 403', async () => {
+  const ws = fakeWebServer()
+  const ctx = fakeContext(ws, { connection: undefined })
+  const dispose = setupWebRoutes(ctx, { enabled: true, model: 'gemini-3.8-flash' })
+  const route = ws.routes.get('/plugins/agy-cli/status')
+  assert.ok(route)
+
+  const req = fakeRequest('GET', '/plugins/agy-cli/status')
+  const resp = fakeResponse()
+  await new Promise((resolve) => {
+    resp.res.on('finish', resolve)
+    route.handler(req, resp.res)
+  })
+
+  assert.equal(resp.status, 403, 'no admission authority must fail closed, not fall back to loopback-only')
+  assert.equal(resp.json.ok, false)
+  assert.equal(resp.json.error, 'host admission unavailable')
+  assert.equal('plugin' in resp.json, false, 'the business handler payload must not leak past the guard')
+  dispose()
+})
+
+test('web router: admission pass-through reaches the business handler', async () => {
+  const ws = fakeWebServer()
+  let rejectionSeen = null
+  const ctx = fakeContext(ws, {
+    connection: {
+      requestRejection: (req) => {
+        rejectionSeen = req
+        return undefined
+      },
+    },
+  })
+  const dispose = setupWebRoutes(ctx, { enabled: true, model: 'gemini-3.8-flash' })
+  const route = ws.routes.get('/plugins/agy-cli/status')
+  assert.ok(route)
+
+  const req = fakeRequest('GET', '/plugins/agy-cli/status')
+  const resp = fakeResponse()
+  await new Promise((resolve) => {
+    resp.res.on('finish', resolve)
+    route.handler(req, resp.res)
+  })
+
+  assert.equal(rejectionSeen, req, 'the admission hook must receive the incoming request')
+  assert.equal(resp.status, 200, 'an admitted request must reach the handler unchanged')
+  assert.equal(resp.json.plugin, 'dsh-agy-cli')
+  dispose()
 })
 
 // Startup warm-up coverage: `apply()` does `void modelDiscovery.discover(...)`

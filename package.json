@@ -73,7 +73,7 @@
   },
   "engines": {
     "node": ">=20",
-    "dsh": ">=0.1.7-rc.2 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.1 <0.3.0-0"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4"
@@ -92,11 +92,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-attachment": ">=0.1.7-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-brand": ">=0.1.7-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-attachment": ">=0.2.1-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-brand": ">=0.2.1-rc.1 <0.3.0-0",
     "@deepseek-ai/dsh-invariants": ">=0.1.7-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-timeout": ">=0.1.7-rc.2 <0.3.0-0"
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-timeout": ">=0.2.1-rc.1 <0.3.0-0"
   },
   "directories": {
     "doc": "docs",
