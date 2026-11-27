@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.17.2] - 2026-11-27
+
+安全修复：面板的 6 条 HTTP 路由此前只用 `isLoopback(remoteAddress)` 挡外部访问，挡不住浏览器里打开的网页跨站调用配置与额度接口。现在它们在 loopback 判定之后接宿主 DSH 的 `requestRejection` 准入检查：跨站请求 403、未认证 401、取不到宿主服务或检查抛错一律 403（fail-closed）。MCP 端点仍走 Bearer token + 随机路径段，不受影响。补 5 条拒否测试。对应 `1a0739d`。
+
+宿主版本下限由 `>=0.1.7-rc.2` 抬到 `>=0.2.2-rc.5`（`engines.dsh` 与 dsh-attachment / dsh-brand / dsh-llm / dsh-timeout 四个 peer）：这是宿主 DSH 44.7.0 实装版本、next 通道最高正式版，也是离 0.2.3 最近的可用正式版。dsh-invariants 单独保留 `>=0.1.7-rc.2`——它的上游最高只发到 0.2.0-rc.2，跟着抬高会让依赖区间无解、插件装不上。对应 `23fcf6b`。
+
 ## [0.17.1] - 2026-11-26
 
 纯文档修订，无源码变更：门面文案改成「一眼判断要不要装」的决策式简介，中英 README 开头与 GitHub About、npm description 同步；`ABOUT.txt` 收到 164 字。Windows 表述从「仅 Windows、不适合」改为「已在 Windows 11 实测」。此版为让 npm 页面 README 更新而升 patch 重发。
